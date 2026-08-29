@@ -2,7 +2,9 @@
 pragma solidity ^0.8.24;
 
 import {ChipRewardsBase} from "./ChipRewardsBase.t.sol";
-import {ChipRewards} from "../src/ChipRewards.sol";
+import {ChipRounds} from "../src/ChipRounds.sol";
+import {ChipClaims} from "../src/ChipClaims.sol";
+import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 import {GasBombNoun} from "./mocks/MockNoun.sol";
 
 /// @notice The property that matters most: a stock whose token misbehaves must fail IN
@@ -29,29 +31,29 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         _setSplit(address(basedNouns), 2, bob, _one(address(googl)), _one(uint8(100)));
         _setSplit(address(basedNouns), 3, carol, _one(address(aapl)), _one(uint8(100)));
 
-        // The issuer blocks our contract from receiving AAPL.
-        aapl.setBlacklisted(address(rewards), true);
+        // The issuer blocks the engine from receiving AAPL, so the buy itself fails.
+        aapl.setBlacklisted(address(rounds), true);
 
         uint256 id = _openAndAccumulate(_ids(1, 2, 3));
 
-        rewards.settleStock(id, address(nvda));
-        rewards.settleStock(id, address(googl));
-        rewards.settleStock(id, address(aapl)); // must not revert
+        rounds.settleStock(id, address(nvda));
+        rounds.settleStock(id, address(googl));
+        rounds.settleStock(id, address(aapl)); // must not revert
 
-        assertTrue(rewards.stockSkipped(id, address(aapl)), "AAPL skipped");
-        assertEq(rewards.acquired(id, address(aapl)), 0);
-        assertEq(rewards.acquired(id, address(nvda)), 5e8, "NVDA bought normally");
-        assertEq(rewards.acquired(id, address(googl)), 2.5e8, "GOOGL bought normally");
+        assertTrue(rounds.stockSkipped(id, address(aapl)), "AAPL skipped");
+        assertEq(claims.acquired(id, address(aapl)), 0);
+        assertEq(claims.acquired(id, address(nvda)), 5e8, "NVDA bought normally");
+        assertEq(claims.acquired(id, address(googl)), 2.5e8, "GOOGL bought normally");
 
-        rewards.finalizeRound(id); // must not revert
-        assertEq(uint8(rewards.getRound(id).state), uint8(ChipRewards.RoundState.Finalized));
+        rounds.finalizeRound(id); // must not revert
+        assertEq(uint8(rounds.getRound(id).state), uint8(RoundState.Finalized));
         assertEq(pot.available(), 1_000e6, "carol's slice carried back, not lost");
 
         // Alice and Bob are entirely unaffected.
         vm.prank(alice);
-        rewards.claim(id, address(nvda));
+        claims.claim(id, address(nvda));
         vm.prank(bob);
-        rewards.claim(id, address(googl));
+        claims.claim(id, address(googl));
         assertEq(nvda.balanceOf(alice), 5e8);
         assertEq(googl.balanceOf(bob), 2.5e8);
     }
@@ -71,11 +73,11 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         _setSplit(address(basedNouns), 2, bob, _one(address(nvda)), _one(uint8(100)));
 
         uint256 id = _openAndAccumulate(_ids(1, 2));
-        rewards.settleStock(id, address(aapl));
-        rewards.settleStock(id, address(nvda));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(aapl));
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id);
 
-        uint256 aaplOwed = rewards.claimable(id, address(aapl), alice);
+        uint256 aaplOwed = claims.claimable(id, address(aapl), alice);
         assertGt(aaplOwed, 0);
 
         // NOW the issuer freezes Alice.
@@ -84,23 +86,23 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         // Her AAPL claim fails...
         vm.prank(alice);
         vm.expectRevert(bytes("BLACKLISTED"));
-        rewards.claim(id, address(aapl));
+        claims.claim(id, address(aapl));
 
         // ...but her NVDA claim from the SAME round works.
         vm.prank(alice);
-        uint256 gotNvda = rewards.claim(id, address(nvda));
+        uint256 gotNvda = claims.claim(id, address(nvda));
         assertGt(gotNvda, 0);
         assertEq(nvda.balanceOf(alice), gotNvda);
 
         // And Bob is completely untouched.
         vm.prank(bob);
-        rewards.claim(id, address(nvda));
+        claims.claim(id, address(nvda));
         assertGt(nvda.balanceOf(bob), 0);
 
         // Her AAPL credit is still intact and claimable once unfrozen.
         aapl.setBlacklisted(alice, false);
         vm.prank(alice);
-        assertEq(rewards.claim(id, address(aapl)), aaplOwed, "nothing was lost while frozen");
+        assertEq(claims.claim(id, address(aapl)), aaplOwed, "nothing was lost while frozen");
         assertEq(aapl.balanceOf(alice), aaplOwed);
     }
 
@@ -113,17 +115,17 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         _setSplit(address(basedNouns), 2, bob, _one(address(aapl)), _one(uint8(100)));
 
         uint256 id = _openAndAccumulate(_ids(1, 2));
-        rewards.settleStock(id, address(aapl));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(aapl));
+        rounds.finalizeRound(id);
 
         aapl.setBlacklisted(alice, true);
 
         vm.prank(alice);
         vm.expectRevert(bytes("BLACKLISTED"));
-        rewards.claim(id, address(aapl));
+        claims.claim(id, address(aapl));
 
         vm.prank(bob);
-        uint256 got = rewards.claim(id, address(aapl));
+        uint256 got = claims.claim(id, address(aapl));
         assertGt(got, 0, "bob unaffected by alice being frozen");
         assertEq(aapl.balanceOf(bob), got);
     }
@@ -136,9 +138,9 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         _setSplit(address(basedNouns), 1, alice, _two(address(aapl), address(nvda)), _two(uint8(50), uint8(50)));
 
         uint256 id = _openAndAccumulate(_ids(1));
-        rewards.settleStock(id, address(aapl));
-        rewards.settleStock(id, address(nvda));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(aapl));
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id);
 
         aapl.setBlacklisted(alice, true);
 
@@ -149,11 +151,11 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
 
         vm.prank(alice);
         vm.expectRevert(bytes("BLACKLISTED"));
-        rewards.claimMany(ids, stocks);
+        claims.claimMany(ids, stocks);
 
         // Falling back to the single call recovers the healthy leg.
         vm.prank(alice);
-        assertGt(rewards.claim(id, address(nvda)), 0);
+        assertGt(claims.claim(id, address(nvda)), 0);
     }
 
     /* ------------------------------------------------------------------ */
@@ -167,14 +169,14 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         _chip(basedNouns, basedVault, 1, alice, 0);
         _setSplit(address(basedNouns), 1, alice, _one(address(aapl)), _one(uint8(100)));
 
-        aapl.setBlacklisted(address(rewards), true);
+        aapl.setBlacklisted(address(rounds), true);
 
         // Round 1: AAPL is skipped, so nothing is bought for Alice at all.
         uint256 r1 = _openAndAccumulate(_ids(1));
-        rewards.settleStock(r1, address(aapl));
-        rewards.finalizeRound(r1);
-        assertTrue(rewards.stockSkipped(r1, address(aapl)));
-        assertEq(rewards.claimable(r1, address(aapl), alice), 0);
+        rounds.settleStock(r1, address(aapl));
+        rounds.finalizeRound(r1);
+        assertTrue(rounds.stockSkipped(r1, address(aapl)));
+        assertEq(claims.claimable(r1, address(aapl), alice), 0);
 
         // The multisig switches AAPL off.
         vm.prank(multisig);
@@ -183,11 +185,11 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         // Round 2: her slice reroutes to USDC and she earns normally again.
         vm.warp(block.timestamp + 24 hours);
         uint256 r2 = _openAndAccumulate(_ids(1));
-        rewards.settleStock(r2, address(usdc));
-        rewards.finalizeRound(r2);
+        rounds.settleStock(r2, address(usdc));
+        rounds.finalizeRound(r2);
 
         vm.prank(alice);
-        uint256 got = rewards.claim(r2, address(usdc));
+        uint256 got = claims.claim(r2, address(usdc));
         assertGt(got, 0, "earning again, in USDC");
         assertEq(usdc.balanceOf(alice), got);
     }
@@ -200,17 +202,17 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         _setSplit(address(basedNouns), 1, alice, _two(address(aapl), address(nvda)), _two(uint8(50), uint8(50)));
 
         uint256 id = _openAndAccumulate(_ids(1));
-        rewards.settleStock(id, address(aapl));
-        rewards.settleStock(id, address(nvda));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(aapl));
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id);
 
-        aapl.setBlacklisted(address(rewards), true);
+        aapl.setBlacklisted(address(claims), true);
         vm.warp(block.timestamp + 91 days);
 
         vm.expectRevert(bytes("BLACKLISTED"));
-        rewards.sweepExpired(id, address(aapl));
+        claims.sweepExpired(id, address(aapl));
 
-        uint256 swept = rewards.sweepExpired(id, address(nvda));
+        uint256 swept = claims.sweepExpired(id, address(nvda));
         assertGt(swept, 0);
         assertEq(nvda.balanceOf(polTreasury), swept);
     }
@@ -228,14 +230,14 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         GasBombNoun bomb = new GasBombNoun();
         vm.startPrank(multisig);
         adapter.setVault(address(bomb), address(basedVault));
-        rewards.setCollectionBaseBps(address(bomb), 10_000);
+        rounds.setCollectionBaseBps(address(bomb), 10_000);
         vm.stopPrank();
 
-        uint256 id = rewards.openRound();
-        rewards.contributeWeights(id, address(bomb), _ids(1, 2, 3)); // survives
-        rewards.contributeWeights(id, address(basedNouns), _ids(1));
+        uint256 id = rounds.openRound();
+        rounds.contributeWeights(id, address(bomb), _ids(1, 2, 3)); // survives
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
 
-        assertEq(rewards.weightOf(id, address(usdc), alice), 10_000, "healthy Noun still counted");
+        assertEq(claims.weightOf(id, address(usdc), alice), 10_000, "healthy Noun still counted");
     }
 
     /// @notice A hoodie contract that burns all gas must degrade to "no boost", not revert.
@@ -245,11 +247,11 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
 
         GasBombNoun bomb = new GasBombNoun();
         vm.prank(multisig);
-        rewards.setHoodie(address(bomb), 11_000);
+        rounds.setHoodie(address(bomb), 11_000);
 
-        uint256 id = rewards.openRound();
-        rewards.contributeWeights(id, address(basedNouns), _ids(1));
-        assertEq(rewards.weightOf(id, address(usdc), alice), 10_000, "unboosted, not reverted");
+        uint256 id = rounds.openRound();
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
+        assertEq(claims.weightOf(id, address(usdc), alice), 10_000, "unboosted, not reverted");
     }
 
     /// @notice A router that reverts must skip the stock, not kill the round.
@@ -261,10 +263,10 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         router.setFailAlways(true);
 
         uint256 id = _openAndAccumulate(_ids(1));
-        rewards.settleStock(id, address(nvda));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id);
 
-        assertTrue(rewards.stockSkipped(id, address(nvda)));
+        assertTrue(rounds.stockSkipped(id, address(nvda)));
         assertEq(pot.available(), 1_000e6, "entire budget carried back");
     }
 
@@ -280,12 +282,54 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         nvdaFeed.setRevertOnRead(true);
 
         uint256 id = _openAndAccumulate(_ids(1, 2));
-        rewards.settleStock(id, address(nvda));
-        rewards.settleStock(id, address(googl));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(nvda));
+        rounds.settleStock(id, address(googl));
+        rounds.finalizeRound(id);
 
-        assertTrue(rewards.stockSkipped(id, address(nvda)));
-        assertEq(rewards.acquired(id, address(googl)), 2.5e8);
-        assertEq(rewards.totalPaidUsd(), 1_000e18, "only the stock that actually settled");
+        assertTrue(rounds.stockSkipped(id, address(nvda)));
+        assertEq(claims.acquired(id, address(googl)), 2.5e8);
+        assertEq(rounds.totalPaidUsd(), 1_000e18, "only the stock that actually settled");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*            A NEW FAILURE MODE THE SPLIT INTRODUCED                   */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice The engine buys stock and then hands it to the ledger. That handover is a
+    ///         second place a policy-blocked token can fail, and it did not exist before the
+    ///         contracts were split. It must NOT be able to wedge the round.
+    /// @dev Found by running the pre-split test suite against the split: the handover was a
+    ///      plain safeTransfer, so a blocked ledger reverted settleStock and left the round
+    ///      permanently unfinishable — every other holder in it stuck too. The transfer is
+    ///      now measured and tolerated, and the shortfall is reported as stranded.
+    function test_aBlockedLedgerStrandsOneStockWithoutWedgingTheRound() public {
+        _fundPot(2_000e6);
+        _chip(basedNouns, basedVault, 1, alice, 0);
+        _chip(basedNouns, basedVault, 2, bob, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(aapl)), _one(uint8(100)));
+        _setSplit(address(basedNouns), 2, bob, _one(address(nvda)), _one(uint8(100)));
+
+        // The engine may receive AAPL, but the LEDGER may not.
+        aapl.setBlacklisted(address(claims), true);
+
+        uint256 id = _openAndAccumulate(_ids(1, 2));
+        rounds.settleStock(id, address(aapl)); // must not revert
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id); // must not revert
+
+        // AAPL was bought but could not be delivered: credited to nobody, stranded in the
+        // engine, and recoverable. Nothing is silently lost.
+        assertEq(claims.acquired(id, address(aapl)), 0, "nobody credited");
+        assertGt(aapl.balanceOf(address(rounds)), 0, "stranded in the engine");
+        assertGt(rounds.excess(address(aapl)), 0, "and recoverable by the multisig");
+
+        // Bob's NVDA is completely unaffected.
+        _openClaimWindow();
+        vm.prank(bob);
+        assertGt(claims.claim(id, address(nvda)), 0, "healthy stock still pays out");
+
+        // The ledger is still exactly solvent for what it owes.
+        assertEq(aapl.balanceOf(address(claims)), claims.totalOwed(address(aapl)));
+        assertEq(nvda.balanceOf(address(claims)), claims.totalOwed(address(nvda)));
     }
 }

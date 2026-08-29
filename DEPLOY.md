@@ -195,9 +195,38 @@ Then, once the Clutch market exists:
 Nothing else changes; ChipRewards just gets pointed at the new adapter. Every Clutch
 assumption (A-3 to A-8) lives here.
 
-### 5. ChipRewards — **built**
+### 5a. ChipClaims — **built** (deploy BEFORE the engine)
 
-Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ClutchVaultAdapter`.
+The ledger. Every token a holder is owed lives here.
+
+Needs: `MULTISIG`, `StockRegistry`.
+
+| Arg | Value |
+|---|---|
+| `multisig` | `MULTISIG` |
+| `registry_` | StockRegistry from step 2 |
+
+**The claim-window cadence is anchored at THIS contract's deploy timestamp and can never be
+moved.** Pick the deploy time deliberately: it fixes which day of the week claims open on,
+permanently.
+
+Then, from the multisig:
+
+| Call | Recommended value |
+|---|---|
+| `setRounds(chipRounds)` | after step 5b — the only contract allowed to write credits |
+| `setPolTreasury(polTreasury)` | after step 6 |
+| `setClaimSchedule(604800, 172800)` | claims open every 7 days, for 48h |
+| `setCreditExpiry(2592000)` | 30 days, then unclaimed credits sweep to POL |
+
+Every configuration must satisfy `creditExpiry >= 3 * windowLength`, which the setters
+enforce.
+
+### 5b. ChipRounds — **built**
+
+The engine. Buys stock and hands it to the ledger; it can never pay a holder.
+
+Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ClutchVaultAdapter`, **`ChipClaims`**.
 
 | Arg | Value |
 |---|---|
@@ -205,6 +234,8 @@ Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ClutchVaultAdapter`.
 | `registry_` | StockRegistry from step 2 |
 | `pot_` | Pot from step 3 |
 | `source_` | ClutchVaultAdapter from step 4 |
+| `claims_` | ChipClaims from step 5a |
+| `splitChangeFeeChip_` | `5000e18` (5,000 CHIP) |
 
 Then configure, all from the multisig:
 
@@ -213,39 +244,43 @@ Then configure, all from the multisig:
 | `setRoundParams(duration, window, minPot, maxBudget)` | `86400, 7200, 250e6, 10000e6` |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |
-| `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02 on Base; Slipstream router |
-| `setPolTreasury(polTreasury)` | step 6 — set after POLTreasury deploys |
+| `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02; Slipstream router |
+| `setPolTreasury(polTreasury)` | after step 6 — receives the holdback |
 | `setChip(chipToken, 0x…dead)` | after the Clutch market mints $CHIP |
-| `setSplitChangeFeeChip(amount)` | flat burn to change a split |
 | `setHoodie(hoodieCollection, 11000)` | 1.10x boost |
-| `setClaimSchedule(604800, 172800)` | claims open every 7 days, for 48h |
-| `setCreditExpiry(2592000)` | 30 days, then unclaimed credits sweep to POL |
+| `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |
 | `setDefaultMaxSlippageBps(200)` | 2% around the Chainlink mark |
 | `setMaxSlippageBps(stock, bps)` | per-stock override where needed |
 
-And on the Pot: `setRewards(chipRewards)`.
+**WIRING ORDER MATTERS, and getting it wrong fails loudly rather than silently:**
 
-**Claim windows.** The cadence is anchored at the ChipRewards deploy timestamp and can never
-be moved, so pick the deploy time deliberately: it fixes which day of the week claims open
-on, permanently. Every configuration must satisfy `creditExpiry >= 3 * windowLength`, which
-the setters enforce.
+1. Deploy `ChipClaims`.
+2. Deploy `ChipRounds` with the claims address.
+3. `claims.setRounds(rounds)` — **until this is called, every round reverts at the first
+   `contributeWeights`**, because the ledger rejects writes from an unknown caller. That is
+   the intended behaviour: a half-wired deployment cannot take anyone's money.
+4. `pot.setRewards(rounds)` — the engine is what pulls the budget.
+5. `polTreasury.setRewards(claims)` — compound credits are notified by the **ledger**, not
+   the engine.
+6. `ClaimRouter` points at **`claims`**, not the engine: `claimFor` lives on the ledger.
 
 **Daily operation** (keeper bot, all permissionless — anyone can run these):
-1. `openRound()`
-2. `contributeWeights(roundId, collection, tokenIds[])` — batched, both collections
-3. `closeAccumulation(roundId)` — only after the 2h window
-4. `settleStock(roundId, stock)` — once per stock in the round
-5. `finalizeRound(roundId)`
+1. `pot.convert()` and `pot.convert(AERO)`
+2. `rounds.openRound()`
+3. `rounds.contributeWeights(roundId, collection, tokenIds[])` — batched, both collections
+4. `rounds.closeAccumulation(roundId)` — only after the 2h window
+5. `rounds.settleStock(roundId, stock)` — once per stock in the round
+6. `rounds.finalizeRound(roundId)`
 
-If a round is opened and then abandoned, anyone can call `cancelRound(roundId)` after 24h
-to return its budget to the Pot.
+If a round is opened and then abandoned, anyone can call `rounds.cancelRound(roundId)` after
+24h to return its budget to the Pot.
 
 **Expiry** (any time after a round's `expiresAt`, permissionless):
-`sweepExpired(roundId, stock, maxHolders)` — batched, pass 0 to do all holders in one call.
-Emits a `CreditExpired` per holder for the site, and moves everything unclaimed to POL.
+`claims.sweepExpired(roundId, stock, maxHolders)` — batched, pass 0 for all holders at once.
 
 Post-deploy checks:
-- `pot.rewards()` is ChipRewards, `chipRewards.pot()` is the Pot
+- `claims.rounds()` is ChipRounds, `rounds.claims()` is ChipClaims
+- `pot.rewards()` is ChipRounds
 - `collectionBaseBps` is 10000 / 20000 for the two collections
 - open a tiny test round end to end on a fork before funding the real Pot
 
@@ -262,7 +297,7 @@ Needs: `MULTISIG`, USDC, the Slipstream position manager, and the FeeSplitter fr
 
 Then, from the multisig:
 - `setManager(BANKR_OPTIMIZER)` — may manage positions, cannot change configuration
-- `setRewards(chipRewards)` — lets ChipRewards record compound credits
+- `setRewards(chipClaims)` — the ledger is what notifies compound credits
 - `setPolAsset(token, true)` for each stock POL will hold (protects it from the rescue)
 - `setWeth(WETH)` and `setRoute(WETH, ETH_USD_FEED, …)` so POL can realise its ETH slice
 - `setRoute(AERO, AERO_USD_FEED, …)` if POL keeps any of its own AERO
@@ -287,7 +322,7 @@ Needs: `MULTISIG`, ChipRewards, ClutchVaultAdapter.
 | Arg | Value |
 |---|---|
 | `multisig` | `MULTISIG` |
-| `rewards_` | ChipRewards from step 5 |
+| `rewards_` | **ChipClaims** from step 5a — `claimFor` lives on the ledger |
 | `vaultRegistry_` | ClutchVaultAdapter from step 4 |
 | `legGasLimit_` | `1000000` |
 

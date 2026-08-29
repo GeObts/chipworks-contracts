@@ -6,8 +6,8 @@ by protocol fee streams, in permissionless 24-hour rounds.
 **Status:** feature-complete for phase 1, frozen pending answers from Clutch (see §7).
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
-**Size:** ~2,010 lines of non-comment source across 7 contracts + 1 base + 11 interfaces.
-**Tests:** 362 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 31 tests
+**Size:** ~2,120 lines of non-comment source across 8 contracts + 1 base + 13 interfaces.
+**Tests:** 361 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 31 tests
 against a live Base mainnet fork.
 
 Fork tests run against the **latest** Base block, not a pinned one, so live prices and pool
@@ -20,7 +20,15 @@ forge test                                   # everything (needs BASE_RPC_URL)
 forge test --no-match-contract "Fork"        # no RPC needed
 forge test --match-contract Invariant        # ~105s
 forge test --match-path "test/fork/*" -j 1   # serialise: a free-tier RPC will 429 otherwise
+forge test --match-contract CodeSizeTest     # the size guard
 ```
+
+**Size guard.** `test/CodeSize.t.sol` fails the build if any deployable contract exceeds
+**24,000 bytes** — deliberately below the 24,576 EIP-170 limit, so a contract that creeps to
+24,500 is caught before it becomes undeployable. It reads `.code.length` rather than relying
+on deployment failing, **because Foundry exempts test-deployed contracts from the code size
+limit and that is exactly how this was missed the first time**: 362 tests passed against a
+contract that no chain would accept.
 
 Fork tests are RPC-hungry. Running the whole suite in parallel against a rate-limited
 endpoint produces spurious `429` failures that look like EVM errors; `-j 1` on the fork
@@ -32,7 +40,8 @@ paths, or a paid endpoint, avoids it.
 
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
-| `ChipRewards.sol` | 745 | **yes, user credits** | Rounds, weights, splits, buys, claims, expiry, POL holdback |
+| `ChipRounds.sol` | 605 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
+| `ChipClaims.sol` | 372 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
@@ -95,19 +104,50 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
 8. **Value is conserved in every split.** `pot + ops + pol == amount`, dust always to the Pot.
 9. **A sold Noun stops earning immediately**, whether or not Clutch has been kicked.
 10. **A padded or duplicated token-id list cannot inflate anyone's share.**
-11. **Every finalized round gets at least 3 full claim windows before it expires**, under
+11. **The ledger is solvent for what it owes, and the engine is solvent for what it has
+    committed.** Two separate statements post-split, neither able to cover for the other.
+12. **Every finalized round gets at least 3 full claim windows before it expires**, under
     every accepted configuration and whatever moment it finalized at. Enforced by
     `_requireScheduleSane`, frozen per round at finalize, and asserted both by fuzz
     (`testFuzz_everyAcceptedConfigGivesAtLeastThreeWindows`) and by a stateful invariant
     that randomly retunes the schedule mid-run.
-12. **Nothing still claimable is ever swept.** Claim and sweep eligibility are disjoint in
+13. **Nothing still claimable is ever swept.** Claim and sweep eligibility are disjoint in
     time, and an expired credit earns no compound-share ledger entry for anyone.
 
 ## 4. Attack this first
 
 In priority order. Each is where I would expect a finding.
 
-### 4.1 Rounds and credit accounting — `ChipRewards.sol` (745 LOC, the big one)
+### 4.0 THE SPLIT — read this before anything else
+
+Chipworks used to be one contract. It reached 27,551 bytes of runtime code, ~3KB past the
+EIP-170 limit, and **could not be deployed at all**. It is now two:
+
+- **`ChipRounds`** spends money. Rounds, weights, splits, Chainlink-bounded swaps, venue
+  selection, the POL holdback. It holds quote token only while a round is in flight.
+- **`ChipClaims`** owes money. Credits, claim windows, expiry, sweeps. **Every token a
+  holder is owed lives here and nothing else does.**
+
+No proxy, no delegatecall: two plain contracts wired at deploy. The engine's entire reach
+into the ledger is three `onlyRounds` functions — `creditWeight`, `recordAcquired`,
+`freezeSchedule` — **none of which can move a token out**. That is the property to attack
+first: if you can find a path where the engine, or anyone, extracts value from the ledger
+other than through `claim` / `sweepExpired` / `recoverExcess`, the split has failed at its
+one job.
+
+Two consequences worth checking explicitly:
+
+- **`recordAcquired` verifies before it believes.** The engine transfers tokens, then reports
+  the amount. The ledger checks its own balance covers `totalOwed + amount` and reverts
+  otherwise. The engine is trusted to be the engine, not trusted to be correct.
+- **The handover is a NEW failure point that did not exist before.** `settleStock` transfers
+  stock to the ledger, and a policy-blocked ledger would revert the whole round. **This was a
+  real bug in the first cut of the split**, caught by running the pre-split hostile suite
+  against it. The transfer is now attempted, measured by balance delta, and any shortfall
+  stranded in the engine and reported via `StockStranded` rather than wedging the round. See
+  `test_aBlockedLedgerStrandsOneStockWithoutWedgingTheRound`.
+
+### 4.1 Rounds and credit accounting — `ChipRounds.sol` + `ChipClaims.sol`
 The credit model is per-round weight shares, not a masterchef accumulator:
 ```
 claimable = acquired[round][stock] * weightOf[round][stock][owner] / totalWeight[round][stock]
@@ -161,9 +201,11 @@ Note the deliberate asymmetry: the sweep marks `hasClaimed` for each holder it p
 That is what makes interleaved batches safe, but confirm it can never be reached while a
 claim is still legal.
 
-### 4.4 Rescue exclusions — both `recoverExcess` implementations
-Two different rescue philosophies, deliberately. `ChipRewards` subtracts a computed owed
-figure; `POLTreasury` uses a strict exclusion list. Attack both: can an attacker or the
+### 4.4 Rescue exclusions — THREE `recoverExcess` implementations
+Three now, protecting different quantities. `ChipClaims` subtracts `totalOwed` (booked
+credits). `ChipRounds` subtracts `committedQuote` (a live round's budget) and nothing else,
+because credits are not held there at all — so stranded stock in the engine IS recoverable
+while committed budget is NOT. `POLTreasury` uses a strict exclusion list. Attack all three: can an attacker or the
 multisig get value out through a path other than the intended one? In POLTreasury check
 `decreaseLiquidity` → does anything let withdrawn tokens leave to a wallet? (Intended: no.)
 Check that marking a token as POL/income is enough to protect it retroactively.

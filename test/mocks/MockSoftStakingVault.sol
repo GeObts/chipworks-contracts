@@ -119,7 +119,7 @@ contract MockSoftStakingVault is ISoftStakingVault {
         });
     }
 
-    /// @notice Seed claimable Clutch-side rewards. Caller must fund this contract with `token`.
+    /// @notice Seed claimable Clutch-side rounds. Caller must fund this contract with `token`.
     function setPendingReward(uint256 tokenId, address token, uint256 amount) external {
         address[] storage toks = _rewardTokens[tokenId];
         bool found;

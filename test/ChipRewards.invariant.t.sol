@@ -3,14 +3,17 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ChipRewardsBase} from "./ChipRewardsBase.t.sol";
-import {ChipRewards} from "../src/ChipRewards.sol";
+import {ChipRounds} from "../src/ChipRounds.sol";
+import {ChipClaims} from "../src/ChipClaims.sol";
+import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 
 /// @dev Drives random sequences of the whole lifecycle: open, contribute, close, settle,
 ///      finalize, claim, freeze/unfreeze the hostile stock, expire, sweep, and rescue.
 ///      Every call is wrapped in try/catch because most orderings are legitimately
 ///      invalid — the point is that no ordering can break solvency.
 contract RewardsHandler is Test {
-    ChipRewards public rewards;
+    ChipRounds public rounds;
+    ChipClaims public claims;
     ChipRewardsBase public fixtureRef;
 
     address[] public actors;
@@ -20,8 +23,15 @@ contract RewardsHandler is Test {
 
     uint256 public currentRound;
 
-    constructor(ChipRewards rewards_, address multisig_, address[] memory actors_, address[] memory stocks_) {
-        rewards = rewards_;
+    constructor(
+        ChipRounds rounds_,
+        ChipClaims claims_,
+        address multisig_,
+        address[] memory actors_,
+        address[] memory stocks_
+    ) {
+        rounds = rounds_;
+        claims = claims_;
         multisig = multisig_;
         actors = actors_;
         stocks = stocks_;
@@ -38,7 +48,7 @@ contract RewardsHandler is Test {
 
     function openRound(uint256 seed) external {
         vm.prank(_actor(seed));
-        try rewards.openRound() returns (uint256 id) {
+        try rounds.openRound() returns (uint256 id) {
             currentRound = id;
         } catch {}
     }
@@ -51,7 +61,7 @@ contract RewardsHandler is Test {
         ids[2] = (seed % 6) + 1;
         address collection = collectionSeed % 2 == 0 ? fixtureCollectionA() : fixtureCollectionB();
         vm.prank(_actor(seed));
-        try rewards.contributeWeights(currentRound, collection, ids) {} catch {}
+        try rounds.contributeWeights(currentRound, collection, ids) {} catch {}
     }
 
     function warp(uint256 seed) external {
@@ -61,34 +71,34 @@ contract RewardsHandler is Test {
     function closeAccumulation(uint256 seed) external {
         if (currentRound == 0) return;
         vm.prank(_actor(seed));
-        try rewards.closeAccumulation(currentRound) {} catch {}
+        try rounds.closeAccumulation(currentRound) {} catch {}
     }
 
     function settle(uint256 seed, uint256 stockSeed) external {
         if (currentRound == 0) return;
         vm.prank(_actor(seed));
-        try rewards.settleStock(currentRound, _stock(stockSeed)) {} catch {}
+        try rounds.settleStock(currentRound, _stock(stockSeed)) {} catch {}
     }
 
     function finalize(uint256 seed) external {
         if (currentRound == 0) return;
         vm.prank(_actor(seed));
-        try rewards.finalizeRound(currentRound) {} catch {}
+        try rounds.finalizeRound(currentRound) {} catch {}
     }
 
     function claim(uint256 seed, uint256 roundSeed, uint256 stockSeed) external {
-        uint256 total = rewards.roundCount();
+        uint256 total = rounds.roundCount();
         if (total == 0) return;
         uint256 id = (roundSeed % total) + 1;
         vm.prank(_actor(seed));
-        try rewards.claim(id, _stock(stockSeed)) {} catch {}
+        try claims.claim(id, _stock(stockSeed)) {} catch {}
     }
 
     function sweep(uint256 roundSeed, uint256 stockSeed, uint256 batch) external {
-        uint256 total = rewards.roundCount();
+        uint256 total = rounds.roundCount();
         if (total == 0) return;
         uint256 id = (roundSeed % total) + 1;
-        try rewards.sweepExpired(id, _stock(stockSeed), batch % 4) {} catch {}
+        try claims.sweepExpired(id, _stock(stockSeed), batch % 4) {} catch {}
     }
 
     /// @dev Randomly retune the claim schedule, so the invariants are exercised across
@@ -98,13 +108,13 @@ contract RewardsHandler is Test {
         d = uint32(1 hours + (d % w));
         e = uint64(e % (365 days));
         vm.prank(multisig);
-        try rewards.setCreditExpiry(e) {} catch {}
+        try claims.setCreditExpiry(e) {} catch {}
         vm.prank(multisig);
-        try rewards.setClaimSchedule(w, d) {} catch {}
+        try claims.setClaimSchedule(w, d) {} catch {}
     }
 
     function toggleFreeze(uint256 seed) external {
-        address target = seed % 3 == 0 ? address(rewards) : _actor(seed);
+        address target = seed % 3 == 0 ? address(claims) : _actor(seed);
         try fixtureFreezer().setBlacklisted(target, seed % 2 == 0) {} catch {}
     }
 
@@ -115,18 +125,18 @@ contract RewardsHandler is Test {
     function rescue(uint256 seed, uint256 amount) external {
         address token = _stock(seed);
         vm.prank(multisig);
-        try rewards.recoverExcess(token, rescueTo, amount) {} catch {}
+        try claims.recoverExcess(token, rescueTo, amount) {} catch {}
     }
 
     function cancelRound(uint256 roundSeed) external {
-        uint256 total = rewards.roundCount();
+        uint256 total = rounds.roundCount();
         if (total == 0) return;
-        try rewards.cancelRound((roundSeed % total) + 1) {} catch {}
+        try rounds.cancelRound((roundSeed % total) + 1) {} catch {}
     }
 
     function setAutoCompound(uint256 seed) external {
         vm.prank(_actor(seed));
-        rewards.setAutoCompound(seed % 2 == 0);
+        claims.setAutoCompound(seed % 2 == 0);
     }
 
     /* --- indirection so the handler can reach the fixture's mocks --- */
@@ -150,14 +160,15 @@ contract BoundHandler is RewardsHandler {
     address public freezerToken;
 
     constructor(
-        ChipRewards r,
+        ChipRounds r,
+        ChipClaims c,
         address ms,
         address[] memory a,
         address[] memory s,
         address colA_,
         address colB_,
         address freezer_
-    ) RewardsHandler(r, ms, a, s) {
+    ) RewardsHandler(r, c, ms, a, s) {
         colA = colA_;
         colB = colB_;
         freezerToken = freezer_;
@@ -176,12 +187,12 @@ contract BoundHandler is RewardsHandler {
     }
 
     function fixtureMinter(address token, uint128 amount) public override {
-        try IMintable(token).mint(address(rewards), amount) {} catch {}
+        try IMintable(token).mint(address(claims), amount) {} catch {}
     }
 }
 
 /// @notice THE invariant: whatever sequence of rounds, freezes, claims, sweeps, rescues
-///         and time travel occurs, ChipRewards can always pay everyone it owes.
+///         and time travel occurs, ChipRounds can always pay everyone it owes.
 contract ChipRewardsInvariantTest is ChipRewardsBase {
     BoundHandler internal handler;
 
@@ -205,7 +216,7 @@ contract ChipRewardsInvariantTest is ChipRewardsBase {
 
         // Exercise the POL holdback path too.
         vm.prank(multisig);
-        rewards.setHoldbackBps(1_500);
+        rounds.setHoldbackBps(1_500);
 
         usdc.mint(address(pot), 500_000e6); // deep pot so rounds keep opening
 
@@ -221,26 +232,28 @@ contract ChipRewardsInvariantTest is ChipRewardsBase {
         stocks[2] = address(aapl);
         stocks[3] = address(usdc);
 
-        handler =
-            new BoundHandler(rewards, multisig, actors, stocks, address(basedNouns), address(darkNouns), address(aapl));
+        handler = new BoundHandler(
+            rounds, claims, multisig, actors, stocks, address(basedNouns), address(darkNouns), address(aapl)
+        );
         targetContract(address(handler));
     }
 
-    /// @notice Solvency, per token. The contract must always hold at least what it owes.
+    /// @notice Solvency, per token. The LEDGER must always hold at least what it owes.
+    /// @dev The split sharpens this: credits live in ChipClaims and nowhere else, so the
+    ///      contract that owes is the contract that holds, with no engine balance mixed in.
     function invariant_alwaysSolvent() public view {
-        assertGe(nvda.balanceOf(address(rewards)), rewards.totalOwed(address(nvda)), "NVDA");
-        assertGe(googl.balanceOf(address(rewards)), rewards.totalOwed(address(googl)), "GOOGL");
-        assertGe(aapl.balanceOf(address(rewards)), rewards.totalOwed(address(aapl)), "AAPL");
-        assertGe(usdc.balanceOf(address(rewards)), rewards.totalOwed(address(usdc)), "USDC");
+        assertGe(nvda.balanceOf(address(claims)), claims.totalOwed(address(nvda)), "NVDA");
+        assertGe(googl.balanceOf(address(claims)), claims.totalOwed(address(googl)), "GOOGL");
+        assertGe(aapl.balanceOf(address(claims)), claims.totalOwed(address(aapl)), "AAPL");
+        assertGe(usdc.balanceOf(address(claims)), claims.totalOwed(address(usdc)), "USDC");
     }
 
-    /// @notice Committed round budget plus booked credits can never exceed what is held.
+    /// @notice A live round's committed budget is always backed by the engine's own balance.
+    /// @dev Post-split this is two clean statements instead of one mixed one: the engine
+    ///      holds budget in flight, the ledger holds credits, and neither can cover for the
+    ///      other. Checked together with {invariant_alwaysSolvent}.
     function invariant_quoteCommitmentIsBacked() public view {
-        assertGe(
-            usdc.balanceOf(address(rewards)),
-            rewards.totalOwed(address(usdc)) + rewards.committedQuote(),
-            "quote token over-committed"
-        );
+        assertGe(usdc.balanceOf(address(rounds)), rounds.committedQuote(), "engine over-committed");
     }
 
     /// @notice THE SCHEDULE GUARANTEE. However the config is retuned, every round that has
@@ -248,20 +261,19 @@ contract ChipRewardsInvariantTest is ChipRewardsBase {
     ///         its finalize and its expiry. A round's schedule is frozen when it finalizes,
     ///         so a later config change can never strand one.
     function invariant_everyRoundKeepsThreeClaimWindows() public view {
-        uint256 total = rewards.roundCount();
+        uint256 total = rounds.roundCount();
         for (uint256 id = 1; id <= total; ++id) {
-            ChipRewards.Round memory r = rewards.getRound(id);
-            if (r.state != ChipRewards.RoundState.Finalized) continue;
-            if (r.windowLengthAt == 0) continue; // cancelled round, no credits
-            assertGe(rewards.guaranteedWindows(id), 3, "round starved of claim windows");
-            assertGe(r.expiresAt, r.finalizedAt, "expiry cannot precede finalize");
+            ChipClaims.Schedule memory sch = claims.scheduleOf(id);
+            if (sch.finalizedAt == 0) continue; // never finalized, or cancelled: no credits
+            assertGe(claims.guaranteedWindows(id), 3, "round starved of claim windows");
+            assertGe(sch.expiresAt, sch.finalizedAt, "expiry cannot precede finalize");
         }
     }
 
     /// @notice A frozen stock must never corrupt the accounting of a healthy one: NVDA and
     ///         GOOGL stay solvent no matter what AAPL does.
     function invariant_frozenStockDoesNotCorruptHealthyOnes() public view {
-        assertGe(nvda.balanceOf(address(rewards)), rewards.totalOwed(address(nvda)), "NVDA vs AAPL freeze");
-        assertGe(googl.balanceOf(address(rewards)), rewards.totalOwed(address(googl)), "GOOGL vs AAPL freeze");
+        assertGe(nvda.balanceOf(address(claims)), claims.totalOwed(address(nvda)), "NVDA vs AAPL freeze");
+        assertGe(googl.balanceOf(address(claims)), claims.totalOwed(address(googl)), "GOOGL vs AAPL freeze");
     }
 }

@@ -151,6 +151,24 @@ gas cost. That converts a forfeit risk into an operational cost. Not built.
 **Also unresolved:** the three-window rule bounds the COUNT of windows, not their spacing.
 With 7-day windows and a 30-day expiry the last window can land only hours before expiry.
 
+## 9. RESOLVED: ChipRewards was undeployable
+
+`ChipRewards` reached 27,551 bytes of runtime code against EIP-170's 24,576 limit. It could
+not have been deployed to Base. **362 tests passed against it**, because Foundry exempts
+test-deployed contracts from the size limit; it was found only when the keeper tried a real
+`anvil` deployment.
+
+Fixed structurally rather than by shaving bytes. `ChipRounds` (the engine, 20,230 bytes) and
+`ChipClaims` (the ledger, 12,879 bytes) are two plain contracts wired at deploy, split so the
+half holding holders' money is the smaller and simpler one.
+
+A permanent guard now fails the build if any deployable contract exceeds 24,000 bytes:
+`test/CodeSize.t.sol`. The 576-byte gap below the real limit is deliberate headroom.
+
+The split introduced one new failure mode and it is fixed: handing stock to the ledger is a
+second place a policy-blocked token can fail, and in the first cut it reverted the whole
+round. Now measured and tolerated, with the shortfall stranded and reported.
+
 ## 7. Smaller things
 
 - **Deploy simulation.** Any `forge script` touching a B20 token fails simulation; use

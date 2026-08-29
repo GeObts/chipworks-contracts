@@ -4,7 +4,9 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {ChipRewards} from "../src/ChipRewards.sol";
+import {ChipRounds} from "../src/ChipRounds.sol";
+import {ChipClaims} from "../src/ChipClaims.sol";
+import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 import {Pot} from "../src/Pot.sol";
 import {StockRegistry} from "../src/StockRegistry.sol";
 import {ClutchVaultAdapter} from "../src/adapters/ClutchVaultAdapter.sol";
@@ -33,7 +35,8 @@ abstract contract ChipRewardsBase is Test {
     // stack
     StockRegistry internal registry;
     Pot internal pot;
-    ChipRewards internal rewards;
+    ChipRounds internal rounds;
+    ChipClaims internal claims;
     ClutchVaultAdapter internal adapter;
 
     // tokens
@@ -92,7 +95,8 @@ abstract contract ChipRewardsBase is Test {
         registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
         pot = new Pot(multisig, address(usdc));
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
-        rewards = new ChipRewards(multisig, address(registry), address(pot), address(adapter), SPLIT_FEE);
+        claims = new ChipClaims(multisig, address(registry));
+        rounds = new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), SPLIT_FEE);
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");
@@ -131,16 +135,18 @@ abstract contract ChipRewardsBase is Test {
 
     function _wire() internal {
         vm.startPrank(multisig);
-        pot.setRewards(address(rewards));
+        pot.setRewards(address(rounds));
+        claims.setRounds(address(rounds));
+        claims.setPolTreasury(polTreasury);
         adapter.setVault(address(basedNouns), address(basedVault));
         adapter.setVault(address(darkNouns), address(darkVault));
-        rewards.setCollectionBaseBps(address(basedNouns), 10_000); // 1.0x
-        rewards.setCollectionBaseBps(address(darkNouns), 20_000); // 2.0x
-        rewards.setRoundParams(24 hours, 2 hours, MIN_POT, MAX_BUDGET);
-        rewards.setRouters(address(router), address(router));
-        rewards.setPolTreasury(polTreasury);
-        rewards.setChip(address(chip), address(0xdead));
-        rewards.setHoodie(address(hoodies), 11_000);
+        rounds.setCollectionBaseBps(address(basedNouns), 10_000); // 1.0x
+        rounds.setCollectionBaseBps(address(darkNouns), 20_000); // 2.0x
+        rounds.setRoundParams(24 hours, 2 hours, MIN_POT, MAX_BUDGET);
+        rounds.setRouters(address(router), address(router));
+        rounds.setPolTreasury(polTreasury);
+        rounds.setChip(address(chip), address(0xdead));
+        rounds.setHoodie(address(hoodies), 11_000);
         vm.stopPrank();
     }
 
@@ -174,7 +180,7 @@ abstract contract ChipRewardsBase is Test {
         internal
     {
         vm.prank(owner);
-        ChipRewards(rewards).setSplit(collection, tokenId, s, p);
+        rounds.setSplit(collection, tokenId, s, p);
     }
 
     function _one(address a) internal pure returns (address[] memory out) {
@@ -221,8 +227,8 @@ abstract contract ChipRewardsBase is Test {
     ///      Claims are only possible inside a window, so most tests need this before
     ///      calling claim().
     function _openClaimWindow() internal {
-        if (rewards.isClaimOpen()) return;
-        (, uint64 opensAt,) = rewards.claimWindowState();
+        if (claims.isClaimOpen()) return;
+        (, uint64 opensAt,) = claims.claimWindowState();
         vm.warp(opensAt);
     }
 
@@ -234,14 +240,14 @@ abstract contract ChipRewardsBase is Test {
 
     /// @dev Jump just past a round's expiry, where sweeping becomes possible.
     function _warpPastExpiry(uint256 roundId) internal {
-        vm.warp(rewards.getRound(roundId).expiresAt + 1);
+        vm.warp(claims.expiresAt(roundId) + 1);
     }
 
     /// @dev Open a round, contribute the given Based Nouns, close accumulation.
     function _openAndAccumulate(uint256[] memory basedIds) internal returns (uint256 roundId) {
-        roundId = rewards.openRound();
-        rewards.contributeWeights(roundId, address(basedNouns), basedIds);
+        roundId = rounds.openRound();
+        rounds.contributeWeights(roundId, address(basedNouns), basedIds);
         vm.warp(block.timestamp + 2 hours);
-        rewards.closeAccumulation(roundId);
+        rounds.closeAccumulation(roundId);
     }
 }

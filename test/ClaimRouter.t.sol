@@ -3,7 +3,9 @@ pragma solidity ^0.8.24;
 
 import {ChipRewardsBase} from "./ChipRewardsBase.t.sol";
 import {ClaimRouter} from "../src/ClaimRouter.sol";
-import {ChipRewards} from "../src/ChipRewards.sol";
+import {ChipRounds} from "../src/ChipRounds.sol";
+import {ChipClaims} from "../src/ChipClaims.sol";
+import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {GasBombNoun} from "./mocks/MockNoun.sol";
@@ -13,7 +15,7 @@ contract ClaimRouterTest is ChipRewardsBase {
 
     function setUp() public override {
         super.setUp();
-        router_ = new ClaimRouter(multisig, address(rewards), address(adapter), 1_000_000);
+        router_ = new ClaimRouter(multisig, address(claims), address(adapter), 1_000_000);
     }
 
     function _chipClaims(uint256 roundId, address stock) internal pure returns (ClaimRouter.ChipClaim[] memory c) {
@@ -56,9 +58,9 @@ contract ClaimRouterTest is ChipRewardsBase {
         _setSplit(address(basedNouns), 1, alice, _two(address(nvda), address(aapl)), _two(uint8(50), uint8(50)));
 
         id = _openAndAccumulate(_ids(1));
-        rewards.settleStock(id, address(nvda));
-        rewards.settleStock(id, address(aapl));
-        rewards.finalizeRound(id);
+        rounds.settleStock(id, address(nvda));
+        rounds.settleStock(id, address(aapl));
+        rounds.finalizeRound(id);
 
         chip.mint(address(basedVault), 500 ether);
         basedVault.setPendingReward(1, address(chip), 500 ether);
@@ -166,7 +168,7 @@ contract ClaimRouterTest is ChipRewardsBase {
         // And the frozen credit survives for later.
         aapl.setBlacklisted(alice, false);
         vm.prank(alice);
-        assertEq(rewards.claim(id, address(aapl)), 4e8, "nothing lost");
+        assertEq(claims.claim(id, address(aapl)), 4e8, "nothing lost");
     }
 
     /// @notice A hostile leg must not starve the legs after it of gas. This is the concrete
@@ -195,7 +197,7 @@ contract ClaimRouterTest is ChipRewardsBase {
     function test_revertsOnlyWhenEveryLegFails() public {
         uint256 id = _setupBothSides();
         vm.prank(alice);
-        rewards.claim(id, address(nvda)); // already taken
+        claims.claim(id, address(nvda)); // already taken
 
         vm.prank(alice);
         vm.expectRevert(ClaimRouter.EverythingFailed.selector);
@@ -223,8 +225,8 @@ contract ClaimRouterTest is ChipRewardsBase {
 
         // Path A: claim each side directly.
         vm.startPrank(alice);
-        rewards.claim(id, address(nvda));
-        rewards.claim(id, address(aapl));
+        claims.claim(id, address(nvda));
+        claims.claim(id, address(aapl));
         vm.stopPrank();
         basedVault.claim(1);
 
@@ -253,9 +255,9 @@ contract ClaimRouterTest is ChipRewardsBase {
 
         // Direct: NVDA works, AAPL reverts, Clutch works.
         vm.prank(alice);
-        rewards.claim(id, address(nvda));
+        claims.claim(id, address(nvda));
         vm.prank(alice);
-        try rewards.claim(id, address(aapl)) {} catch {}
+        try claims.claim(id, address(aapl)) {} catch {}
         basedVault.claim(1);
 
         uint256 directNvda = nvda.balanceOf(alice);
@@ -278,12 +280,12 @@ contract ClaimRouterTest is ChipRewardsBase {
         uint256 id = _setupBothSides();
         aapl.setBlacklisted(alice, true);
 
-        uint256 owedBefore = rewards.claimable(id, address(aapl), alice);
+        uint256 owedBefore = claims.claimable(id, address(aapl), alice);
         vm.prank(alice);
         router_.claimEverything(_chipClaims2(id, address(nvda), address(aapl)), _noClutch(), new address[](0));
 
-        assertEq(rewards.claimable(id, address(aapl), alice), owedBefore, "credit intact");
-        assertFalse(rewards.hasClaimed(id, address(aapl), alice), "not marked claimed");
+        assertEq(claims.claimable(id, address(aapl), alice), owedBefore, "credit intact");
+        assertFalse(claims.hasClaimed(id, address(aapl), alice), "not marked claimed");
     }
 
     /* ------------------------------------------------------------------ */
@@ -338,7 +340,7 @@ contract ClaimRouterTest is ChipRewardsBase {
     function test_configOnlyMultisig() public {
         vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        router_.setRewards(address(rewards));
+        router_.setRewards(address(claims));
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         router_.setVaultRegistry(address(adapter));
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
@@ -372,8 +374,8 @@ contract ClaimRouterTest is ChipRewardsBase {
     /// @notice Routing must not bypass the window gate.
     function test_chipLegsFailWhileClaimsAreShut() public {
         uint256 id = _setupBothSides();
-        vm.warp(rewards.windowAnchor() + 3 days); // between windows
-        assertFalse(rewards.isClaimOpen());
+        vm.warp(claims.windowAnchor() + 3 days); // between windows
+        assertFalse(claims.isClaimOpen());
 
         vm.prank(alice);
         (uint256 chipOk, uint256 clutchOk) = router_.claimEverything(
@@ -386,14 +388,14 @@ contract ClaimRouterTest is ChipRewardsBase {
         assertEq(chip.balanceOf(alice), 500 ether);
 
         // The credits are untouched and claimable when the window returns.
-        assertGt(rewards.claimable(id, address(nvda), alice), 0);
+        assertGt(claims.claimable(id, address(nvda), alice), 0);
     }
 
     /// @notice And a chip-only routed claim while shut reverts, rather than silently
     ///         charging gas for nothing.
     function test_chipOnlyRoutedClaimRevertsWhileShut() public {
         uint256 id = _setupBothSides();
-        vm.warp(rewards.windowAnchor() + 3 days);
+        vm.warp(claims.windowAnchor() + 3 days);
 
         vm.prank(alice);
         vm.expectRevert(ClaimRouter.EverythingFailed.selector);
@@ -402,7 +404,7 @@ contract ClaimRouterTest is ChipRewardsBase {
 
     function test_routedClaimWorksWhenTheWindowReopens() public {
         uint256 id = _setupBothSides();
-        vm.warp(rewards.windowAnchor() + 3 days);
+        vm.warp(claims.windowAnchor() + 3 days);
 
         (bool open, uint64 nextOpenAt) = router_.claimWindowStatus();
         assertFalse(open);
@@ -418,11 +420,11 @@ contract ClaimRouterTest is ChipRewardsBase {
     /// @notice Routing is still never worse than direct, gate included.
     function test_routedEqualsDirectWhileShut() public {
         uint256 id = _setupBothSides();
-        vm.warp(rewards.windowAnchor() + 3 days);
+        vm.warp(claims.windowAnchor() + 3 days);
         uint256 snap = vm.snapshotState();
 
         vm.prank(alice);
-        try rewards.claim(id, address(nvda)) {} catch {}
+        try claims.claim(id, address(nvda)) {} catch {}
         uint256 directNvda = nvda.balanceOf(alice);
 
         vm.revertToState(snap);
@@ -436,9 +438,9 @@ contract ClaimRouterTest is ChipRewardsBase {
         (bool open,) = router_.claimWindowStatus();
         assertTrue(open, "open right after deploy");
 
-        vm.warp(rewards.windowAnchor() + 3 days);
+        vm.warp(claims.windowAnchor() + 3 days);
         (bool shut, uint64 next) = router_.claimWindowStatus();
         assertFalse(shut);
-        assertEq(next, rewards.windowAnchor() + 7 days);
+        assertEq(next, claims.windowAnchor() + 7 days);
     }
 }

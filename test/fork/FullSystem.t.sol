@@ -8,7 +8,9 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {FeeSplitter} from "../../src/FeeSplitter.sol";
 import {Pot} from "../../src/Pot.sol";
 import {StockRegistry} from "../../src/StockRegistry.sol";
-import {ChipRewards} from "../../src/ChipRewards.sol";
+import {ChipRounds} from "../../src/ChipRounds.sol";
+import {ChipClaims} from "../../src/ChipClaims.sol";
+import {Round, RoundState} from "../../src/interfaces/IChipRounds.sol";
 import {POLTreasury} from "../../src/POLTreasury.sol";
 import {ClaimRouter} from "../../src/ClaimRouter.sol";
 import {ClutchVaultAdapter} from "../../src/adapters/ClutchVaultAdapter.sol";
@@ -57,7 +59,8 @@ contract FullSystemForkTest is Test {
     FeeSplitter internal splitter;
     Pot internal pot;
     StockRegistry internal registry;
-    ChipRewards internal rewards;
+    ChipRounds internal rounds;
+    ChipClaims internal claims;
     POLTreasury internal polTreasury;
     ClaimRouter internal router;
     ClutchVaultAdapter internal adapter;
@@ -82,9 +85,11 @@ contract FullSystemForkTest is Test {
         pot = new Pot(multisig, USDC);
         registry = new StockRegistry(multisig, USDC, UNIV3_FACTORY, SLIPSTREAM_FACTORY);
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
-        rewards = new ChipRewards(multisig, address(registry), address(pot), address(adapter), 5_000 ether);
+        claims = new ChipClaims(multisig, address(registry));
+        rounds =
+            new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), 5_000 ether);
         polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter));
-        router = new ClaimRouter(multisig, address(rewards), address(adapter), 1_000_000);
+        router = new ClaimRouter(multisig, address(claims), address(adapter), 1_000_000);
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");
@@ -94,7 +99,9 @@ contract FullSystemForkTest is Test {
 
         vm.startPrank(multisig);
         splitter.setPot(address(pot));
-        pot.setRewards(address(rewards));
+        pot.setRewards(address(rounds));
+        claims.setRounds(address(rounds));
+        claims.setPolTreasury(address(polTreasury));
         pot.setConversionConfig(WETH, ETH_USD_FEED, UNIV3_ROUTER, 500, 100, 5 ether, 1 hours);
 
         // WETH stands in for a B20 stock: real feed, real pool, real swap.
@@ -115,14 +122,14 @@ contract FullSystemForkTest is Test {
         adapter.setVault(address(basedNouns), address(basedVault));
         adapter.setVault(address(darkNouns), address(darkVault));
 
-        rewards.setCollectionBaseBps(address(basedNouns), 10_000);
-        rewards.setCollectionBaseBps(address(darkNouns), 20_000);
-        rewards.setRoundParams(24 hours, 2 hours, 250e6, 10_000e6);
-        rewards.setRouters(UNIV3_ROUTER, address(0));
-        rewards.setPolTreasury(address(polTreasury));
-        rewards.setChip(address(chipToken), address(0xdead));
-        rewards.setHoldbackBps(1_500);
-        rewards.setCreditExpiry(30 days);
+        rounds.setCollectionBaseBps(address(basedNouns), 10_000);
+        rounds.setCollectionBaseBps(address(darkNouns), 20_000);
+        rounds.setRoundParams(24 hours, 2 hours, 250e6, 10_000e6);
+        rounds.setRouters(UNIV3_ROUTER, address(0));
+        rounds.setPolTreasury(address(polTreasury));
+        rounds.setChip(address(chipToken), address(0xdead));
+        rounds.setHoldbackBps(1_500);
+        claims.setCreditExpiry(30 days);
 
         // Item 1: AERO has its own conversion route, so recycled POL income becomes
         // budget a round can actually spend.
@@ -137,7 +144,7 @@ contract FullSystemForkTest is Test {
         polTreasury.setWeth(WETH);
         polTreasury.setRoute(WETH, ETH_USD_FEED, UNIV3_ROUTER, 500, 100, 50 ether, 1 hours);
 
-        polTreasury.setRewards(address(rewards));
+        polTreasury.setRewards(address(claims));
         polTreasury.setManager(keeper);
         polTreasury.setPolAsset(WETH, true);
         polTreasury.setIncomeToken(AERO, true);
@@ -177,7 +184,7 @@ contract FullSystemForkTest is Test {
         darkVault.activate(1, 0); // tier 0 -> 1.00x, Dark 2.0x    => weight 20_000
 
         vm.prank(alice);
-        rewards.setSplit(address(basedNouns), 1, _one(WETH), _one(uint8(100)));
+        rounds.setSplit(address(basedNouns), 1, _one(WETH), _one(uint8(100)));
 
         // ---------------------------------------------------------------
         // 2. FEES IN. 3 ETH arrives from the LP locker / royalties.
@@ -217,25 +224,25 @@ contract FullSystemForkTest is Test {
         // 4. ROUND. Open, accumulate, close, settle, finalize.
         // ---------------------------------------------------------------
         vm.prank(keeper);
-        uint256 roundId = rewards.openRound();
-        uint256 budget = rewards.getRound(roundId).budget;
+        uint256 roundId = rounds.openRound();
+        uint256 budget = rounds.getRound(roundId).budget;
         assertEq(budget, usdcOut, "whole pot, under the $10k cap");
 
-        rewards.contributeWeights(roundId, address(basedNouns), _ids(1));
-        rewards.contributeWeights(roundId, address(darkNouns), _ids(1));
-        assertEq(rewards.getRound(roundId).totalWeight, 30_000, "10k + 20k");
+        rounds.contributeWeights(roundId, address(basedNouns), _ids(1));
+        rounds.contributeWeights(roundId, address(darkNouns), _ids(1));
+        assertEq(rounds.getRound(roundId).totalWeight, 30_000, "10k + 20k");
 
         vm.warp(block.timestamp + 2 hours);
-        rewards.closeAccumulation(roundId);
+        rounds.closeAccumulation(roundId);
 
         uint256 polWethBefore = IERC20(WETH).balanceOf(address(polTreasury));
-        rewards.settleStock(roundId, WETH); // REAL swap, Chainlink-bounded
-        rewards.settleStock(roundId, USDC); // quote slice, no swap
-        rewards.finalizeRound(roundId);
+        rounds.settleStock(roundId, WETH); // REAL swap, Chainlink-bounded
+        rounds.settleStock(roundId, USDC); // quote slice, no swap
+        rounds.finalizeRound(roundId);
 
-        assertFalse(rewards.stockSkipped(roundId, WETH), "the real swap executed");
-        uint256 wethAcquired = rewards.acquired(roundId, WETH);
-        uint256 usdcAcquired = rewards.acquired(roundId, USDC);
+        assertFalse(rounds.stockSkipped(roundId, WETH), "the real swap executed");
+        uint256 wethAcquired = claims.acquired(roundId, WETH);
+        uint256 usdcAcquired = claims.acquired(roundId, USDC);
         assertGt(wethAcquired, 0);
         assertGt(usdcAcquired, 0);
         console2.log("round bought WETH (wei):", wethAcquired);
@@ -250,8 +257,8 @@ contract FullSystemForkTest is Test {
         console2.log("POL holdback WETH (wei):", polWethGained);
 
         // Solvency: the contract holds exactly what it owes.
-        assertEq(IERC20(WETH).balanceOf(address(rewards)), rewards.totalOwed(WETH), "WETH solvent");
-        assertEq(IERC20(USDC).balanceOf(address(rewards)), rewards.totalOwed(USDC), "USDC solvent");
+        assertEq(IERC20(WETH).balanceOf(address(claims)), claims.totalOwed(WETH), "WETH solvent");
+        assertEq(IERC20(USDC).balanceOf(address(claims)), claims.totalOwed(USDC), "USDC solvent");
 
         // ---------------------------------------------------------------
         // 6. CLAIMS, through the router, both sides at once.
@@ -302,10 +309,10 @@ contract FullSystemForkTest is Test {
         vm.warp(block.timestamp + 91 days);
         {
             uint256 polUsdcBefore = IERC20(USDC).balanceOf(address(polTreasury));
-            uint256 swept = rewards.sweepExpired(roundId, USDC);
+            uint256 swept = claims.sweepExpired(roundId, USDC);
             assertEq(swept, usdcAcquired, "bob's whole unclaimed credit");
             assertEq(IERC20(USDC).balanceOf(address(polTreasury)) - polUsdcBefore, swept);
-            assertEq(rewards.totalOwed(USDC), 0);
+            assertEq(claims.totalOwed(USDC), 0);
             console2.log("expired to POL, USDC:", swept / 1e6);
         }
 
@@ -346,9 +353,9 @@ contract FullSystemForkTest is Test {
         // ---------------------------------------------------------------
         vm.warp(block.timestamp + 24 hours);
         vm.prank(keeper);
-        uint256 round2 = rewards.openRound();
-        assertGt(rewards.getRound(round2).budget, 0, "POL income became a real round budget");
-        console2.log("next round budget, USDC:", rewards.getRound(round2).budget / 1e6);
+        uint256 round2 = rounds.openRound();
+        assertGt(rounds.getRound(round2).budget, 0, "POL income became a real round budget");
+        console2.log("next round budget, USDC:", rounds.getRound(round2).budget / 1e6);
     }
 
     /* ================================================================== */
@@ -361,7 +368,7 @@ contract FullSystemForkTest is Test {
         vm.prank(alice);
         basedVault.activate(1, 0);
         vm.prank(alice);
-        rewards.setSplit(address(basedNouns), 1, _one(WETH), _one(uint8(100)));
+        rounds.setSplit(address(basedNouns), 1, _one(WETH), _one(uint8(100)));
 
         vm.deal(address(splitter), 3 ether);
         splitter.distributeETH();
@@ -369,33 +376,33 @@ contract FullSystemForkTest is Test {
 
         // Round 1 with an impossible slippage bound: the buy must skip and carry.
         vm.prank(multisig);
-        rewards.setMaxSlippageBps(WETH, 1); // 0.01% tolerance vs a 0.05% pool fee
+        rounds.setMaxSlippageBps(WETH, 1); // 0.01% tolerance vs a 0.05% pool fee
 
-        uint256 r1 = rewards.openRound();
-        uint256 budget = rewards.getRound(r1).budget;
-        rewards.contributeWeights(r1, address(basedNouns), _ids(1));
+        uint256 r1 = rounds.openRound();
+        uint256 budget = rounds.getRound(r1).budget;
+        rounds.contributeWeights(r1, address(basedNouns), _ids(1));
         vm.warp(block.timestamp + 2 hours);
-        rewards.closeAccumulation(r1);
-        rewards.settleStock(r1, WETH);
-        rewards.finalizeRound(r1);
+        rounds.closeAccumulation(r1);
+        rounds.settleStock(r1, WETH);
+        rounds.finalizeRound(r1);
 
-        assertTrue(rewards.stockSkipped(r1, WETH), "impossible bound -> skipped");
+        assertTrue(rounds.stockSkipped(r1, WETH), "impossible bound -> skipped");
         assertEq(pot.available(), budget, "every cent carried back");
 
         // Round 2 with a sane bound spends it.
         vm.prank(multisig);
-        rewards.setMaxSlippageBps(WETH, 200);
+        rounds.setMaxSlippageBps(WETH, 200);
         vm.warp(block.timestamp + 24 hours);
 
-        uint256 r2 = rewards.openRound();
-        rewards.contributeWeights(r2, address(basedNouns), _ids(1));
+        uint256 r2 = rounds.openRound();
+        rounds.contributeWeights(r2, address(basedNouns), _ids(1));
         vm.warp(block.timestamp + 2 hours);
-        rewards.closeAccumulation(r2);
-        rewards.settleStock(r2, WETH);
-        rewards.finalizeRound(r2);
+        rounds.closeAccumulation(r2);
+        rounds.settleStock(r2, WETH);
+        rounds.finalizeRound(r2);
 
-        assertFalse(rewards.stockSkipped(r2, WETH));
-        assertGt(rewards.acquired(r2, WETH), 0, "the carried budget bought stock");
+        assertFalse(rounds.stockSkipped(r2, WETH));
+        assertGt(claims.acquired(r2, WETH), 0, "the carried budget bought stock");
     }
 
     /// @notice The registry depth gate against a real pool.

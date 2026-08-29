@@ -120,7 +120,7 @@ contract FeeSplitterHostileTest is Test {
 
     /// @notice A frozen fee token must not stop ETH or any other token from flushing.
     ///         This is the FeeSplitter half of the isolation property that matters far
-    ///         more in ChipRewards.
+    ///         more in ChipRounds.
     function test_frozenTokenDoesNotBlockOtherAssets() public {
         BlacklistToken frozen = new BlacklistToken("Freezer", "FRZ", 18);
         frozen.mint(address(splitter), 1_000 ether);
