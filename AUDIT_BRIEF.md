@@ -7,7 +7,7 @@ by protocol fee streams, in permissionless 24-hour rounds.
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
 **Size:** ~2,010 lines of non-comment source across 7 contracts + 1 base + 11 interfaces.
-**Tests:** 381 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 29 tests
+**Tests:** 362 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 31 tests
 against a live Base mainnet fork.
 
 Fork tests run against the **latest** Base block, not a pinned one, so live prices and pool
@@ -18,8 +18,13 @@ particular spread; if you prefer bit-for-bit reproducibility, pin a block in the
 ```
 forge test                                   # everything (needs BASE_RPC_URL)
 forge test --no-match-contract "Fork"        # no RPC needed
-forge test --match-contract Invariant        # ~75s
+forge test --match-contract Invariant        # ~105s
+forge test --match-path "test/fork/*" -j 1   # serialise: a free-tier RPC will 429 otherwise
 ```
+
+Fork tests are RPC-hungry. Running the whole suite in parallel against a rate-limited
+endpoint produces spurious `429` failures that look like EVM errors; `-j 1` on the fork
+paths, or a paid endpoint, avoids it.
 
 ---
 
