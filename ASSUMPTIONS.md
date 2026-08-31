@@ -17,7 +17,10 @@ were tested against deployed contracts instead. Summary:
   there. Chipworks would be the first Clutch market on Base.
 - **But five real SoftStakingVaults exist on Robinhood Chain (4663)** and were read directly.
 - **A-3 CONFIRMED** (one vault per collection) and **A-11 CONFIRMED**.
-- **A-2 RESOLVED: Anvil V3 is real.** `AMMFactoryV3` + `SoftStakingVaultV3` are deployed on
+- **A-2 RESOLVED, AND THE SPEC WAS RIGHT.** Anvil V3 is real, and V2 really is custodial:
+  the V2 generation ships `NFTStakingVault` (deposit-based) while non-custodial soft staking
+  appears only in V3. The docs misled me; spec section 2 had it correct all along.
+- **A-2 detail:** `AMMFactoryV3` + `SoftStakingVaultV3` are deployed on
   Robinhood Chain. See `CLUTCH_LICENSES.md` §4a.
 - **LICENCE BLOCKER: the V3 code is BUSL-1.1**, not open source. Forking it for production
   needs a licence from Clutch unless their Additional Use Grant covers us. The older ApeChain

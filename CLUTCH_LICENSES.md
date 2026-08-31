@@ -46,26 +46,73 @@ src/interfaces/IStakingVault.sol  … and the v2 governor/types files
 The other 38 files in that bundle are MIT — OpenZeppelin and similar third-party
 dependencies, not Clutch's own work.
 
-### ApeChain (33139) — the v2-era deployment
+### ApeChain (33139) — the v2 deployment, COMPLETE
 
-| Contract | Address | Name | SPDX | Forkable? |
+Every Clutch contract deployed on ApeChain, all seven roles:
+
+| Role | Address | Name | SPDX | Forking |
 |---|---|---|---|---|
-| Factory | `0x87B62309B6…` | `AMMFactoryV2` | **MIT** | yes |
-| AMM vault | `0x56203C9a36…` | `NFTAMMVault` | **MIT** | yes |
-| Loan vault | `0x372F30E431…` | `LoanVault` | **MIT** | yes |
-| Escrow | `0x8F683Ba486…` | `TokenEscrowReserve` | **MIT** | yes |
-| Market token | `0xf95217c08D…` | `CollectionToken` | **MIT** | yes |
-| Collection (NFT) | `0x881f79E5d3…` | `MockNFT` | MIT | yes |
+| Factory | `0x87B62309B6…` | `AMMFactoryV2` | **MIT** | **permitted** |
+| Router | `0x1577A7E374…` | `BatchRouterV2` | **MIT** | **permitted** |
+| AMM vault | `0x56203C9a36…` | `NFTAMMVault` | **MIT** | **permitted** |
+| Loan vault | `0x372F30E431…` | `LoanVault` | **MIT** | **permitted** |
+| Escrow | `0x8F683Ba486…` | `TokenEscrowReserve` | **MIT** | **permitted** |
+| Market token | `0xf95217c08D…` | `CollectionToken` | **MIT** | **permitted** |
+| Collection (NFT) | `0x881f79E5d3…` | `MockNFT` | MIT | permitted |
+| **Soft-staking vault** | — | — | — | **DOES NOT EXIST ON APECHAIN** |
 
-All bundled dependencies on ApeChain are MIT too.
+Every dependency bundled on ApeChain is MIT as well — no copyleft anywhere in that tree.
 
-## 2. Clutch relicensed between deployments
+The full ApeChain factory bundle is **19 Clutch-authored files, all MIT**:
+
+```
+src/v2/AMMFactoryV2.sol            src/v2/MarketGovernorV2.sol
+src/v2/GovernorV2Deployer.sol      src/v2/MarketTypesV2.sol
+src/vaults/NFTAMMVault.sol         src/vaults/LoanVault.sol
+src/vaults/ERC1155AMMVault.sol     src/vaults/NFTStakingVault.sol
+src/market/CollectionToken.sol     src/market/TokenEscrowReserve.sol
+src/governance/MarketGovernor.sol  src/factory/ContractDeployers.sol
+src/factory/MarketTypes.sol        src/libs/Errors.sol  src/libs/Events.sol
+src/interfaces/{IAMMVault,ILoanVault,IStakingVault,ITokenEscrowReserve}.sol
+```
+
+**There is no soft-staking vault in the MIT generation.** The staking contract it does ship
+is `src/vaults/NFTStakingVault.sol` — custodial staking, where the NFT is deposited. The
+non-custodial `SoftStakingVault` and `SoftStakingVaultV3` appear only in the BUSL bundle.
+
+A scan of all 92 contracts across ApeChain's 13 markets confirms this on chain: **none
+exposes `activate(uint256,uint8)` or `kick(uint256)`.** (This scan was re-run correctly after
+the `
+` bug described at the end of `CLUTCH_RECON.md`, and validated with a control that
+greps for a function proven to exist by a live call.)
+
+## 2. Clutch relicensed the entire tree between deployments
 
 This is the part worth understanding rather than skimming.
 
-**The same file paths carry different licences on the two chains.** `src/vaults/NFTAMMVault.sol`,
-`src/market/CollectionToken.sol` and `src/market/TokenEscrowReserve.sol` are **MIT** in the
-ApeChain deployment and **BUSL-1.1** in the Robinhood V3 bundle.
+**All 18 files that appear in both bundles changed licence — 18 of 18, without exception:**
+
+| file | ApeChain | Robinhood |
+|---|---|---|
+| `src/vaults/NFTAMMVault.sol` | MIT | BUSL-1.1 |
+| `src/vaults/LoanVault.sol` | MIT | BUSL-1.1 |
+| `src/vaults/NFTStakingVault.sol` | MIT | BUSL-1.1 |
+| `src/vaults/ERC1155AMMVault.sol` | MIT | BUSL-1.1 |
+| `src/market/CollectionToken.sol` | MIT | BUSL-1.1 |
+| `src/market/TokenEscrowReserve.sol` | MIT | BUSL-1.1 |
+| `src/governance/MarketGovernor.sol` | MIT | BUSL-1.1 |
+| `src/factory/{ContractDeployers,MarketTypes}.sol` | MIT | BUSL-1.1 |
+| `src/libs/{Errors,Events}.sol` | MIT | BUSL-1.1 |
+| `src/interfaces/*.sol` (4 files) | MIT | BUSL-1.1 |
+| `src/v2/{GovernorV2Deployer,MarketGovernorV2,MarketTypesV2}.sol` | MIT | BUSL-1.1 |
+
+Note the last row: **even the V2-era files are BUSL-1.1 in the Robinhood bundle.** This was
+not a "new code is BUSL" split; Clutch relicensed everything going forward.
+
+Unique to each bundle:
+- **Robinhood only:** `src/v3/{AMMFactoryV3, ContractDeployersV3, LoanVaultV3, NFTAMMVaultV3,
+  SoftStakingVaultV3}.sol` and `src/vaults/SoftStakingVault.sol` — all BUSL-1.1.
+- **ApeChain only:** `src/v2/AMMFactoryV2.sol` — MIT.
 
 Clutch moved from a permissive licence to a source-available one somewhere between the two
 releases. Two practical consequences:
@@ -75,6 +122,28 @@ releases. Two practical consequences:
 - **But V3 — the generation with the soft staking we actually want — is BUSL.** The older
   MIT code does not contain `SoftStakingVaultV3`, so "just use the MIT version" does not get
   us the thing we were interested in.
+
+## 2b. Are the two chains the same generation? No.
+
+| | ApeChain (33139) | Robinhood (4663) |
+|---|---|---|
+| Factory | `AMMFactoryV2` | `AMMFactoryV3` |
+| AMM vault | `NFTAMMVault` | `NFTAMMVaultV3` |
+| Loan vault | `LoanVault` | `LoanVaultV3` |
+| Staking | `NFTStakingVault` (**custodial**) | `SoftStakingVaultV3` (**non-custodial**) |
+| Licence | MIT | BUSL-1.1 |
+| Markets live | 13 | 5 |
+
+**They are different generations, and the difference is exactly the feature Chipworks needs.**
+The vaults I read during the recon were the Robinhood V3 ones; nothing equivalent exists on
+ApeChain at any licence.
+
+**This also vindicates the spec.** Spec §2 says: *"Anvil V3 (not V2: V2 is custodial
+staking)."* `ASSUMPTIONS.md` A-2 recorded that as contradicted by the docs, which describe v2
+soft staking as *"NFTs never leave your wallet"*. The deployed source settles it in the
+spec's favour: the V2 generation ships `NFTStakingVault` (custodial deposit), and
+non-custodial soft staking arrives only with V3. **The spec was right; the documentation was
+misleading; my A-2 note was wrong to side with the docs.**
 
 ## 3. What each licence permits
 
