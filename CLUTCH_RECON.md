@@ -65,7 +65,7 @@ RPC: `https://rpc.mainnet.chain.robinhood.com` (chain 4663), public and unauthen
 | A-4 | `isActive(uint256)` | **REFUTED** | Reverts. Does not exist. |
 | A-5 | `tierOf(uint256)` | **REFUTED** | Reverts. Does not exist. |
 | A-6 | `ownerOfRecord(uint256)` | **REFUTED as a name, CONFIRMED as a concept** | Reverts, but the vault *does* store an owner of record — see below. |
-| A-8 | Voiding is lazy, needs `kick()` | **CONFIRMED** | Two independent proofs, below. |
+| A-8 | Voiding is lazy, needs `kick()` | **CONFIRMED — observed live** | 5 of 14 sampled activations are on already-sold NFTs. See below. |
 | A-9 | `claim()` pays the owner of record | **CONFIRMED, and worse than assumed** | It also *rejects* anyone else as caller. See §4. |
 | A-11 | `pendingRewards` returns `(address[], uint256[])` | **CONFIRMED** | Return data decodes as two dynamic arrays. |
 
@@ -90,22 +90,37 @@ This is **better** than what we assumed: one call instead of three, and it confi
 vault records an owner of record separately from the live NFT owner — the fact A-6 was
 really about. `activationOf(uint256)` also exists and returns the same shape.
 
-### A-8: voiding really is lazy — two proofs
+### A-8: voiding really is lazy — and it is happening RIGHT NOW on Robinhood
+
+Three independent proofs, the third being the important one.
 
 1. **Logical.** The vault and the collection are separate contracts, and the collection's
-   bytecode contains **no reference to the vault address**. There is no transfer hook. The
-   vault therefore *cannot* learn about a transfer; only an explicit `kick()` can update it.
-2. **Empirical.** `kick(uint256)` is present in every vault's bytecode, which would be
-   pointless if voiding were automatic.
+   bytecode contains **no reference to the vault address**. There is no transfer hook, so
+   the vault *cannot* learn about a transfer. Only an explicit `kick()` can update it.
+2. **Structural.** `kick(uint256)` exists in every vault, which would be pointless if
+   voiding were automatic.
+3. **OBSERVED IN PRODUCTION.** A scan of 400 token ids on vault `0xf597…03d7` found 14 live
+   activations. **Five of them are on NFTs that have already been sold** — the vault still
+   records the seller as owner of record, and the activation is still live:
 
-**Our mitigation was correct and is now justified by evidence, not caution.** The adapter
-independently compares `IERC721.ownerOf` against the vault's recorded owner and scores a
-mismatched Noun as inactive. Without it, a sold Noun would keep earning for the seller until
-a stranger volunteered to call `kick`.
+| token | owner of record (seller) | live NFT owner (buyer) | tier |
+|---|---|---|---|
+| 224 | `0xdb3c4a52…4e1ce` | `0xbEcC527aA1D0…` | 1 |
+| 226 | `0xdb3c4a52…4e1ce` | `0x9e54d18f4674…` | 1 |
+| 229 | `0xdb3c4a52…4e1ce` | `0x0cef7feff372…` | 1 |
+| 230 | `0xdb3c4a52…4e1ce` | `0xbEcC527aA1D0…` | 1 |
+| 234 | `0xdb3c4a52…4e1ce` | `0xbEcC527aA1D0…` | 1 |
 
-A scan of live activations found matched owners in every case sampled — unsurprising, since
-these are current holders who have not sold. That is consistent with lazy voiding; it does
-not contradict it.
+One seller, activations still live, NFTs now in three different buyers' hands. **9 of 14
+matched, 5 did not** — this is not an edge case, it is over a third of the sample.
+
+Re-verified on a fresh call after the first scan: token 224 reads
+`(0xdb3c4a52…4e1ce, tier 1, 1786518174)` while `ownerOf(224)` is `0xbEcC527aA1D0…`.
+
+**Our mitigation is not caution, it is necessary.** The adapter independently compares
+`IERC721.ownerOf` against the vault's recorded owner and scores a mismatched Noun as
+inactive. Without it, Chipworks would right now be paying five sellers for Nouns they no
+longer own — with the real holders getting nothing.
 
 ## 4. The finding that breaks ClaimRouter
 

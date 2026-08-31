@@ -16,8 +16,11 @@ were tested against deployed contracts instead. Summary:
 - **No Clutch deployment exists on Base.** All four known factory/router addresses are empty
   there. Chipworks would be the first Clutch market on Base.
 - **But five real SoftStakingVaults exist on Robinhood Chain (4663)** and were read directly.
-- **A-3 CONFIRMED** (one vault per collection), **A-8 CONFIRMED** (voiding is lazy; the
-  collection has no reference to the vault, so it *cannot* auto-void), **A-11 CONFIRMED**.
+- **A-3 CONFIRMED** (one vault per collection) and **A-11 CONFIRMED**.
+- **A-8 CONFIRMED, and observed live.** A scan of one Robinhood vault found 14 activations,
+  of which **5 are on NFTs that have already been sold** — the seller is still the owner of
+  record and the activation is still earning. Without our independent owner check, Chipworks
+  would be paying those five sellers today and the actual holders nothing.
 - **A-4, A-5, A-6 REFUTED as names.** All three are replaced by one real function:
   `activations(uint256) returns (address ownerOfRecord, uint256 tier, uint256 activatedAt)`.
   The concept behind A-6 is confirmed: the vault does record an owner separately from the
