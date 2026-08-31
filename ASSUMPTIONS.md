@@ -17,7 +17,14 @@ were tested against deployed contracts instead. Summary:
   there. Chipworks would be the first Clutch market on Base.
 - **But five real SoftStakingVaults exist on Robinhood Chain (4663)** and were read directly.
 - **A-3 CONFIRMED** (one vault per collection) and **A-11 CONFIRMED**.
-- **A-8 CONFIRMED, and observed live.** A scan of one Robinhood vault found 14 activations,
+- **A-2 RESOLVED: Anvil V3 is real.** `AMMFactoryV3` + `SoftStakingVaultV3` are deployed on
+  Robinhood Chain. See `CLUTCH_LICENSES.md` §4a.
+- **LICENCE BLOCKER: the V3 code is BUSL-1.1**, not open source. Forking it for production
+  needs a licence from Clutch unless their Additional Use Grant covers us. The older ApeChain
+  v2 code is MIT. See `CLUTCH_LICENSES.md`.
+- **A-8 IS NOW IN DOUBT** — V3's natspec says voiding is atomic on transfer, which
+  contradicts the finding below. Needs re-verification before anything depends on it.
+- ~~**A-8 CONFIRMED, and observed live.**~~ A scan of one Robinhood vault found 14 activations,
   of which **5 are on NFTs that have already been sold** — the seller is still the owner of
   record and the activation is still earning. Without our independent owner check, Chipworks
   would be paying those five sellers today and the actual holders nothing.

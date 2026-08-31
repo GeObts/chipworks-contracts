@@ -6,6 +6,21 @@ contracts** rather than documentation prose.
 
 ---
 
+> **CORRECTIONS, 2026-08-30 — read before relying on this file.**
+> A follow-up licence audit (`CLUTCH_LICENSES.md`) surfaced verified SOURCE, which was not
+> available when this was written from bytecode alone. Two conclusions here are affected:
+>
+> 1. **A-2 is RESOLVED, not unresolved.** Anvil V3 exists: the Robinhood factory is
+>    `AMMFactoryV3` and the vaults are `SoftStakingVaultV3`. The claim below that ApeChain
+>    "predates soft staking" is also wrong — ApeChain runs `AMMFactoryV2`.
+> 2. **The A-8 conclusion is IN DOUBT.** `SoftStakingVaultV3`'s own natspec says activation
+>    "is void the moment the NFT changes owner" and that V3 specifically fixed the lazy
+>    evaluation of gen-6. The five stale records observed below are real, but a stale record
+>    is not necessarily an effective activation. **Do not rely on the A-8 section until it
+>    has been re-verified against V3's logic.**
+>
+> Also note: the V3 code is **BUSL-1.1**, not open source. See `CLUTCH_LICENSES.md`.
+
 ## Headline
 
 **1. There is no Clutch deployment on Base. We would be first.**
