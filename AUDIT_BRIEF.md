@@ -263,6 +263,28 @@ Also unresolved: **C-10**, the one place failure isolation does not hold — if 
 policy-blocked ChipRewards, a round in `Buying` could not settle or finalize. Every stock
 path degrades gracefully; the quote token has no fallback.
 
+## 6b. Deploy config now lists THREE collections
+
+Lil Based Nouns (`0xe3c5Ef27B80481518a2363406e354a9361415556`, 4,420 supply) joins Based and
+Dark at a 0.5x collection base. **No contract changed.** Everything collection-shaped is a
+mapping keyed by address, so a collection is two multisig calls — `setCollectionBaseBps` on
+`ChipRounds` and `setVault` on `ClutchVaultAdapter`.
+
+For an auditor this is a config surface, not new code, but two properties are worth
+confirming and both have tests in `test/ThreeCollections.t.sol`:
+
+- **A collection with no base earns zero**, rather than defaulting to 1.0x. Forgetting the
+  call fails closed.
+- **Collections do not collide.** Weights, splits and the `counted` guard are all keyed by
+  `(collection, tokenId)`, so the same token id in three collections is three Nouns.
+
+Lil is also the first base below 1.0, so the fractional weight arithmetic is exercised
+directly (tiers, hoodie boost, and payout ratios at 0.5x).
+
+Verified on a Base fork in `test/fork/LilNouns.t.sol`: real ERC-721, 4,420 supply, EIP-1967
+proxy, **not Enumerable**. Not-Enumerable is fine for the contracts, which never enumerate,
+but the site and keeper cannot enumerate holders on chain either and must index events.
+
 ## 7. The Clutch seam — read this before scoping
 
 Chipworks reads NFT activation state from a **Clutch Anvil soft-staking vault that does not
@@ -280,6 +302,12 @@ Consequences for an audit:
 - Two assumptions are already neutralised whichever way they resolve: A-8 (the adapter
   re-checks the live NFT owner) and A-9 (the router sweeps to the owner regardless of who
   Clutch pays).
+
+**Update 2026-08-30:** on-chain recon settled most of this — see `CLUTCH_RECON.md`. There is
+still no Clutch market on Base, but five real vaults on Robinhood Chain were read directly.
+A-3, A-8 and A-11 are confirmed; A-4, A-5 and A-6 are refuted as function names but their
+substance survives in a single `activations()` call; A-9 is confirmed in a way that breaks
+ClaimRouter's Clutch leg. All of it still lands inside `ClutchVaultAdapter`.
 
 **Suggested scoping:** audit the seven contracts as written, and treat the adapter as an
 interface boundary with a stated contract. When Clutch answers, the adapter gets a short

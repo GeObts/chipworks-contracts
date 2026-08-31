@@ -4,11 +4,32 @@ Every guess this codebase makes about a contract **we do not control**. Verify e
 before mainnet. Anything marked **BLOCKER** can cause wrong payouts or lost funds if the
 guess is wrong.
 
-Last updated: 2026-08-28 · against spec v0.2. Part 2 verified on a Base mainnet fork.
+Last updated: 2026-08-30 (Clutch recon: see CLUTCH_RECON.md) · against spec v0.2. Part 2 verified on a Base mainnet fork.
 
 ---
 
-## Part 0 — What I actually found out about Clutch
+## Part 0 — SETTLED ON CHAIN, 2026-08-30
+
+**Full report: `CLUTCH_RECON.md`.** Since the Discord is gated, the seven Clutch assumptions
+were tested against deployed contracts instead. Summary:
+
+- **No Clutch deployment exists on Base.** All four known factory/router addresses are empty
+  there. Chipworks would be the first Clutch market on Base.
+- **But five real SoftStakingVaults exist on Robinhood Chain (4663)** and were read directly.
+- **A-3 CONFIRMED** (one vault per collection), **A-8 CONFIRMED** (voiding is lazy; the
+  collection has no reference to the vault, so it *cannot* auto-void), **A-11 CONFIRMED**.
+- **A-4, A-5, A-6 REFUTED as names.** All three are replaced by one real function:
+  `activations(uint256) returns (address ownerOfRecord, uint256 tier, uint256 activatedAt)`.
+  The concept behind A-6 is confirmed: the vault does record an owner separately from the
+  live NFT owner.
+- **A-9 CONFIRMED and then some.** `claim()` reverts `NotOwner()` for any caller who is not
+  the owner of record — which means ClaimRouter's Clutch leg cannot work as designed. See
+  CLUTCH_RECON §4 for the three options.
+
+Caveat that matters: this is **v2 on Robinhood**, and the Base target is nominally "V3", so
+the interface could differ again. Nothing has been changed in the code on the strength of it.
+
+## Part 0b — What the documentation says
 
 I could not fetch a verified SoftStakingVault ABI, for a concrete reason:
 

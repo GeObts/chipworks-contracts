@@ -59,9 +59,11 @@ abstract contract ChipRewardsBase is Test {
     // collections
     MockNoun internal basedNouns;
     MockNoun internal darkNouns;
+    MockNoun internal lilNouns;
     MockNoun internal hoodies;
     MockSoftStakingVault internal basedVault;
     MockSoftStakingVault internal darkVault;
+    MockSoftStakingVault internal lilVault;
 
     uint24 internal constant FEE = 3000;
     uint8 internal constant STOCK_DEC = 8;
@@ -100,9 +102,11 @@ abstract contract ChipRewardsBase is Test {
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");
+        lilNouns = new MockNoun(unicode"⌐◨-◨ Lil Based Nouns!", "LIL");
         hoodies = new MockNoun("OnChain Hoodies", "HOOD");
         basedVault = new MockSoftStakingVault(IERC721(address(basedNouns)));
         darkVault = new MockSoftStakingVault(IERC721(address(darkNouns)));
+        lilVault = new MockSoftStakingVault(IERC721(address(lilNouns)));
 
         _registerStocks();
         _wire();
@@ -140,8 +144,10 @@ abstract contract ChipRewardsBase is Test {
         claims.setPolTreasury(polTreasury);
         adapter.setVault(address(basedNouns), address(basedVault));
         adapter.setVault(address(darkNouns), address(darkVault));
+        adapter.setVault(address(lilNouns), address(lilVault));
         rounds.setCollectionBaseBps(address(basedNouns), 10_000); // 1.0x
         rounds.setCollectionBaseBps(address(darkNouns), 20_000); // 2.0x
+        rounds.setCollectionBaseBps(address(lilNouns), 5_000); // 0.5x
         rounds.setRoundParams(24 hours, 2 hours, MIN_POT, MAX_BUDGET);
         rounds.setRouters(address(router), address(router));
         rounds.setPolTreasury(polTreasury);

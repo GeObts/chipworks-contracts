@@ -13,8 +13,10 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 |---|---|---|
 | `MULTISIG` | _TBD_ | Owner of every governed contract. Existing Chipworks/Goya Safe. |
 | `OPS_WALLET` | _TBD_ | Goya's Bankr wallet. Receives the 20% ops share. |
+| `CLUTCH_VAULT_LIL` | _TBD_ | Not deployed yet, not ours. See ASSUMPTIONS A-1. |
 | `CLUTCH_VAULT_BASED` | _TBD_ | Not deployed yet, not ours. See ASSUMPTIONS A-1. |
 | `CLUTCH_VAULT_DARK` | _TBD_ | Same. |
+| `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
 
@@ -188,8 +190,15 @@ Needs: `MULTISIG`. Deploy before ChipRewards.
 | `tierBps_` | `[10000, 12500, 16000, 20000, 33300]` (1.00 / 1.25 / 1.60 / 2.00 / 3.33) |
 
 Then, once the Clutch market exists:
+- `setVault(LIL_NOUNS, CLUTCH_VAULT_LIL)`
 - `setVault(BASED_NOUNS, CLUTCH_VAULT_BASED)`
 - `setVault(DARK_NOUNS, CLUTCH_VAULT_DARK)`
+
+**Three collections, no code change.** Everything collection-shaped is a mapping keyed by
+address, so a collection is two multisig calls — `setCollectionBaseBps` on the engine and
+`setVault` on the adapter. Proven by `test/ThreeCollections.t.sol`, which also checks that a
+FOURTH needs nothing new. A collection with no base configured earns zero rather than
+defaulting to 1.0x, so forgetting the call fails closed.
 
 **This is the contract to redeploy if Clutch's real interface differs from our guess.**
 Nothing else changes; ChipRewards just gets pointed at the new adapter. Every Clutch
@@ -242,6 +251,7 @@ Then configure, all from the multisig:
 | Call | Recommended value |
 |---|---|
 | `setRoundParams(duration, window, minPot, maxBudget)` | `86400, 7200, 250e6, 10000e6` |
+| `setCollectionBaseBps(LIL_NOUNS, 5000)` | Lil = 0.5x |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |
 | `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02; Slipstream router |
