@@ -19,6 +19,11 @@ import {IAggregatorV3} from "../../src/interfaces/IAggregatorV3.sol";
 ///      it, which is exactly that hole. Now the description is the assertion: each feed must
 ///      identify itself as "Coinbase <TICKER>" for the ticker we filed it under. That is the
 ///      only check here the mapping can actually fail.
+///
+///      It covers all THIRTEEN feeds. It covered nine until `B20_DOCS.md` was filed in this
+///      repo and showed the other four had existed all along — a table was trusted for being
+///      complete rather than checked for it, which is the same class of mistake as trusting
+///      a row for being correct.
 contract ChainlinkFeedsForkTest is Test {
     struct Feed {
         string ticker;
@@ -30,10 +35,11 @@ contract ChainlinkFeedsForkTest is Test {
         address token;
     }
 
-    Feed[9] internal feeds;
+    Feed[13] internal feeds;
 
     /// @notice All thirteen B20 stocks Base publishes (ASSUMPTIONS A-18). Nine are the
-    ///         launch set; the last four are registered disabled and have no feed yet.
+    ///         launch set; the last four are registered disabled for want of a POOL, not a
+    ///         feed — all thirteen feeds exist.
     Stock[13] internal stocks;
 
     function setUp() public {
@@ -48,6 +54,12 @@ contract ChainlinkFeedsForkTest is Test {
         feeds[6] = Feed("MSFT", 0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c);
         feeds[7] = Feed("COIN", 0x408e44f504A7371a345F03a73dDC96A4b48e8aa7);
         feeds[8] = Feed("MSTR", 0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a);
+        // The four beyond the launch set. Recorded as "none published" until B20_DOCS.md was
+        // filed in this repo and showed all thirteen; all four verify live.
+        feeds[9] = Feed("CRCL", 0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33);
+        feeds[10] = Feed("INTC", 0xAB657C39bac0D5886250D70849e2E3E008F2EECB);
+        feeds[11] = Feed("SNDK", 0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA);
+        feeds[12] = Feed("SPCX", 0x6A634B235903C4ad6376892180d6fF8612e3Fa68);
 
         stocks[0] = Stock("NVDAc", 0xb20000000000000000000078ee7ce2fE4908108C);
         stocks[1] = Stock("GOOGLc", 0xb2000000000000000000002D0BA3164cc74f58B7);

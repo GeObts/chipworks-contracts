@@ -13,6 +13,11 @@ optimizer on, 200 runs · no `via_ir`.
 **Tests:** 557 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
 against a live Base mainnet fork.
 
+`B20_DOCS.md` in this repo is Base's own tokenized-stock documentation, filed verbatim. It is
+the source for everything in ASSUMPTIONS A-13, A-15 and A-18, and it is worth reading before
+§4.9 — it settles what the Chainlink feeds actually report, which is the fact the whole
+pricing path rests on.
+
 Fork tests run against the **latest** Base block, not a pinned one, so live prices and pool
 depth move between runs. Assertions are written to be property-based rather than to expect a
 particular spread; if you prefer bit-for-bit reproducibility, pin a block in the
@@ -79,8 +84,8 @@ holds it at rest except the NounLoans pool, which is seeded by the multisig.
 | Dependency | Address (Base) | Trust assumption | Verified? |
 |---|---|---|---|
 | USDC | `0x8335…2913` | Standard, could policy-block us | on fork |
-| B20 stocks (9) | `0xb2…` prefix | **Native precompiles, not contracts** | on fork |
-| Chainlink B20 equity feeds (9) | see ASSUMPTIONS A-13 | 8 dp, V3 aggregator, **no off-hours heartbeat** | on fork |
+| B20 stocks (13) | `0xb2…` prefix | **Native precompiles, not contracts** | on fork + RPC |
+| Chainlink B20 equity feeds (13) | see ASSUMPTIONS A-13 | 8 dp, V3 aggregator, **total-return**, 24h heartbeat in hours, **none off-hours** | on fork |
 | Chainlink ETH/USD | `0x7104…Bb70` | Real heartbeat | on fork |
 | Chainlink AERO/USD | `0x4EC5…cfF0` | Real heartbeat | on fork |
 | Uniswap v3 factory / SwapRouter02 | `0x3312…FDfD` / `0x2626…e481` | Standard | on fork |
@@ -449,31 +454,56 @@ the `test/CodeSize.t.sol` guard alongside the money-path contracts.
 `test/b20/` is the hardening pass for the one dependency nothing local can fully cover. Read
 it for what it does NOT prove as much as for what it does.
 
+**`B20_DOCS.md` is now in this repo** — Base's own tokenized-stock documentation, filed
+verbatim next to the reconciliation it sources. Read it before this section; it settles three
+things that used to be inference.
+
 **The multiplier (`MultiplierIndifference.t.sol`).** A B20 token is not permanently one
-share: Coinbase values it as the underlying times a multiplier that absorbs dividends and
-splits (A-13). That is the stated reason every USD figure here comes from the feed rather
-than a share count, and the first half of that file tests exactly it — move the feed, and
-what a holder is owed does not change, because they are owed tokens.
+share. The load-bearing question is what the Chainlink feed reports, and the docs answer it:
 
-The second half hedges a mechanism we **cannot rule out**: that a corporate action rebases
-balances instead of re-marking the feed. B20 tokens are precompiles with no readable
-implementation, so "balances never rebase" is an inference from a sentence about valuation.
-Upward rebases and mid-round rebases are absorbed cleanly. **A downward rebase is not.**
+> `Token Price = Underlying Equity Market Price × Multiplier` … the feed publishes underlying
+> price × multiplier.
 
-> `test_hedge_aDOWNWARDrebaseCanUnderfundTheLedger` documents a limit, not a guarantee. If
-> balances shrink under the ledger, the last claimant in a round cannot be paid. The failure
-> is contained — the claim reverts rather than paying out someone else's tokens, the credit
-> stays on the books, other stocks are untouched — but a holder is genuinely unable to be
-> made whole. **This is the only place in the suite where the answer is "it degrades safely"
-> rather than "it cannot happen".** If you can establish what B20 actually does here, that is
-> the single most valuable thing an auditor could tell us.
+**The feed reports the price of one TOKEN, not one share.** So `StockRegistry.priceUsd` uses
+the answer directly, with no multiplier fetch and no adjustment — and that is correct.
+Worth pausing on, because the correct code and the broken code are identical: had the feed
+reported the *share* price, every purchase and every USD figure would have been silently
+wrong by the multiplier the moment any stock split, with nothing to notice it. The first half
+of that test file pins the behaviour that follows — move the feed, and what a holder is owed
+does not change, because they are owed tokens.
+
+A corollary worth knowing: because the feed is total-return there is **no price discontinuity
+at a corporate action**; underlying and multiplier move opposite ways and cancel.
+
+The second half rebases balances underneath the ledger. **The docs say that does not happen**
+— corporate actions are reflected *"without changing their balance of the B20 token"*. Upward
+and mid-round rebases are absorbed cleanly. **A downward one is not**, and that test is kept
+deliberately:
+
+> `test_hedge_aDOWNWARDrebaseCanUnderfundTheLedger` marks the boundary between what this
+> suite guarantees and what it merely expects. If the ledger's balance ever drops below
+> `totalOwed` — by a rebase or by anything else — the last claimant in that round cannot be
+> paid. The failure is contained: the claim reverts rather than paying out someone else's
+> tokens, the credit stays on the books, `hasClaimed` is not set, other stocks are untouched.
+> But a holder is genuinely unable to be made whole. **This is the only place in the suite
+> where the answer is "it degrades safely" rather than "it cannot happen."** The premise is
+> now documented away rather than open, so the item is an unproven negative rather than a
+> live risk — acknowledged and left standing at OPEN_ITEMS item 13.
+
+**The feed freezes during corporate actions**, and the docs are blunt about the consequence:
+*"never settle or liquidate against a frozen feed."* That is exactly what
+`ChipRounds.maxFeedAge` does — skip and carry. It was built from first principles before this
+document was to hand, and it lands where the issuer says it should.
 
 **Identity (`IdentifyByAddress.t.sol`).** A build-failing scan of `src/` for `symbol()` and
-`name()`. Nothing makes a B20 symbol unique — anyone can deploy an ERC-20 reporting "NVDAc" —
-and an incidental `symbol()` on a precompile is a gas bomb as well as a spoofing surface. The
-rule is enforced as a test rather than a review note because it is a rule about what must be
-*absent*, which is what review misses. Confirm the scan cannot be trivially evaded, and that
-nothing resolves a stock by anything but its address.
+`name()`. Base's own guidance, now in the repo: *"Tokens should be identified by address
+rather than ticker or symbol. Metadata is mutable onchain and should be indexed
+accordingly."* Mutable is the word that matters — `updateName` and `updateSymbol` exist, so a
+symbol is not even stable, let alone unique. Add that an incidental `symbol()` on a
+precompile is a gas bomb as well as a spoofing surface. The rule is enforced as a test rather
+than a review note because it is about what must be *absent*, which is what review misses.
+Confirm the scan cannot be trivially evaded, and that nothing resolves a stock by anything
+but its address.
 
 **Frozen feeds (`FrozenFeed.t.sol`).** See OPEN_ITEMS item 6 for the full reasoning. A dead
 feed skips and carries; `MIN_FEED_AGE` is a 72-hour floor that exists purely to stop the
@@ -485,6 +515,13 @@ rather than logged, so a transposed row fails the build — previously it could 
 every address in the table is a real live feed and only the *mapping* was wrong. All thirteen
 tokens are pinned to the `0xef` precompile shape, and calling one from a fork is asserted to
 fail, so nobody "fixes" the registry into probing `decimals()` in simulation.
+
+**And the tables were wrong in the other direction too.** A-13 listed nine feeds and A-18
+recorded the remaining four tickers as having "none published" — inferred from A-13's own
+incompleteness rather than checked. `B20_DOCS.md` lists thirteen, and all four verify live.
+Corrected, and the fork test now asserts all thirteen. The lesson generalises: the
+description assertion catches a row that is *wrong*, nothing was catching a table that was
+*short*.
 
 ## 5. Deliberate design decisions an auditor may flag
 

@@ -24,11 +24,19 @@ import {MultiplierToken} from "../mocks/MultiplierToken.sol";
 ///      under a live round and asserting that what holders are owed is unaffected, because
 ///      they are owed tokens rather than dollars.
 ///
-///      **Half two — the mechanism we cannot rule out.** B20 tokens are node-native
-///      precompiles with no readable implementation (A-15), so "balances never rebase" is an
-///      inference from a sentence about valuation, not something anyone has verified. These
-///      tests rebase balances underneath the ledger and record exactly what happens. One of
-///      them documents a genuine limit rather than a guarantee — see
+///      Half one is now sourced rather than inferred. `B20_DOCS.md`, filed in this repo,
+///      gives the formula outright — `Token Price = Underlying Equity Market Price x
+///      Multiplier`, and *"the feed publishes underlying price x multiplier"*. **The feed
+///      reports the price of one TOKEN, not one share.** That is why `priceUsd` uses the
+///      answer directly with no multiplier maths, and why a split produces no price
+///      discontinuity: underlying and multiplier move in opposite directions and cancel.
+///
+///      **Half two — a rebase, which the docs say does not happen.** Base states corporate
+///      actions are reflected *"without changing their balance of the B20 token"*. These
+///      tests rebase balances underneath the ledger anyway and record exactly what happens,
+///      because the failure shape is not unique to a rebase — anything that drops the
+///      ledger's balance below `totalOwed` produces it. One of them marks the boundary
+///      between what this suite guarantees and what it merely expects: see
 ///      `test_hedge_aDOWNWARDrebaseCanUnderfundTheLedger`.
 contract MultiplierIndifferenceTest is ChipRewardsBase {
     MultiplierToken internal msftc;
@@ -217,11 +225,12 @@ contract MultiplierIndifferenceTest is ChipRewardsBase {
     ///         books, and every other stock is untouched — but a holder is genuinely unable
     ///         to be made whole.
     ///
-    /// @dev We do NOT believe B20 does this: A-13 puts the multiplier in the valuation, and
-    ///      a downward multiplier would mean a reverse split handled by shrinking balances
-    ///      rather than re-marking. Recorded because "we would notice and it degrades safely"
-    ///      is a much weaker promise than the rest of this suite makes, and an auditor should
-    ///      see the difference stated rather than inferred.
+    /// @dev B20 documents that it does NOT do this — corporate actions are reflected
+    ///      "without changing their balance of the B20 token" (`B20_DOCS.md`). Kept because
+    ///      the shape is reachable by anything that drops the ledger below `totalOwed`, not
+    ///      only by a rebase, and because "we would notice and it degrades safely" is a much
+    ///      weaker promise than the rest of this suite makes. An auditor should see that
+    ///      difference stated rather than have to infer it. OPEN_ITEMS item 13.
     function test_hedge_aDOWNWARDrebaseCanUnderfundTheLedger() public {
         _fundPot(2_000e6);
         _chip(basedNouns, basedVault, 1, alice, 0);

@@ -14,16 +14,21 @@ pragma solidity ^0.8.24;
 ///      one B20 token stays one B20 token, it is just not permanently one share.
 ///
 ///      `test/b20/MultiplierIndifference.t.sol` tests that documented mechanism directly,
-///      by moving the feed. This contract exists for the OTHER half: the mechanism we have
-///      NOT been able to rule out, where a corporate action rebases holders' balances
-///      instead. B20 tokens are node-native precompiles (A-15) with no readable
-///      implementation, so "balances never rebase" is an inference from a valuation
-///      sentence, not something anyone has verified.
+///      by moving the feed. This contract exists for the OTHER half: a corporate action that
+///      rebases holders' balances instead.
 ///
-///      So this is a hedge, and it is worth having because a rebase is historically where
-///      accounting built on remembered amounts goes wrong: **a holder's balance changes with
-///      nobody calling transfer.** If the inference is right, these tests are free. If it is
-///      wrong, they are the ones that matter.
+///      **Base's own docs say that does not happen.** `B20_DOCS.md`, filed in this repo,
+///      states that corporate actions are reflected *"without changing their balance of the
+///      B20 token"* — `balanceOf` returns raw units a dividend or split does not move, and
+///      `scaledBalanceOf` is the adjusted view. So this is a hedge against documentation
+///      being wrong, not against an open question.
+///
+///      It is kept anyway, for a reason worth stating: **the failure shape is not unique to
+///      a rebase.** Anything that reduces the ledger's balance below `totalOwed` produces it.
+///      These tests describe that boundary — where the suite stops saying "cannot happen" and
+///      starts saying "degrades safely" — and they are the tripwire if the documentation
+///      turns out to be wrong. B20 tokens are precompiles with no readable implementation
+///      (A-15), so a sentence is all anyone has.
 ///
 ///      Internally it stores SHARES and reports `shares * multiplier / 1e18`, which is how a
 ///      real rebasing token behaves. Transfers move shares. Rounding is left as plain

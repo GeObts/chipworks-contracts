@@ -64,9 +64,12 @@ contract DeployOrderTest is Test {
     /*        STEP 2 — a stock with no feed cannot be enabled              */
     /* ------------------------------------------------------------------ */
 
-    /// @notice The four B20 tickers with no published feed are registered disabled at
-    ///         launch. Registering them must be inert, not a loaded gun.
-    function test_step2_aFeedlessStockCannotBeEnabledByAnyone() public {
+    /// @notice A stock is registered disabled and stays that way until it has BOTH a feed
+    ///         and a verified pool. Registering must be inert, not a loaded gun.
+    /// @dev At launch the four extra tickers (CRCL, INTC, SNDK, SPCX) are registered with
+    ///      their feeds but no market, so `PoolNotSet` is what actually holds them back.
+    ///      Both halves of the gate are checked here because either one alone is enough.
+    function test_step2_aStockCannotBeEnabledWithoutBothAFeedAndAPool() public {
         StockRegistry registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
         MockERC20 crcl = new MockERC20("Circle", "CRCLc", 8);
 
@@ -87,9 +90,17 @@ contract DeployOrderTest is Test {
         assertTrue(registry.getStock(address(crcl)).registered);
         assertEq(registry.getStock(address(crcl)).feed, address(0));
 
-        // Not even the owner can switch it on.
+        // No feed: not even the owner can switch it on.
         vm.prank(multisig);
         vm.expectRevert(abi.encodeWithSelector(StockRegistry.FeedNotSet.selector, address(crcl)));
+        registry.setEnabled(address(crcl), true);
+
+        // Give it a real feed. Still refused, because there is no market to buy in — this is
+        // the state the four extra tickers actually ship in.
+        vm.prank(multisig);
+        registry.setFeed(address(crcl), address(feed));
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(StockRegistry.PoolNotSet.selector, address(crcl)));
         registry.setEnabled(address(crcl), true);
 
         assertEq(registry.enabledTokens().length, 0, "still nothing enabled");

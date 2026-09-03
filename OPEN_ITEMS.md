@@ -321,3 +321,65 @@ the first is a business decision, not a bug.
 **Phase 2 question:** if a public lender side is ever added, the fixed-fee model has to
 become a yield model and the exclusion-based rescue has to become share accounting. Do not
 retrofit that onto this contract.
+
+---
+
+## 13. ACKNOWLEDGED: the claim path degrades safely rather than provably
+
+**Signed off 2026-09-03: stands as designed.** Recorded here so the decision is on the record
+rather than in a chat log.
+
+The property: if a stock token's balance were ever to shrink underneath `ChipClaims` — the
+downward-rebase case in `test/b20/MultiplierIndifference.t.sol` — the last claimant in that
+round cannot be paid. The claim reverts rather than paying out somebody else's tokens, the
+credit stays on the books, `hasClaimed` is not set, and every other stock in the same ledger
+is untouched. But a holder is genuinely unable to be made whole, and no code in this repo can
+conjure the missing tokens back.
+
+**This was accepted as a residual, and then the premise was largely removed.** `B20_DOCS.md`,
+now filed in this repo, says corporate actions are reflected *"without changing their balance
+of the B20 token"* — `balanceOf` returns raw units that a dividend or split does not move,
+and `scaledBalanceOf` is the adjusted view. So a B20 stock should never rebase a holder's
+balance at all, and the scenario that produces this residual should not arise.
+
+**The item stays open anyway, downgraded from "unresolved risk" to "unproven negative",** for
+three reasons:
+
+1. **It is documentation, not verification.** B20 tokens are node-native precompiles with no
+   readable implementation (A-15). We are trusting a sentence, and we have already been
+   burned once this week by trusting a table for being complete.
+2. **The failure mode is not unique to a rebase.** Any path that reduces the ledger's balance
+   below `totalOwed` produces it — a policy block that somehow moved tokens out, an issuer
+   action nobody has thought of, a bug in a future contract given ledger access. The tests
+   describe the shape of that failure, not just its rebase cause.
+3. **Keeping the tests costs nothing.** They pass today, they document the boundary between
+   what is guaranteed and what is merely expected, and they are the tripwire if any of the
+   above turns out to be wrong.
+
+**What would close it:** confirmation from Coinbase or from observing a real corporate action
+on chain that `balanceOf` is untouched. Until then this is the one place in the suite where
+the honest answer is "it degrades safely" rather than "it cannot happen", and the audit brief
+says so in those words at §4.9.
+
+## 14. ACKNOWLEDGED: the `setCustodian` wire is a deploy-checklist item
+
+**Signed off 2026-09-03: accepted as a checklist item, not a code change.**
+
+`ChipActivation.setCustodian(nounLoans, true)` is the only wiring call in the deploy sequence
+that does not fail closed. Forgetting it leaves a system that looks entirely healthy while
+every borrower silently earns nothing from the moment they deposit.
+
+**Not fixed in code, and that is a deliberate choice.** The alternatives were worse:
+NounLoans cannot register itself, because a contract that could add itself to the custodian
+allowlist would defeat the point of the allowlist. ChipActivation cannot require a custodian
+at deploy, because it is deployed first and must work with none. A constructor cross-check
+would just move the same forgettable call earlier.
+
+So it is handled where it belongs — in the runbook. DEPLOY.md carries it as a red can't-miss
+block with the `isCustodian` read that proves it is set and the end-to-end fork check that
+proves it works, and `test_theCustodianWireIsTheOneMistakeThatFailsSilently` asserts the
+silent-failure shape so it stays documented rather than becoming folklore.
+
+**Recovery is total and cheap**, which is what makes this acceptable: one call, retroactive,
+no action needed from any borrower, nothing lost in the meantime beyond the rounds that
+passed unnoticed.

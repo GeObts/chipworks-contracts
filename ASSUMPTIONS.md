@@ -234,12 +234,43 @@ against the live node on 2026-09-03: all nine descriptions match.
 | MSFT | `0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c` |
 | COIN | `0x408e44f504A7371a345F03a73dDC96A4b48e8aa7` |
 | MSTR | `0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a` |
+| CRCL | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` |
+| INTC | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` |
+| SNDK | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` |
+| SPCX | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` |
 
-The feed values each token from the underlying price times a Coinbase multiplier that
-absorbs dividends and corporate actions: cash dividends convert to shares and raise the
-multiplier rather than paying out, and a 10:1 split raises it from 1.0 to 10.0. One B20
-token is therefore NOT permanently one share, which is why every USD figure in Chipworks
-comes from the feed rather than from a share count.
+**CORRECTION, 2026-09-03: there are THIRTEEN feeds, not nine.** An earlier version of this
+file listed only the nine launch tickers and `A-18` went further and recorded the other four
+as having "none published". That was inferred from this table's own incompleteness rather
+than checked. `B20_DOCS.md` — now filed in this repo — lists all thirteen, and all four
+extra feeds verify live on Base: correct descriptions, 8 decimals, sane prices (CRCL
+$102.71, INTC $91.22, SNDK $1,559.99, SPCX $152.17 at the time of checking). All thirteen
+are asserted in `test/fork/ChainlinkFeeds.t.sol`.
+
+**THE FEEDS ARE TOTAL-RETURN, WHICH IS WHY OUR PRICING NEEDS NO MULTIPLIER MATHS.**
+This is the single most load-bearing fact in the file and it is now sourced rather than
+inferred. `B20_DOCS.md`:
+
+> `Token Price = Underlying Equity Market Price × Multiplier`
+> … **Normal (`paused = false`):** the feed publishes underlying price × multiplier.
+
+So the feed reports the price of **one token**, not one share. `StockRegistry.priceUsd` uses
+the answer directly as the token price, and that is correct: there is no multiplier to fetch,
+no registry to read, and no adjustment to get wrong. Had the feed reported the *share* price
+instead, every purchase and every USD figure would have been wrong by the multiplier the
+moment any stock did a split — a silent, unbounded mispricing. Worth stating plainly because
+the correct code and the broken code look identical.
+
+A corollary: because the feed is total-return, a corporate action produces **no price
+discontinuity** — the underlying price and the multiplier move in opposite directions and
+cancel. A 10:1 split drops the underlying ~10x and raises the multiplier ~10x.
+
+**And balances do not rebase.** From the same source: cash dividends are reflected via a
+multiplier update *"rather than distributed as cash to the B20 holder. This allows B20 holder
+balances to automatically reflect corporate actions **without changing their balance of the
+B20 token**."* `balanceOf` returns raw units and is untouched by corporate actions;
+`scaledBalanceOf` is the multiplier-adjusted view. One B20 token is still NOT permanently one
+share — that part stands — but the token count a holder owns does not move under them.
 
 ### A-14 · Equity feeds have NO heartbeat outside market hours — **design input**
 Straight from Chainlink's docs: *"When underlying equity markets are closed (weekends,
@@ -316,16 +347,23 @@ Uniswap v3 pool against USDC today.
 | MSFTc | `0xB200000000000000000000Ab99cFa739E253872B` | 8 ✓ | none yet | A-13 | register **disabled** |
 | COINc | `0xb200000000000000000000c85a31389D71F3ecfb` | 8 ✓ | none yet | A-13 | register **disabled** |
 | MSTRc | `0xb2000000000000000000004884b426556b92883d` | 8 ✓ | none yet | A-13 | register **disabled** |
-| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | 8 ✓ | none | **none published** | register **disabled** |
-| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | 8 ✓ | none | **none published** | register **disabled** |
-| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | 8 ✓ | none | **none published** | register **disabled** |
-| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | 8 ✓ | none | **none published** | register **disabled** |
+| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | 8 ✓ | none yet | A-13 ✓ | register **disabled** |
+| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | 8 ✓ | none yet | A-13 ✓ | register **disabled** |
+| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | 8 ✓ | none yet | A-13 ✓ | register **disabled** |
+| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | 8 ✓ | none yet | A-13 ✓ | register **disabled** |
 
-**The last four have no Chainlink feed in the Coinbase set**, so they cannot be enabled even
-by mistake: `setEnabled(token, true)` requires a feed, a verified pool AND measured depth,
-and reverts `FeedNotSet` without the first. Registering them now costs one multisig call
-each and means adding a market later is `setFeed` + `setVenue` + `setEnabled` rather than a
-fresh `addStock` against an unreviewed address.
+**CORRECTION, 2026-09-03.** This table previously said the last four had "none published"
+for a feed. **Wrong** — all four feeds exist and are live; the addresses are in A-13 and in
+`B20_DOCS.md`. The error came from reading A-13's own nine-row table as complete instead of
+checking the source, which is exactly the failure mode the feed-description assertion in
+`test/fork/ChainlinkFeeds.t.sol` was added to catch one row at a time.
+
+**What actually keeps the last four disabled is the missing POOL, not a missing feed.**
+`setEnabled(token, true)` requires a feed, a verified pool AND measured depth clearing
+`minLiquidityUsd`, so a stock with no USDC pool reverts `PoolNotSet` however it is
+registered. Register all thirteen with their feeds; the four without markets stay disabled
+until a pool exists, and turning one on later is `setVenue` + `setEnabled` rather than a
+fresh `addStock` against an address nobody has reviewed under time pressure.
 
 **How this was verified, and why not in a fork.** Decimals and symbols were read by direct
 RPC against a live Base node on 2026-09-03, outside the EVM. A fork **cannot** do it: these

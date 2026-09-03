@@ -28,6 +28,9 @@ The whole system in one place: what to deploy, in what order, what to wire, and 
 before moving on. The numbered sections after this one carry the reasoning and the full
 argument tables; this is the runbook.
 
+🔴 marks the one wiring call in this sequence that fails **silently** if forgotten. Every
+other step below fails closed and loudly. See the can't-miss box after the sequence table.
+
 **Two things to have settled before you start.**
 
 1. **`$CHIP` must exist.** Four contracts take it as a constructor argument and three take
@@ -64,13 +67,13 @@ below that does not depend on the token.
 | 1 | `FeeSplitter` | multisig, **pot placeholder**, ops, 2000, 2000 | `setPot(Pot)` after step 3 | — it can receive from the start, but nobody should call `distribute` before `setPot` |
 | 2 | `StockRegistry` | multisig, USDC, uni factory, slipstream factory | 13 x `addStock` (all disabled) | every stock starts **disabled**; `setEnabled` needs feed + pool + measured depth |
 | 3 | `Pot` | multisig, USDC | `setRewards(ChipRounds)` after 5b; `setConversionConfig`; `setRoute(AERO)` | `openRound` reverts while `rewards` is unset |
-| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
+| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; 🔴 `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
 | 5a | `ChipClaims` | multisig, StockRegistry | `setRounds`, `setPolTreasury`, `setClaimSchedule`, `setCreditExpiry` | **`contributeWeights` reverts until `setRounds`** — the ledger rejects an unknown caller |
 | 5b | `ChipRounds` | multisig, registry, Pot, **ChipActivation**, ChipClaims, 🔶fee | the config table in step 5b | a round reverts at the first `contributeWeights` until 5a is wired |
 | 6 | `POLTreasury` | multisig, USDC, position manager, FeeSplitter | `setManager`, `setRewards(ChipClaims)`, POL assets, routes, income tokens | holds nothing until `ChipRounds.setPolTreasury` points at it |
 | 7 | `ClaimRouter` | multisig, **ChipClaims**, 1000000 | nothing | holds no funds and needs no permissions, ever |
 | 8 | `Furnace` | multisig, **$CHIP**, Lil Nouns, 🔶two recipes | approve + `depositStock` | **`forge` reverts `OutOfStock` until stock is deposited** |
-| 9 | `NounLoans` | multisig, **$CHIP**, FeeSplitter, treasury, terms | `ChipActivation.setCustodian(this, true)`; 🔶`setMaxPrincipal`; 🔶`depositPool` | **`borrow` reverts `CollectionNotLendable` at `maxPrincipal == 0`**, and `PoolTooSmall` on an empty pool |
+| 9 | `NounLoans` | multisig, **$CHIP**, FeeSplitter, treasury, terms | 🔴 `ChipActivation.setCustodian(this, true)`; 🔶`setMaxPrincipal`; 🔶`depositPool` | **`borrow` reverts `CollectionNotLendable` at `maxPrincipal == 0`**, and `PoolTooSmall` on an empty pool |
 
 ### Half-wired cannot take money — the property, and how to check it
 
@@ -110,16 +113,46 @@ setMaxPrincipal(BASED_NOUNS, X); borrow(...)   -> reverts PoolTooSmall
 #      pool cannot fund.
 ```
 
-**The one that is not automatic.** `ChipActivation.setCustodian(NounLoans, true)` is the last
-wire, and forgetting it is not a failure — it is a *silent* one. Loans still work; borrowers
-simply stop earning the moment they deposit, exactly as if they had sold. There is no revert
-to catch it. Check it explicitly:
+### 🔴 CAN'T MISS: `setCustodian` is the one wire with no safety net
 
-```
-chipActivation.isCustodian(nounLoans)          -> true
-# and end to end, on a fork:
-#   chip a Noun, borrow against it, confirm it still scores weight in a round
-```
+> **`chipActivation.setCustodian(nounLoans, true)` — DO NOT SIGN OFF THE DEPLOY WITHOUT THE
+> VERIFICATION READ BELOW RETURNING `true`.**
+>
+> Every other mistake in this sequence reverts. This one does not. Skip it and the system
+> looks completely healthy: loans open, $CHIP is disbursed, collateral is held, rounds run,
+> other holders are paid. The only symptom is that **every borrower silently stops earning
+> the moment they deposit**, exactly as if they had sold their Noun — no error, no event, no
+> failed transaction, nothing in a log to notice. It is the headline feature of NounLoans
+> failing invisibly.
+>
+> **The verification read that proves it is set:**
+>
+> ```
+> cast call $CHIP_ACTIVATION "isCustodian(address)(bool)" $NOUN_LOANS --rpc-url $BASE_RPC_URL
+> #   -> true            REQUIRED. Anything else means borrowers are earning nothing.
+> ```
+>
+> **And the end-to-end read that proves it WORKS**, which is the one worth the extra minutes,
+> because `isCustodian` being true only proves the allowlist entry exists — not that
+> `beneficiaryOf` is answering the way ChipActivation expects:
+>
+> ```
+> # on a fork, with a real Noun:
+> #   1. chipActivation.activate(collection, tokenId, tier)
+> #   2. nounLoans.borrow(collection, tokenId, term, principal)
+> #   3. cast call $CHIP_ACTIVATION "isActive(address,uint256)(bool)" $COLLECTION $TOKEN_ID
+> #      -> true          the Noun is in the vault AND still earning
+> #   4. cast call $CHIP_ACTIVATION "effectiveOwner(address,uint256)(address)" ...
+> #      -> the BORROWER, not the loan vault
+> ```
+>
+> If step 3 returns `false`, the wire is missing or the custodian is not answering. **The fix
+> is one call, needs no action from any borrower, and is retroactive** — activations come
+> back the instant the custodian is registered. Nothing is lost; it just has to be noticed.
+>
+> Walked end to end by `test_theCustodianWireIsTheOneMistakeThatFailsSilently` in
+> `test/DeployOrder.t.sol`, which asserts the silent-failure shape explicitly so it stays
+> documented rather than becoming folklore.
 
 `test_theCustodianWireIsTheOneMistakeThatFailsSilently` walks exactly that: the loan opens,
 nothing reverts, and the borrower's Noun scores zero weight in the next round. The fix is one
@@ -137,7 +170,7 @@ $CHIP ────────────────> 4 ChipActivation, 8 Furn
 5a ChipClaims ────────> 5b ChipRounds, 7 ClaimRouter
 5b ChipRounds ────────> 3 Pot.setRewards, 1 FeeSplitter.setPot (via Pot)
 6 POLTreasury ────────> 5b setPolTreasury, 5a setPolTreasury
-9 NounLoans ──────────> 4 ChipActivation.setCustodian
+9 NounLoans ──────────> 4 ChipActivation.setCustodian   🔴 no revert if forgotten
 ```
 
 `ClaimRouter` (7) points at **ChipClaims**, not ChipRounds — `claimFor` lives on the ledger.
@@ -217,22 +250,22 @@ Then register all nine stocks **disabled**, four with pools and five without:
 | COINc | `0xb200000000000000000000c85a31389D71F3ecfb` | None | none yet | - |
 | MSTRc | `0xb2000000000000000000004884b426556b92883d` | None | none yet | - |
 
-Then the **four beyond the launch set**, which have no Chainlink feed published in the
-Coinbase set. Register them with `feed = address(0)`, `venue = None`, `pool = address(0)`:
+Then the **four beyond the launch set**. All four have live Chainlink feeds; what they lack
+is a USDC pool. Register them with the feed set, `venue = None`, `pool = address(0)`:
 
 | Ticker | Token | Feed |
 |---|---|---|
-| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | none published |
-| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | none published |
-| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | none published |
-| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | none published |
+| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` |
+| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` |
+| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` |
+| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` |
 
 **They cannot be enabled by mistake.** `setEnabled(token, true)` requires a feed, a verified
-pool and measured depth, and reverts `FeedNotSet` without the first — so a feedless stock is
-inert no matter who calls what. Registering them now means adding a market later is
-`setFeed` + `setVenue` + `setEnabled` rather than an `addStock` against an address nobody
-has reviewed under time pressure. All thirteen addresses and decimals are reconciled against
-a live node in ASSUMPTIONS A-18.
+pool AND measured depth, and reverts `PoolNotSet` without a venue — so a stock with no market
+is inert no matter who calls what. Registering them now means adding a market later is
+`setVenue` + `setEnabled` rather than an `addStock` against an address nobody has reviewed
+under time pressure. All thirteen tokens and all thirteen feeds are reconciled against a live
+node in ASSUMPTIONS A-13 and A-18, and asserted in `test/fork/ChainlinkFeeds.t.sol`.
 
 All thirteen need `tokenDecimals = 8` and a `minLiquidityUsd` you choose (see below). The four
 with pools also need their Chainlink feed, which is still outstanding (ASSUMPTIONS A-13).
@@ -263,7 +296,7 @@ use `--skip-simulation`, or be executed from the multisig UI.
 Post-deploy checks:
 - `owner()` is the multisig
 - `stockCount()` is 13, `enabledTokens().length` is 0
-- `getStock(CRCLc).feed` is `address(0)`, and `setEnabled(CRCLc, true)` reverts `FeedNotSet`
+- `getStock(CRCLc).pool` is `address(0)`, and `setEnabled(CRCLc, true)` reverts `PoolNotSet`
 - `getStock(NVDA).pool` matches the table above
 
 ### 3. Pot — **built**
