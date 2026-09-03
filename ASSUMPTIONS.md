@@ -216,6 +216,13 @@ All nine feeds exist on Base, are listed in Chainlink's own directory as "Coinba
 sane prices when queried. Verified in `test/fork/ChainlinkFeeds.t.sol`, which re-checks
 them on every fork run.
 
+**The mapping below is now asserted, not just logged.** Each feed must report
+`description() == "Coinbase <TICKER>"` for the ticker it is filed under, and no two rows may
+share an address. That is the only check here a **transposed row** can fail — every address
+in this table is a real, live, correctly-shaped feed returning a sane price, so liveness and
+decimals assertions would pass happily while a round bought NVDA at AAPL's mark. Confirmed
+against the live node on 2026-09-03: all nine descriptions match.
+
 | Ticker | Feed proxy |
 |---|---|
 | NVDA | `0x04689a41629776563E6822F76f2e57D148d28513` |
@@ -293,25 +300,45 @@ gas-capped `staticcall`, never a bare `try/catch`. `StockRegistry._checkedDecima
 simulation, never on real Base — which is exactly what makes it dangerous, because it would
 have shown up first in a deploy dry run.
 
-### A-18 · All thirteen B20 stocks, and which have pools
-Base publishes thirteen tokenized stocks. All nine you asked to register are verified live
-on chain at 8 decimals. Only four have a Uniswap v3 pool against USDC today:
+### A-18 · All thirteen B20 stocks — **ALL THIRTEEN NOW VERIFIED**
+Base publishes thirteen tokenized stocks. **All thirteen** are now verified live on chain:
+8 decimals, the symbol below, and the one-byte `0xef` precompile shape. Only four have a
+Uniswap v3 pool against USDC today.
 
-| Ticker | Address | USDC pool? |
-|---|---|---|
-| NVDAc | `0xb20000000000000000000078ee7ce2fE4908108C` | yes, 0.3% |
-| GOOGLc | `0xb2000000000000000000002D0BA3164cc74f58B7` | yes, 1% |
-| AAPLc | `0xb200000000000000000000C2e324d24d7eEcd1fb` | yes, 0.3% |
-| METAc | `0xb2000000000000000000008bC8786B856E61707C` | yes, 0.3% |
-| TSLAc | `0xb2000000000000000000001e800a7f5189430cD0` | none yet |
-| AMZNc | `0xb200000000000000000000d9192b6B456483C2E8` | none yet |
-| MSFTc | `0xB200000000000000000000Ab99cFa739E253872B` | none yet |
-| COINc | `0xb200000000000000000000c85a31389D71F3ecfb` | none yet |
-| MSTRc | `0xb2000000000000000000004884b426556b92883d` | none yet |
-| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | not checked |
-| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | not checked |
-| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | not checked |
-| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | not checked |
+| Ticker | Address | Decimals | USDC pool? | Feed | Launch state |
+|---|---|---|---|---|---|
+| NVDAc | `0xb20000000000000000000078ee7ce2fE4908108C` | 8 ✓ | yes, 0.3% | A-13 | register, enable if depth clears |
+| GOOGLc | `0xb2000000000000000000002D0BA3164cc74f58B7` | 8 ✓ | yes, 1% | A-13 | register, enable if depth clears |
+| AAPLc | `0xb200000000000000000000C2e324d24d7eEcd1fb` | 8 ✓ | yes, 0.3% | A-13 | register, enable if depth clears |
+| METAc | `0xb2000000000000000000008bC8786B856E61707C` | 8 ✓ | yes, 0.3% | A-13 | register, enable if depth clears |
+| TSLAc | `0xb2000000000000000000001e800a7f5189430cD0` | 8 ✓ | none yet | A-13 | register **disabled** |
+| AMZNc | `0xb200000000000000000000d9192b6B456483C2E8` | 8 ✓ | none yet | A-13 | register **disabled** |
+| MSFTc | `0xB200000000000000000000Ab99cFa739E253872B` | 8 ✓ | none yet | A-13 | register **disabled** |
+| COINc | `0xb200000000000000000000c85a31389D71F3ecfb` | 8 ✓ | none yet | A-13 | register **disabled** |
+| MSTRc | `0xb2000000000000000000004884b426556b92883d` | 8 ✓ | none yet | A-13 | register **disabled** |
+| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | 8 ✓ | none | **none published** | register **disabled** |
+| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | 8 ✓ | none | **none published** | register **disabled** |
+| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | 8 ✓ | none | **none published** | register **disabled** |
+| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | 8 ✓ | none | **none published** | register **disabled** |
+
+**The last four have no Chainlink feed in the Coinbase set**, so they cannot be enabled even
+by mistake: `setEnabled(token, true)` requires a feed, a verified pool AND measured depth,
+and reverts `FeedNotSet` without the first. Registering them now costs one multisig call
+each and means adding a market later is `setFeed` + `setVenue` + `setEnabled` rather than a
+fresh `addStock` against an unreviewed address.
+
+**How this was verified, and why not in a fork.** Decimals and symbols were read by direct
+RPC against a live Base node on 2026-09-03, outside the EVM. A fork **cannot** do it: these
+are node-native precompiles (A-15), so `decimals()` reverts under a forked EVM after
+consuming all forwarded gas. `test/fork/ChainlinkFeeds.t.sol` asserts the code shape (which
+a fork *can* read) and asserts that calling one fails, so the limitation itself is pinned;
+this table carries the RPC result.
+
+Reproduce:
+```bash
+cast call 0xB20000000000000000000019f6E7C675b73C2e4D "decimals()(uint8)" -r $BASE_RPC_URL
+cast call 0xB20000000000000000000019f6E7C675b73C2e4D "symbol()(string)"  -r $BASE_RPC_URL
+```
 
 ### A-16 · The liquidity is NOT on Aerodrome Slipstream — **BLOCKER, verified**
 Spec section 5 step 4 buys on Aerodrome Slipstream, and section 6 mints Slipstream LP.

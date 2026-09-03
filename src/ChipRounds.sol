@@ -51,6 +51,16 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /// @notice Hard ceiling on the POL holdback. Spec section 6 allows 0-25%.
     uint32 public constant MAX_HOLDBACK_BPS = 2_500;
 
+    /// @notice Floor on {maxFeedAge} when it is switched on at all.
+    /// @dev B20 equity feeds have NO heartbeat when equity markets are closed; they hold the
+    ///      last close (ASSUMPTIONS A-14). An ordinary weekend is already about 65 hours from
+    ///      Friday's close to Monday's open, and a holiday weekend runs past 110. A staleness
+    ///      limit tighter than this would not catch a dead feed, it would skip every Monday
+    ///      round on a healthy one — a liveness bug that would be very easy to miss, because
+    ///      skipping is silent and safe. So the floor exists to stop a well-meaning
+    ///      "tighten it up" from quietly switching the protocol off two days a week.
+    uint64 public constant MIN_FEED_AGE = 72 hours;
+
     struct Split {
         bool set;
         uint8 count;
@@ -80,6 +90,11 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     uint128 public maxRoundBudget;
     uint256 public splitChangeFeeChip;
     uint32 public defaultMaxSlippageBps;
+
+    /// @notice Skip a stock whose Chainlink feed has not updated in this long. 0 disables.
+    /// @dev Not a price check — a skip, and the slice carries to the next round. See
+    ///      {setMaxFeedAge}.
+    uint64 public maxFeedAge;
     uint32 public boostBps;
     uint32 public holdbackBps;
     address public hoodieCollection;
@@ -254,6 +269,31 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         if (bps >= BPS) revert BadConfig();
         defaultMaxSlippageBps = bps;
         emit ConfigUpdated("defaultMaxSlippageBps", bps);
+    }
+
+    /// @notice Skip any stock whose feed is older than `v` seconds, carrying its budget.
+    ///         Zero switches the check off entirely.
+    ///
+    /// @dev THIS IS A LIVENESS SETTING, NOT A SAFETY ONE, AND IT CUTS BOTH WAYS.
+    ///
+    ///      The risk it addresses: a feed that has genuinely died still returns its last
+    ///      answer forever, so a round would keep pricing purchases off a number nobody is
+    ///      updating. The Chainlink bound would still be enforced — against a stale mark,
+    ///      which is worse than useless if the real price has moved.
+    ///
+    ///      The risk it creates: these feeds legitimately look stale. They have no off-hours
+    ///      heartbeat (ASSUMPTIONS A-14), so on a Monday morning every equity feed is ~65
+    ///      hours old and after a holiday weekend past 110. Set this too tight and every
+    ///      round of the working week's first day silently buys nothing.
+    ///
+    ///      Hence {MIN_FEED_AGE}, a 72-hour floor on any non-zero value, and a recommended
+    ///      setting of 120 hours in DEPLOY.md. A skip is cheap — the slice carries to the
+    ///      next round and nobody loses a cent — so erring generous costs almost nothing,
+    ///      while erring tight costs a day of rounds a week.
+    function setMaxFeedAge(uint64 v) external onlyOwner {
+        if (v != 0 && v < MIN_FEED_AGE) revert BadConfig();
+        maxFeedAge = v;
+        emit ConfigUpdated("maxFeedAge", v);
     }
 
     /// @notice Share of each stock purchase held back for protocol-owned liquidity.
@@ -567,6 +607,22 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         if (moved > target) moved = target;
     }
 
+    /// @notice Whether this stock's feed is currently too old to buy against.
+    /// @dev Exposed so the keeper and the site can explain a skip before it happens rather
+    ///      than after. Always false when the check is switched off.
+    function isFeedStale(address stock) public view returns (bool) {
+        uint64 maxAge = maxFeedAge;
+        if (maxAge == 0) return false;
+        try registry.priceUsd(stock) returns (uint256, uint256 updatedAt) {
+            if (updatedAt == 0) return true;
+            return block.timestamp > updatedAt + maxAge;
+        } catch {
+            // No readable price at all. Not this check's business: `_minOutFor` returns zero
+            // and the buy is skipped as "no price", which is the more accurate reason.
+            return false;
+        }
+    }
+
     /// @notice Chainlink-derived minimum acceptable output for spending `spendAmount`.
     /// @dev Returns 0 when the price is unavailable, so callers treat it as "no floor".
     function _minOutFor(address stock, uint256 spendAmount) internal view returns (uint256) {
@@ -593,6 +649,10 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     {
         Stock memory s = registry.getStock(stock);
         if (!s.enabled) return (false, 0, 0, "stock disabled");
+
+        // A frozen feed prices the buy off a number nobody is updating any more. Skip and
+        // carry: the slice is untouched and goes to the next round. See {setMaxFeedAge}.
+        if (isFeedStale(stock)) return (false, 0, 0, "stale feed");
 
         uint256 minOut = _minOutFor(stock, spendAmount);
         if (minOut == 0) return (false, 0, 0, "no price");

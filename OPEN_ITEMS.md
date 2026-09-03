@@ -144,14 +144,60 @@ suites using `BlacklistToken` / `PausableToken` / `LyingToken`, which model docu
 behaviour. **Confidence in anything B20-specific is therefore lower than everything else in
 this repo**, and no amount of local testing fixes that. First mainnet round should be small.
 
-## 6. Chainlink equity feeds go stale outside market hours — by design
+**Narrowed by the B20 hardening pass (`test/b20/`), which closed three of the gaps:**
+
+- **The multiplier.** A B20 token is not permanently one share.
+  `MultiplierIndifference.t.sol` tests the documented mechanism — the multiplier lives in
+  the valuation, so a corporate action moves the FEED — and then hedges the mechanism we
+  cannot rule out, where balances rebase instead. One of those hedge tests documents a real
+  limit rather than a guarantee: a DOWNWARD rebase leaves the ledger short and the last
+  claimant cannot be paid. We do not believe B20 does this, and the failure is contained
+  (the claim reverts, the credit survives, other stocks are untouched), but it is the one
+  place in the suite where the answer is "it degrades safely" rather than "it cannot happen".
+- **Identity.** `IdentifyByAddress.t.sol` scans `src/` and fails the build if any contract
+  calls `symbol()` or `name()`. Nothing makes a B20 symbol unique, and an incidental
+  `symbol()` on a precompile is a gas bomb as well as a spoofing surface.
+- **The tables.** All thirteen tokens and all nine feeds now reconcile against a live node,
+  with feed descriptions asserted rather than logged, so a transposed row fails the build.
+
+## 6. Chainlink equity feeds go stale outside market hours — **RESOLVED**
 
 A-14. The feeds hold the last close and have no heartbeat when equity markets are closed.
-StockRegistry deliberately does not judge staleness; ChipRewards currently does not either.
+**The recommendation this item used to carry — "say 36h" — was wrong, and the reason is
+below.**
 
-**Decision still open:** should a round skip a stock whose feed is older than N seconds and
-carry its budget? I recommend yes, with N configurable and generous (say 36h) so ordinary
-weekends pass but a genuinely dead feed does not silently price a purchase.
+**Decision taken: skip and carry, off by default, floored at 72 hours.**
+`ChipRounds.maxFeedAge` skips any stock whose feed has not updated within the window and
+carries its slice to the next round. Zero disables the check. `setMaxFeedAge` is multisig
+only and rejects any non-zero value below `MIN_FEED_AGE = 72 hours`.
+
+**Why a skip and not a revert.** A revert wedges the round for every other stock. A skip
+costs nobody anything — the slice returns to the Pot and buys next time — so the check can
+be conservative without a downside. Proven in `test/b20/FrozenFeed.t.sol`: a dead NVDA feed
+skips, GOOGL still buys, the budget carries to the cent, and finalize still works.
+
+**THE OLD RECOMMENDATION HERE WAS "say 36h" AND IT WOULD HAVE BROKEN EVERY MONDAY.**
+Worth recording, because the number looks reasonable and is not:
+
+| | Feed age at the next round |
+|---|---|
+| Ordinary weekend, Friday 16:00 close to Monday 09:30 open | **~65 h** |
+| Three-day weekend | **~89 h** |
+| Thanksgiving (Wed close, Mon open) | **~113 h** |
+
+At 36 hours every Monday round would have skipped every equity stock, silently, because a
+skip is the safe quiet path. The protocol would have bought nothing one day in five and the
+only symptom would have been a carried budget nobody was looking at.
+
+Hence the 72-hour floor: not a safety bound but a **liveness** one, stopping a well-meaning
+"tighten it up" from switching the protocol off two days a week. **Recommended setting: 120
+hours**, which clears a Thanksgiving weekend with margin and still catches a feed that has
+been dead a working week.
+
+The residual: at 120 hours a feed that dies on Friday is bought against until Wednesday. The
+Chainlink bound is enforced against that stale mark, so the exposure is real but bounded by
+how far the market moves. Tightening it trades that against skipped Mondays; there is no
+setting that avoids both, which is why it is configurable and why the floor is where it is.
 
 ## 8. NEW: the claim window shortens the effective time to claim
 

@@ -22,6 +22,130 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 
 ---
 
+## Master sequence
+
+The whole system in one place: what to deploy, in what order, what to wire, and what to check
+before moving on. The numbered sections after this one carry the reasoning and the full
+argument tables; this is the runbook.
+
+**Two things to have settled before you start.**
+
+1. **`$CHIP` must exist.** Four contracts take it as a constructor argument and three take
+   amounts denominated in it. Nothing below can be deployed sensibly without the token.
+2. **The 48-hour timelocks are on the critical path.** ChipActivation cannot price a
+   collection, and NounLoans cannot change terms, without a queue-then-execute two days
+   apart. Registering three collections is three queues on day one and three executes on day
+   three. Plan the launch around that rather than discovering it on the day.
+
+### The placeholders
+
+Everything below marked 🔶 is a number that **cannot be chosen until the token launches**,
+because it is denominated in $CHIP and its sensible value depends on the supply and the price
+the Doppler/Bankr launch settles at. Every one of them is a constructor argument or a
+timelocked setter — none is hardcoded — but every one is also a real economic decision that
+is currently a guess.
+
+| 🔶 Placeholder | Where | What decides it |
+|---|---|---|
+| `splitChangeFeeChip_` | ChipRounds constructor | High enough to stop split-flipping before a round, low enough not to lock a holder into a bad pick |
+| Activation cost table, 5 tiers x 3 collections | `ChipActivation.queueCosts` | The headline price of the whole product. 100% burns, so this is also the burn rate |
+| Furnace `basedRecipe` / `darkRecipe` $CHIP cost | Furnace constructor | What a forged Noun should cost relative to buying one |
+| `maxPrincipal` per collection | `NounLoans.setMaxPrincipal` | **Must sit below Anvil parity** — see step 9. Reviewed against the floor, not set once |
+| Pool seed size | `NounLoans.depositPool` | How much default risk the protocol is taking |
+| `NounLoans` fee bps per term | NounLoans constructor | Priced against the loan's duration and the floor's volatility |
+
+Everything else — percentages, windows, slippage, depth, holdback — has a recommended value
+below that does not depend on the token.
+
+### The sequence
+
+| # | Deploy | Constructor takes | Then wire | Cannot take money until |
+|---|---|---|---|---|
+| 1 | `FeeSplitter` | multisig, **pot placeholder**, ops, 2000, 2000 | `setPot(Pot)` after step 3 | — it can receive from the start, but nobody should call `distribute` before `setPot` |
+| 2 | `StockRegistry` | multisig, USDC, uni factory, slipstream factory | 13 x `addStock` (all disabled) | every stock starts **disabled**; `setEnabled` needs feed + pool + measured depth |
+| 3 | `Pot` | multisig, USDC | `setRewards(ChipRounds)` after 5b; `setConversionConfig`; `setRoute(AERO)` | `openRound` reverts while `rewards` is unset |
+| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
+| 5a | `ChipClaims` | multisig, StockRegistry | `setRounds`, `setPolTreasury`, `setClaimSchedule`, `setCreditExpiry` | **`contributeWeights` reverts until `setRounds`** — the ledger rejects an unknown caller |
+| 5b | `ChipRounds` | multisig, registry, Pot, **ChipActivation**, ChipClaims, 🔶fee | the config table in step 5b | a round reverts at the first `contributeWeights` until 5a is wired |
+| 6 | `POLTreasury` | multisig, USDC, position manager, FeeSplitter | `setManager`, `setRewards(ChipClaims)`, POL assets, routes, income tokens | holds nothing until `ChipRounds.setPolTreasury` points at it |
+| 7 | `ClaimRouter` | multisig, **ChipClaims**, 1000000 | nothing | holds no funds and needs no permissions, ever |
+| 8 | `Furnace` | multisig, **$CHIP**, Lil Nouns, 🔶two recipes | approve + `depositStock` | **`forge` reverts `OutOfStock` until stock is deposited** |
+| 9 | `NounLoans` | multisig, **$CHIP**, FeeSplitter, treasury, terms | `ChipActivation.setCustodian(this, true)`; 🔶`setMaxPrincipal`; 🔶`depositPool` | **`borrow` reverts `CollectionNotLendable` at `maxPrincipal == 0`**, and `PoolTooSmall` on an empty pool |
+
+### Half-wired cannot take money — the property, and how to check it
+
+Every step above fails **closed**. That is deliberate and it is the single most useful thing
+to verify as you go, because a deployment interrupted halfway is the realistic bad day —
+someone gets distracted between transactions, and the question is whether the half-built
+system can accept a user's funds and lose them.
+
+**All of this is tested, so the claim cannot quietly stop being true**:
+`test/DeployOrder.t.sol` runs each check below against a stack wired in the documented order
+and stopped short at the relevant step. Check each one by trying the thing that should not
+work yet:
+
+```
+# 2. A stock with no feed cannot be enabled, even by the owner.
+setEnabled(CRCLc, true)                       -> reverts FeedNotSet
+
+# 3. The Pot will not release a budget to nobody.
+openRound()                                   -> reverts (rewards unset)
+
+# 4. An unpriced collection cannot be activated, at any tier, by anyone.
+activate(BASED_NOUNS, 1, 0)                   -> reverts CollectionNotConfigured
+
+# 5a/5b. THE IMPORTANT ONE. Before claims.setRounds(rounds):
+contributeWeights(1, BASED_NOUNS, [1])        -> reverts (ledger rejects an unknown caller)
+#      A round cannot book a single weight, so it cannot take anyone's Noun into a round it
+#      would then be unable to pay out of.
+
+# 8. A Furnace with no stock cannot consume a Lil.
+forge(0, [1,2,3,4,5])                          -> reverts OutOfStock
+#      Stock is checked BEFORE inputs are burned, so a doomed forge burns nothing.
+
+# 9. A loan vault with no cap and no pool cannot take collateral.
+borrow(BASED_NOUNS, 1, 0, 100e18)              -> reverts CollectionNotLendable
+setMaxPrincipal(BASED_NOUNS, X); borrow(...)   -> reverts PoolTooSmall
+#      Collateral is pulled AFTER both checks, so a Noun is never locked against a loan the
+#      pool cannot fund.
+```
+
+**The one that is not automatic.** `ChipActivation.setCustodian(NounLoans, true)` is the last
+wire, and forgetting it is not a failure — it is a *silent* one. Loans still work; borrowers
+simply stop earning the moment they deposit, exactly as if they had sold. There is no revert
+to catch it. Check it explicitly:
+
+```
+chipActivation.isCustodian(nounLoans)          -> true
+# and end to end, on a fork:
+#   chip a Noun, borrow against it, confirm it still scores weight in a round
+```
+
+`test_theCustodianWireIsTheOneMistakeThatFailsSilently` walks exactly that: the loan opens,
+nothing reverts, and the borrower's Noun scores zero weight in the next round. The fix is one
+call, needs no action from the borrower, and is retroactive — but nothing will tell you.
+
+### Order constraints, as a graph
+
+Only these actually bind. Everything else can move.
+
+```
+$CHIP ────────────────> 4 ChipActivation, 8 Furnace, 9 NounLoans, 5b ChipRounds (fee)
+2 StockRegistry ──────> 5a ChipClaims, 5b ChipRounds
+3 Pot ────────────────> 5b ChipRounds
+4 ChipActivation ─────> 5b ChipRounds
+5a ChipClaims ────────> 5b ChipRounds, 7 ClaimRouter
+5b ChipRounds ────────> 3 Pot.setRewards, 1 FeeSplitter.setPot (via Pot)
+6 POLTreasury ────────> 5b setPolTreasury, 5a setPolTreasury
+9 NounLoans ──────────> 4 ChipActivation.setCustodian
+```
+
+`ClaimRouter` (7) points at **ChipClaims**, not ChipRounds — `claimFor` lives on the ledger.
+`POLTreasury.setRewards` also takes **ChipClaims**, because compound credits are notified by
+the ledger. Both are easy to get backwards and neither fails loudly.
+
+---
+
 ## Order
 
 Deploy in this order. Each step lists what it needs from earlier steps.
@@ -93,7 +217,24 @@ Then register all nine stocks **disabled**, four with pools and five without:
 | COINc | `0xb200000000000000000000c85a31389D71F3ecfb` | None | none yet | - |
 | MSTRc | `0xb2000000000000000000004884b426556b92883d` | None | none yet | - |
 
-All nine need `tokenDecimals = 8` and a `minLiquidityUsd` you choose (see below). The four
+Then the **four beyond the launch set**, which have no Chainlink feed published in the
+Coinbase set. Register them with `feed = address(0)`, `venue = None`, `pool = address(0)`:
+
+| Ticker | Token | Feed |
+|---|---|---|
+| CRCLc | `0xB20000000000000000000019f6E7C675b73C2e4D` | none published |
+| INTCc | `0xB2000000000000000000004AFF16039bA04bdFBc` | none published |
+| SNDKc | `0xb200000000000000000000397293Cb8cda9a10c5` | none published |
+| SPCXc | `0xb2000000000000000000007b9fcbd005511aCBd5` | none published |
+
+**They cannot be enabled by mistake.** `setEnabled(token, true)` requires a feed, a verified
+pool and measured depth, and reverts `FeedNotSet` without the first — so a feedless stock is
+inert no matter who calls what. Registering them now means adding a market later is
+`setFeed` + `setVenue` + `setEnabled` rather than an `addStock` against an address nobody
+has reviewed under time pressure. All thirteen addresses and decimals are reconciled against
+a live node in ASSUMPTIONS A-18.
+
+All thirteen need `tokenDecimals = 8` and a `minLiquidityUsd` you choose (see below). The four
 with pools also need their Chainlink feed, which is still outstanding (ASSUMPTIONS A-13).
 
 **minLiquidityUsd: $50,000 default, overridable per stock.** Deploy every stock with
@@ -121,7 +262,8 @@ use `--skip-simulation`, or be executed from the multisig UI.
 
 Post-deploy checks:
 - `owner()` is the multisig
-- `stockCount()` is 9, `enabledTokens().length` is 0
+- `stockCount()` is 13, `enabledTokens().length` is 0
+- `getStock(CRCLc).feed` is `address(0)`, and `setEnabled(CRCLc, true)` reverts `FeedNotSet`
 - `getStock(NVDA).pool` matches the table above
 
 ### 3. Pot — **built**
@@ -302,7 +444,16 @@ Then configure, all from the multisig:
 | `setHoodie(hoodieCollection, 11000)` | 1.10x boost |
 | `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |
 | `setDefaultMaxSlippageBps(200)` | 2% around the Chainlink mark |
+| `setMaxFeedAge(432000)` | **120 hours.** Skip a stock whose feed has frozen; its slice carries |
 | `setMaxSlippageBps(stock, bps)` | per-stock override where needed |
+
+**On `setMaxFeedAge`, because the obvious number is wrong.** B20 equity feeds have no
+heartbeat outside market hours: after an ordinary weekend every one of them is ~65 hours old
+while being perfectly healthy, and after Thanksgiving ~113. A tight setting would skip every
+Monday round, silently, because a skip is the safe quiet path. 120 hours clears a holiday
+weekend with margin and still catches a feed dead for a working week. The contract enforces
+a 72-hour floor (`MIN_FEED_AGE`) so this cannot be tightened into an outage. Zero disables
+the check entirely. See OPEN_ITEMS item 6.
 
 **WIRING ORDER MATTERS, and getting it wrong fails loudly rather than silently:**
 

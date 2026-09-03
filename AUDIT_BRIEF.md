@@ -9,8 +9,8 @@ it earns.
 runs its own activation vault instead of depending on Clutch; see §7.
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
-**Size:** ~2,700 lines of non-comment source across 11 contracts + 1 base + 14 interfaces.
-**Tests:** 522 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 35 tests
+**Size:** ~2,720 lines of non-comment source across 11 contracts + 1 base + 14 interfaces.
+**Tests:** 557 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
 against a live Base mainnet fork.
 
 Fork tests run against the **latest** Base block, not a pinned one, so live prices and pool
@@ -26,6 +26,7 @@ forge test --match-path "test/fork/*" -j 1   # serialise: a free-tier RPC will 4
 forge test --match-contract CodeSizeTest     # the size guard
 forge test --match-path "test/activation/*"  # our own vault, incl. the parity proof
 forge test --match-path "test/loans/*"       # lending + the custody integration
+forge test --match-path "test/b20/*"         # B20 hardening: multiplier, frozen feed, identity
 ```
 
 **Size guard.** `test/CodeSize.t.sol` fails the build if any deployable contract exceeds
@@ -43,12 +44,18 @@ paths, or a paid endpoint, avoids it.
 
 ## 1. What each contract does
 
+Runtime sizes, all inside the 24,000-byte budget the size guard enforces (EIP-170 is 24,576):
+ChipRounds 20,834 · POLTreasury 15,190 · NounLoans 12,704 · ChipClaims 12,879 ·
+ChipActivation 10,023 · Pot 9,042 · StockRegistry 8,971 · Furnace 7,711 · FeeSplitter 4,782 ·
+ClaimRouter 3,149 · ClutchVaultAdapter 3,151. ChipRounds has the least headroom at 3,742
+bytes and is the one to watch.
+
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
-| `ChipRounds.sol` | 514 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
+| `ChipRounds.sol` | 532 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
 | `loans/NounLoans.sol` | 339 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
 | `ChipClaims.sol` | 333 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
-| `activation/ChipActivation.sol` | 266 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
+| `activation/ChipActivation.sol` | 264 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
 | `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn Lils + $CHIP to forge a Noun. **Outside the money path** |
@@ -137,10 +144,28 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
     cost burns and the rescue has nothing to protect.
 17. **`NounLoans.poolBalance` never exceeds the $CHIP actually held**, through borrow, repay
     and liquidation, and a borrower's collateral leaves by exactly two paths.
+18. **A skipped stock always carries its whole slice back to the Pot**, whether it was
+    skipped for a stale feed, a broken swap or a disabled market. No skip ever costs a cent.
+19. **No contract in `src/` identifies a stock by anything but its address**, enforced by a
+    build-failing scan rather than by review.
 
 ## 4. Attack this first
 
-In priority order. Each is where I would expect a finding.
+Each is where I would expect a finding. **If you only have time for three, make them these,
+and in this order:**
+
+1. **§4.5a, the custodian registry.** New authorization logic, and the only place in the
+   repo where *a contract's answer decides who owns a Noun*. It reassigns the effective
+   owner, and the effective owner is what every weight, every credit and `setSplit` are
+   keyed to. It is also the newest code here.
+2. **§4.2, the claim window gate.** Every other bug class loses or misallocates money; a bug
+   in this one *locks* it.
+3. **§4.0, the ChipRounds/ChipClaims split.** The engine must not be able to extract value
+   from the ledger by any path but `claim` / `sweepExpired` / `recoverExcess`.
+
+Sections 4.5 and 4.5b are new since the last candidate and carry the largest share of the
+new lines; 4.9 is the B20 surface, where one property is documented as a limit rather than a
+guarantee and should be read as such.
 
 ### 4.0 THE SPLIT — read this before anything else
 
@@ -239,7 +264,7 @@ other than the intended one? In POLTreasury check `decreaseLiquidity` → does a
 withdrawn tokens leave to a wallet? (Intended: no.) Check that marking a token as POL/income
 is enough to protect it retroactively.
 
-### 4.5 ACTIVATION — `activation/ChipActivation.sol` (266 LOC), NEW AND CORE
+### 4.5 ACTIVATION — `activation/ChipActivation.sol` (264 LOC), NEW AND CORE
 
 This replaced the Clutch adapter and is now the source of every weight in the system. It was
 the thinnest, most-hedged part of the design; it is now one of the largest. Scope it as core.
@@ -264,18 +289,6 @@ returns the zero address.
   the tier and that address is the live owner again — but check the reasoning holds when a
   custodian is in the path.
 
-**Then attack the custodian registry**, which is the part with real trust in it. When
-`ownerOf` is a registered custodian, its `beneficiaryOf` answer becomes the effective owner.
-
-- The stated bound is that a custodian can only speak for tokens it actually holds, because
-  it is only ever asked about the address `ownerOf` returned. **Try to break that**: can a
-  registered custodian influence a Noun it does not hold, in this collection or another?
-- Both foreign calls are gas-capped staticcalls and any failure returns zero, which reads as
-  "nobody" and resets. Confirm a hostile custodian cannot revert, return short data, or burn
-  gas in a way that wedges `contributeWeights` for a whole round.
-- De-registering resets everything that custodian holds. Confirm that is immediate and total,
-  since it is the emergency stop.
-
 **And the burn.** `_burnChip` measures `balanceOf(0xdead)` either side of the transfer and
 reverts on a shortfall, so a lying $CHIP cannot buy an activation for free. The contract
 holds no $CHIP between transactions — which is why `recoverExcess` needs no exclusion list,
@@ -285,6 +298,61 @@ Costs and the tier curve both move only through a 48h queue/execute, **stricter 
 retired adapter**, which allowed a one-transaction retune of tier weights. Check that a
 queued change cannot bite before execution and that executing never reaches a live
 activation retroactively.
+
+### 4.5a THE CUSTODIAN REGISTRY — NEW AUTHORIZATION LOGIC, START HERE
+
+Inside `ChipActivation`, and pulled out into its own section because it is not really part of
+activation: **it is an authorization mechanism, and it is the only one in this repo that lets
+an external contract decide who owns something.**
+
+The rule: when `IERC721.ownerOf` returns an address on the multisig-managed allowlist, that
+address is asked `beneficiaryOf(collection, tokenId)` and **its answer replaces the owner.**
+Everything downstream is keyed to that answer — which Noun scores weight, whose address a
+credit is booked to, and who may call `setSplit`.
+
+**Why it exists.** Plain soft staking voids an activation whenever the NFT moves, which is
+right for a sale and wrong for a deposit. From the collection's point of view the two are
+identical, so only the vault can tell them apart, and telling them apart is what lets a Noun
+locked as loan collateral keep earning for its borrower.
+
+**The stated trust bound, which is the thing to attack.** A custodian is trusted, but *only
+over the tokens it actually holds*, because `ChipActivation` only ever asks the address that
+`ownerOf` just returned. So the worst a hostile custodian can do is misdirect rewards for a
+Noun already in its custody — which it could achieve anyway by simply refusing to give the
+Noun back. Try to break that bound:
+
+- Can a registered custodian name a beneficiary for a token it does **not** hold — in this
+  collection, or in another one, or for a token that does not exist?
+- Can it get its answer used for a token held by a *different* custodian?
+- `test_aLyingCustodianOnlyAffectsTokensItHolds` and
+  `test_aLyingCustodianOverItsOwnCustodyIsBoundedToThatToken` are the two tests that claim
+  this. Check they claim what they appear to.
+
+**Failure modes to push on:**
+
+- Both foreign calls are gas-capped staticcalls, and any failure — revert, short return
+  data, gas bomb — returns zero, which reads as "nobody" and resets the activation. Confirm
+  a hostile custodian cannot wedge `contributeWeights` for a whole round, which is the shape
+  that would take everyone else down with it.
+- A custodian returning `address(0)` must read as no owner, never as the custodian itself.
+- **De-registering is immediate and total**: every activation that custodian was carrying
+  goes inactive in the same transaction. That is deliberate — it is the emergency stop — but
+  confirm it cannot be triggered halfway, and that it cannot touch a credit already booked.
+- Registering mid-activation *revives* a deposit that had reset. Confirm that is safe: the
+  record still names the original activator, and it only comes back if that address is the
+  beneficiary.
+
+**Governance surface.** `setCustodian` is multisig-only and deliberately **not** timelocked
+in either direction: revoking a custodian that has gone bad must not wait 48 hours, and the
+same switch makes registering symmetric. Whether registering should be the slow direction is
+a fair thing to argue with.
+
+**The one consequence outside this contract.** `ChipRounds.setSplit` now authorises against
+`IActivationSource.effectiveOwner` rather than `IERC721.ownerOf`, so a borrower keeps the
+right to re-pick their stocks while collateralised. That puts `setSplit` authorisation behind
+the multisig-set activation source. The argument that this is not a new power: the same
+contract already decides whose weight counts in every round, which is strictly more. Judge
+that argument.
 
 ### 4.5b LENDING — `loans/NounLoans.sol` (339 LOC), NEW AND HOLDS ASSETS
 
@@ -376,6 +444,48 @@ stock, so it cannot silently become someone's output.
 28 tests in `test/furnace/Furnace.t.sol`. Runtime size 7,711 bytes, and it is now covered by
 the `test/CodeSize.t.sol` guard alongside the money-path contracts.
 
+### 4.9 THE B20 SURFACE — where one claim is weaker than the rest
+
+`test/b20/` is the hardening pass for the one dependency nothing local can fully cover. Read
+it for what it does NOT prove as much as for what it does.
+
+**The multiplier (`MultiplierIndifference.t.sol`).** A B20 token is not permanently one
+share: Coinbase values it as the underlying times a multiplier that absorbs dividends and
+splits (A-13). That is the stated reason every USD figure here comes from the feed rather
+than a share count, and the first half of that file tests exactly it — move the feed, and
+what a holder is owed does not change, because they are owed tokens.
+
+The second half hedges a mechanism we **cannot rule out**: that a corporate action rebases
+balances instead of re-marking the feed. B20 tokens are precompiles with no readable
+implementation, so "balances never rebase" is an inference from a sentence about valuation.
+Upward rebases and mid-round rebases are absorbed cleanly. **A downward rebase is not.**
+
+> `test_hedge_aDOWNWARDrebaseCanUnderfundTheLedger` documents a limit, not a guarantee. If
+> balances shrink under the ledger, the last claimant in a round cannot be paid. The failure
+> is contained — the claim reverts rather than paying out someone else's tokens, the credit
+> stays on the books, other stocks are untouched — but a holder is genuinely unable to be
+> made whole. **This is the only place in the suite where the answer is "it degrades safely"
+> rather than "it cannot happen".** If you can establish what B20 actually does here, that is
+> the single most valuable thing an auditor could tell us.
+
+**Identity (`IdentifyByAddress.t.sol`).** A build-failing scan of `src/` for `symbol()` and
+`name()`. Nothing makes a B20 symbol unique — anyone can deploy an ERC-20 reporting "NVDAc" —
+and an incidental `symbol()` on a precompile is a gas bomb as well as a spoofing surface. The
+rule is enforced as a test rather than a review note because it is a rule about what must be
+*absent*, which is what review misses. Confirm the scan cannot be trivially evaded, and that
+nothing resolves a stock by anything but its address.
+
+**Frozen feeds (`FrozenFeed.t.sol`).** See OPEN_ITEMS item 6 for the full reasoning. A dead
+feed skips and carries; `MIN_FEED_AGE` is a 72-hour floor that exists purely to stop the
+setting being tightened into skipping every Monday, since these feeds are legitimately ~65
+hours old after any weekend. The residual is stated there and is a genuine trade, not a fix.
+
+**Table reconciliation (`test/fork/ChainlinkFeeds.t.sol`).** Feed descriptions are asserted
+rather than logged, so a transposed row fails the build — previously it could not, because
+every address in the table is a real live feed and only the *mapping* was wrong. All thirteen
+tokens are pinned to the `0xef` precompile shape, and calling one from a fork is asserted to
+fail, so nobody "fixes" the registry into probing `decimals()` in simulation.
+
 ## 5. Deliberate design decisions an auditor may flag
 
 Each is intentional and documented in `ASSUMPTIONS.md` §3 (C-1 … C-17):
@@ -404,13 +514,14 @@ Full list with reasoning in `OPEN_ITEMS.md`. Summary:
 | 2 | Nothing routed USDC to POL | **CLOSED** — optional splitter leg + POL converter |
 | 3 | Gauge address has no on-chain verification | Open, low risk |
 | 4 | A round stuck in `Buying` has no escape hatch | Open, judged acceptable |
-| 5 | B20-specific behaviour covered by mocks only | Open, unfixable locally |
-| 6 | Equity feed staleness policy undecided | **Open — needs a decision** |
+| 5 | B20-specific behaviour covered by mocks only | Open, narrowed by `test/b20/` — §4.9 |
+| 6 | Equity feed staleness policy | **CLOSED** — skip-and-carry, `maxFeedAge`, 72h floor |
 | 7 | Compound shares have no redemption path | Open, phase 2 |
 | 10 | Keeper "kick job" | **CANCELLED** — the reset is lazy and atomic |
 | 11 | `VerifyClutchV3` script | **CANCELLED** — nothing left to verify |
 | 12 | NounLoans: no repay after grace | **Open — product decision** |
 | 13 | `maxPrincipal` vs Anvil parity is operational | Open, not enforceable on chain |
+| 14 | A downward B20 rebase could underfund the ledger | Open — §4.9, a limit not a guarantee |
 
 Also unresolved: **C-10**, the one place failure isolation does not hold — if USDC itself
 policy-blocked `ChipRounds`, a round in `Buying` could not settle or finalize. Every stock
@@ -472,7 +583,7 @@ Three things settled it, all of them recorded in `CLUTCH_RECON.md` and `CLUTCH_L
 | Before | Now |
 |---|---|
 | 7 unverifiable assumptions (A-1 … A-9) | **Zero.** All were about a third party we no longer call. |
-| The riskiest contract was 70 lines and swappable | The riskiest contract is 266 lines and core: §4.5 |
+| The riskiest contract was 70 lines and swappable | The riskiest contract is 264 lines and core: §4.5 |
 | `ClaimRouter` had a leg that could never work | That leg is deleted: §4.7 |
 | A keeper "kick job" was planned | **Cancelled.** The reset is lazy and atomic; nothing to run. |
 | Scope excluded the vault | **Scope includes the vault.** It is ours now. |
@@ -502,6 +613,13 @@ affect review:
 - **Every tunable is a constructor argument or a multisig setter.** There are no hardcoded
   percentages, thresholds, windows or addresses in business logic. The ceilings listed in §5
   are the only fixed numbers, and they exist to bound governance.
+- **Two of those bounds are floors rather than ceilings**, which is unusual enough to call
+  out: `ChipRounds.MIN_FEED_AGE` (72h) and the non-decreasing requirements on
+  `ChipActivation`'s cost and tier tables. They bound governance in the *liveness* direction
+  — stopping a setting that would silently switch something off — rather than the safety one.
+- **$CHIP denominations are the one thing not yet decided.** Activation costs, the Furnace
+  recipes, the split-change fee and the loan caps are all deploy-time or timelocked
+  parameters awaiting the token launch. DEPLOY.md marks every one of them as a placeholder.
 
 Recommended: first mainnet round funded small. Confidence in B20-specific behaviour is
 structurally lower than everything else here, and no amount of local testing changes that.
