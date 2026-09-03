@@ -10,6 +10,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IActivationCustodian} from "../interfaces/IActivationCustodian.sol";
+import {IActivationSource} from "../interfaces/IActivationSource.sol";
 
 /// @title NounLoans
 /// @notice Borrow $CHIP against a Noun, at a fixed fee for a fixed term — and keep earning
@@ -103,6 +104,11 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     /// @notice Where liquidated collateral goes.
     address public treasury;
 
+    /// @notice The activation vault. Read to enforce the chip gate, and nothing else.
+    /// @dev Repointable because {ChipActivation} is a swappable implementation of
+    ///      {IActivationSource}; this contract only ever reads from it.
+    IActivationSource public activationSource;
+
     Terms internal _terms;
     PendingTerms internal _pendingTerms;
 
@@ -158,6 +164,7 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     event MaxPrincipalSet(address indexed collection, uint256 previous, uint256 current);
     event TreasurySet(address indexed previous, address indexed current);
     event FeeSplitterSet(address indexed previous, address indexed current);
+    event ActivationSourceSet(address indexed previous, address indexed current);
     event BorrowingPaused(bool paused);
     event Recovered(address indexed token, address indexed to, uint256 amount);
     event RecoveredNFT(address indexed collection, uint256 indexed tokenId, address indexed to);
@@ -180,22 +187,33 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     error NothingQueued();
     error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
     error IsLiveCollateral(address collection, uint256 tokenId);
+    error NotChipped(address collection, uint256 tokenId);
 
     /// @param multisig     Owner. Two-step ownership transfer.
     /// @param chipToken_   $CHIP.
     /// @param feeSplitter_ Where fees go.
     /// @param treasury_    Where liquidated collateral goes.
     /// @param terms_       Term lengths, per-term fees and the liquidation bounty.
-    constructor(address multisig, address chipToken_, address feeSplitter_, address treasury_, Terms memory terms_)
-        Ownable(multisig)
-    {
-        if (multisig == address(0) || chipToken_ == address(0) || feeSplitter_ == address(0) || treasury_ == address(0))
-        {
+    /// @param activation_  {ChipActivation}. Read to enforce the chip gate on {borrow}.
+    constructor(
+        address multisig,
+        address chipToken_,
+        address feeSplitter_,
+        address treasury_,
+        address activation_,
+        Terms memory terms_
+    ) Ownable(multisig) {
+        if (
+            multisig == address(0) || chipToken_ == address(0) || feeSplitter_ == address(0) || treasury_ == address(0)
+                || activation_ == address(0)
+        ) {
             revert ZeroAddress();
         }
         chipToken = IERC20(chipToken_);
         feeSplitter = feeSplitter_;
         treasury = treasury_;
+        activationSource = IActivationSource(activation_);
+        emit ActivationSourceSet(address(0), activation_);
         _validateTerms(terms_);
         _terms = terms_;
         emit TermsExecuted(terms_.length, terms_.feeBps, terms_.bountyBps);
@@ -227,6 +245,22 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
 
         if (_openLoanOf[collection][tokenId] != 0) revert AlreadyCollateral(collection, tokenId);
         if (IERC721(collection).ownerOf(tokenId) != msg.sender) revert NotNounOwner(collection, tokenId, msg.sender);
+
+        // THE CHIP GATE. The Noun must be actively chipped, to this borrower, right now.
+        //
+        // Lending is a holder benefit, not a standalone product: the whole proposition is
+        // "your collateral keeps earning", which is meaningless for a Noun that was not
+        // earning to begin with. Gating here also means the pool's collateral is drawn from
+        // holders with $CHIP already burned against that exact token, rather than from
+        // anyone who happens to hold a Noun.
+        //
+        // Read from the activation source, not from a flag of our own, so it is the SAME
+        // effective-owner computation that decides weight in a round — there is no second
+        // notion of "chipped" to drift out of step. The chip then rides through custody by
+        // the custodian design: this contract names the borrower as beneficiary, so
+        // depositing is not a sale and the activation survives the loan untouched.
+        (bool chipped,, address chipOwner) = activationSource.activation(collection, tokenId);
+        if (!chipped || chipOwner != msg.sender) revert NotChipped(collection, tokenId);
 
         // The whole principal leaves the pool: the payout to the borrower plus the fee.
         if (principal > poolBalance) revert PoolTooSmall(principal, poolBalance);
@@ -384,6 +418,14 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         return (true, slot - 1);
     }
 
+    /// @notice Whether `tokenId` would pass the chip gate for `who` right now.
+    /// @dev So the site can grey out "Borrow" with a reason rather than letting someone
+    ///      discover the rule from a reverted transaction.
+    function isChippedFor(address collection, uint256 tokenId, address who) external view returns (bool) {
+        (bool chipped,, address chipOwner) = activationSource.activation(collection, tokenId);
+        return chipped && chipOwner == who;
+    }
+
     function isCollateral(address collection, uint256 tokenId) public view returns (bool) {
         return _openLoanOf[collection][tokenId] != 0;
     }
@@ -486,6 +528,17 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         if (v == address(0)) revert ZeroAddress();
         emit FeeSplitterSet(feeSplitter, v);
         feeSplitter = v;
+    }
+
+    /// @notice Repoint at a new activation vault. Multisig only.
+    /// @dev Only affects NEW borrows. An open loan is never re-checked against the gate:
+    ///      a borrower who lets their chip lapse mid-loan keeps their loan, they simply stop
+    ///      earning. Losing a Noun over a lapsed chip would be a wildly disproportionate
+    ///      penalty, and would hand a liquidation trigger to whoever controls the vault.
+    function setActivationSource(address v) external onlyOwner {
+        if (v == address(0)) revert ZeroAddress();
+        emit ActivationSourceSet(address(activationSource), v);
+        activationSource = IActivationSource(v);
     }
 
     /* ------------------------------------------------------------------ */

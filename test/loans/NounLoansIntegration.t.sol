@@ -39,7 +39,7 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         t.length = [uint64(30 days), 90 days, 180 days];
         t.feeBps = [uint32(200), 500, 900];
         t.bountyBps = 200;
-        loans = new NounLoans(multisig, address(chip), feeSplitterAddr, loanTreasury, t);
+        loans = new NounLoans(multisig, address(chip), feeSplitterAddr, loanTreasury, address(activation), t);
 
         vm.startPrank(multisig);
         rounds.setActivationSource(address(activation));
@@ -118,23 +118,85 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         assertEq(nvda.balanceOf(alice), 5e8);
     }
 
-    /// @notice And the other order: deposit first, chip from inside the vault.
-    function test_aBorrowerCanChipFromInsideTheVault() public {
-        basedNouns.mint(alice, 1);
-        _deposit(alice, 1, 1, 2_000 ether);
+    /// @notice THE CHIP GATE. An unchipped Noun cannot be borrowed against, so the ordering
+    ///         is now forced: chip first, then borrow.
+    ///
+    /// @dev This replaces a test that did it the other way round — deposit, then chip from
+    ///      inside the vault. That is no longer reachable *through NounLoans*, by design: the
+    ///      gate is the point. The underlying capability still exists and is still exercised,
+    ///      because `ChipActivation.activate` resolves through a registered custodian —
+    ///      see `test_chipWhileCollateralised` in `test/activation/ChipActivation.t.sol`, and
+    ///      the upgrade-from-custody test below.
+    function test_anUnchippedNounCannotBeBorrowedAgainst() public {
+        basedNouns.mint(alice, 1); // never chipped
 
         vm.startPrank(alice);
-        activation.activate(address(basedNouns), 1, 3); // 2.00x, Noun is in the vault
-        rounds.setSplit(address(basedNouns), 1, _one(address(nvda)), _one(uint8(100)));
+        basedNouns.approve(address(loans), 1);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.NotChipped.selector, address(basedNouns), 1));
+        loans.borrow(address(basedNouns), 1, 1, 2_000 ether);
         vm.stopPrank();
 
+        assertEq(basedNouns.ownerOf(1), alice, "her Noun never moved");
+        assertEq(loans.openLoanCount(), 0);
+
+        // Chip it, and the identical call now works.
+        vm.startPrank(alice);
+        activation.activate(address(basedNouns), 1, 3);
+        loans.borrow(address(basedNouns), 1, 1, 2_000 ether);
+        vm.stopPrank();
+
+        assertEq(basedNouns.ownerOf(1), address(loans));
+        assertEq(loans.openLoanCount(), 1);
+    }
+
+    /// @notice The chip rides through custody untouched — the whole reason the gate is safe
+    ///         to impose. Tier, owner and active state are identical before and after.
+    function test_theChipStaysLiveForTheWholeLoan() public {
+        _mintAndChip(alice, 1, 4); // 3.33x
+        (bool activeBefore, uint32 bpsBefore, address ownerBefore) = activation.activation(address(basedNouns), 1);
+
+        uint256 loanId = _deposit(alice, 1, 2, 5_000 ether); // 180-day term
+
+        (bool activeIn, uint32 bpsIn, address ownerIn) = activation.activation(address(basedNouns), 1);
+        assertTrue(activeIn, "still chipped the instant it is deposited");
+        assertEq(bpsIn, bpsBefore);
+        assertEq(ownerIn, ownerBefore);
+        assertTrue(activeBefore);
+
+        // ...and all the way through the term, with rounds paying out on it.
+        vm.warp(block.timestamp + 179 days);
+        assertTrue(activation.isActive(address(basedNouns), 1), "still live at day 179");
+        assertEq(activation.effectiveOwner(address(basedNouns), 1), alice);
+
+        _setSplit(address(basedNouns), 1, alice, _one(address(nvda)), _one(uint8(100)));
         _fundPot(1_000e6);
         uint256 id = _openAndAccumulate(_ids(1));
-        assertEq(rounds.getRound(id).totalWeight, 20_000);
+        assertEq(rounds.getRound(id).totalWeight, 33_300, "and still earning at full tier");
 
-        rounds.settleStock(id, address(nvda));
-        rounds.finalizeRound(id);
-        assertEq(claims.claimable(id, address(nvda), alice), 5e8);
+        vm.prank(alice);
+        loans.repay(loanId);
+        (bool activeAfter, uint32 bpsAfter, address ownerAfter) = activation.activation(address(basedNouns), 1);
+        assertTrue(activeAfter);
+        assertEq(bpsAfter, bpsBefore, "unchanged by the entire round trip");
+        assertEq(ownerAfter, ownerBefore);
+    }
+
+    /// @notice And liquidation is what ends it — the same act that ends the loan.
+    function test_liquidationResetsTheChip() public {
+        _mintAndChip(alice, 1, 4);
+        uint256 loanId = _deposit(alice, 1, 0, 1_000 ether);
+        assertTrue(activation.isActive(address(basedNouns), 1));
+
+        vm.warp(loans.deadlineOf(loanId) + 1);
+        vm.prank(keeper);
+        loans.liquidate(loanId);
+
+        assertFalse(activation.isActive(address(basedNouns), 1), "the chip died with the loan");
+        assertEq(activation.effectiveOwner(address(basedNouns), 1), loanTreasury);
+        (bool active, uint32 bps, address owner) = activation.activation(address(basedNouns), 1);
+        assertFalse(active);
+        assertEq(bps, 0);
+        assertEq(owner, address(0));
     }
 
     /// @notice Upgrading a tier while collateralised.

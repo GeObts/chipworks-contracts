@@ -16,7 +16,8 @@ Start here:
 | [AUDIT_BRIEF.md](AUDIT_BRIEF.md) | Contract list, dependencies, claimed invariants, what to attack first |
 | [ASSUMPTIONS.md](ASSUMPTIONS.md) | Every guess about a contract we do not control, and every decision you can overrule |
 | [OPEN_ITEMS.md](OPEN_ITEMS.md) | What is still unresolved |
-| [DEPLOY.md](DEPLOY.md) | Deploy order, constructor arguments, verified addresses |
+| [LAUNCH_CONFIG.md](LAUNCH_CONFIG.md) | **The runbook.** Locked launch parameters merged with the deploy sequence — start here on the day |
+| [DEPLOY.md](DEPLOY.md) | Deploy order, constructor arguments, verified addresses, and why each is wired that way |
 | [B20_DOCS.md](B20_DOCS.md) | Base's tokenized-stock documentation, filed verbatim — the source the B20 reconciliation in ASSUMPTIONS is checked against |
 | [CLUTCH_RECON.md](CLUTCH_RECON.md) · [CLUTCH_LICENSES.md](CLUTCH_LICENSES.md) | Why Chipworks runs its own activation vault instead of depending on Clutch |
 

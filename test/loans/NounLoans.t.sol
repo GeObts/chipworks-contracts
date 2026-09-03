@@ -20,6 +20,7 @@ contract NounLoansTest is Test {
     address internal treasury = makeAddr("treasury");
 
     NounLoans internal loans;
+    ChipActivation internal activation;
     MockERC20 internal chip;
     MockNoun internal based;
     MockNoun internal dark;
@@ -32,11 +33,19 @@ contract NounLoansTest is Test {
         based = new MockNoun("Based Nouns", "BASED");
         dark = new MockNoun("DarkNOUNs", "DARK");
 
-        loans = new NounLoans(multisig, address(chip), splitter, treasury, _defaultTerms());
+        // The chip gate reads a real ChipActivation. Costs are all zero here so chipping is
+        // free and cannot perturb the $CHIP balances these tests assert on; the gate is
+        // about the activation EXISTING, not about what it cost.
+        activation = new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        _priceFree(address(based));
+        _priceFree(address(dark));
+
+        loans = new NounLoans(multisig, address(chip), splitter, treasury, address(activation), _defaultTerms());
 
         vm.startPrank(multisig);
         loans.setMaxPrincipal(address(based), CAP);
         loans.setMaxPrincipal(address(dark), CAP);
+        activation.setCustodian(address(loans), true);
         vm.stopPrank();
 
         _seedPool(500_000 ether);
@@ -58,6 +67,38 @@ contract NounLoansTest is Test {
         t.bountyBps = 200;
     }
 
+    function _priceFree(address collection) internal {
+        vm.prank(multisig);
+        activation.queueCosts(collection, [uint256(0), 0, 0, 0, 0]);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        activation.executeCosts(collection);
+    }
+
+    /// @dev Mint and chip, which every borrow now requires.
+    function _mintAndChip(address who, uint256 tokenId) internal {
+        based.mint(who, tokenId);
+        vm.prank(who);
+        activation.activate(address(based), tokenId, 0);
+    }
+
+    /// @dev A fresh NounLoans on a different $CHIP, with its own ChipActivation priced free
+    ///      so the chip gate can be satisfied without the hostile token being involved in it.
+    function _pairOn(address token) internal returns (NounLoans l2, ChipActivation a2) {
+        a2 = new ChipActivation(multisig, token, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        vm.prank(multisig);
+        a2.queueCosts(address(based), [uint256(0), 0, 0, 0, 0]);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        a2.executeCosts(address(based));
+
+        l2 = new NounLoans(multisig, token, splitter, treasury, address(a2), _defaultTerms());
+        vm.startPrank(multisig);
+        l2.setMaxPrincipal(address(based), CAP);
+        a2.setCustodian(address(l2), true);
+        vm.stopPrank();
+    }
+
     function _seedPool(uint256 amount) internal {
         chip.mint(multisig, amount);
         vm.startPrank(multisig);
@@ -67,7 +108,7 @@ contract NounLoansTest is Test {
     }
 
     function _borrow(address who, uint256 tokenId, uint8 term, uint256 principal) internal returns (uint256 loanId) {
-        based.mint(who, tokenId);
+        _mintAndChip(who, tokenId);
         vm.startPrank(who);
         based.approve(address(loans), tokenId);
         loanId = loans.borrow(address(based), tokenId, term, principal);
@@ -137,7 +178,7 @@ contract NounLoansTest is Test {
     }
 
     function test_theCapIsEnforcedPerCollection() public {
-        based.mint(alice, 1);
+        _mintAndChip(alice, 1);
         vm.startPrank(alice);
         based.approve(address(loans), 1);
         vm.expectRevert(abi.encodeWithSelector(NounLoans.PrincipalTooLarge.selector, CAP + 1, CAP));
@@ -156,7 +197,7 @@ contract NounLoansTest is Test {
     }
 
     function test_cannotBorrowAgainstSomebodyElsesNoun() public {
-        based.mint(alice, 1);
+        _mintAndChip(alice, 1);
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(NounLoans.NotNounOwner.selector, address(based), 1, bob));
         loans.borrow(address(based), 1, 0, 100 ether);
@@ -176,7 +217,7 @@ contract NounLoansTest is Test {
         vm.prank(multisig);
         loans.withdrawPool(drain, multisig);
 
-        based.mint(alice, 1);
+        _mintAndChip(alice, 1);
         vm.startPrank(alice);
         based.approve(address(loans), 1);
         vm.expectRevert(abi.encodeWithSelector(NounLoans.PoolTooSmall.selector, 1_000 ether, 500 ether));
@@ -185,13 +226,105 @@ contract NounLoansTest is Test {
     }
 
     function test_badTermAndZeroPrincipalAreRefused() public {
-        based.mint(alice, 1);
+        _mintAndChip(alice, 1);
         vm.startPrank(alice);
         based.approve(address(loans), 1);
         vm.expectRevert(abi.encodeWithSelector(NounLoans.BadTerm.selector, 3));
         loans.borrow(address(based), 1, 3, 100 ether);
         vm.expectRevert(NounLoans.ZeroPrincipal.selector);
         loans.borrow(address(based), 1, 0, 0);
+        vm.stopPrank();
+    }
+
+    /* ------------------------------- the chip gate --------------------------- */
+
+    /// @notice Lending is a holder benefit. An unchipped Noun is refused, by name.
+    function test_anUnchippedNounIsRefused() public {
+        based.mint(alice, 1); // minted, never chipped
+
+        vm.startPrank(alice);
+        based.approve(address(loans), 1);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.NotChipped.selector, address(based), 1));
+        loans.borrow(address(based), 1, 0, 1_000 ether);
+        vm.stopPrank();
+
+        assertEq(based.ownerOf(1), alice, "nothing was taken");
+        assertEq(loans.openLoanCount(), 0);
+        assertFalse(loans.isChippedFor(address(based), 1, alice));
+    }
+
+    /// @notice A Noun chipped by someone ELSE does not let this caller borrow. Belt and
+    ///         braces: `ownerOf` already gates it, but the two checks must agree.
+    function test_aNounChippedByAnotherOwnerDoesNotLetYouBorrow() public {
+        _mintAndChip(alice, 1);
+        vm.prank(alice);
+        based.transferFrom(alice, bob, 1); // sold; the chip is now void
+
+        vm.startPrank(bob);
+        based.approve(address(loans), 1);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.NotChipped.selector, address(based), 1));
+        loans.borrow(address(based), 1, 0, 1_000 ether);
+        vm.stopPrank();
+    }
+
+    /// @notice A LAPSED chip is refused too — the gate reads live effective state, not a
+    ///         "was once chipped" flag.
+    function test_aLapsedChipIsRefused() public {
+        _mintAndChip(alice, 1);
+        assertTrue(loans.isChippedFor(address(based), 1, alice));
+
+        // Sold and bought back by bob: the record still names alice, so it is void for him.
+        vm.prank(alice);
+        based.transferFrom(alice, bob, 1);
+        assertFalse(loans.isChippedFor(address(based), 1, bob));
+
+        vm.startPrank(bob);
+        based.approve(address(loans), 1);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.NotChipped.selector, address(based), 1));
+        loans.borrow(address(based), 1, 0, 1_000 ether);
+        vm.stopPrank();
+    }
+
+    function test_aChippedNounBorrowsNormally() public {
+        _mintAndChip(alice, 1);
+        assertTrue(loans.isChippedFor(address(based), 1, alice), "the site can see it will work");
+
+        vm.startPrank(alice);
+        based.approve(address(loans), 1);
+        uint256 id = loans.borrow(address(based), 1, 0, 1_000 ether);
+        vm.stopPrank();
+
+        assertEq(loans.getLoan(id).borrower, alice);
+        assertEq(based.ownerOf(1), address(loans));
+    }
+
+    /// @notice The gate is checked at borrow time and NEVER re-checked. A borrower cannot
+    ///         lose their Noun over their chip, which would be a wildly disproportionate
+    ///         penalty and would hand a liquidation trigger to whoever controls the vault.
+    function test_theGateIsBorrowTimeOnlyAndCannotTriggerALiquidation() public {
+        _mintAndChip(alice, 1);
+        uint256 id = _borrowChipped(alice, 1, 0, 1_000 ether);
+
+        // De-register the custodian: the chip reads inactive from ChipActivation's side.
+        vm.prank(multisig);
+        activation.setCustodian(address(loans), false);
+        assertFalse(activation.isActive(address(based), 1), "the chip is now dark");
+
+        // The loan is untouched: not liquidatable, and repayable exactly as before.
+        assertFalse(loans.isLiquidatable(id));
+        vm.prank(alice);
+        loans.repay(id);
+        assertEq(based.ownerOf(1), alice, "she gets her Noun back regardless");
+    }
+
+    /// @dev Borrow a Noun already minted and chipped by `who`.
+    function _borrowChipped(address who, uint256 tokenId, uint8 term, uint256 principal)
+        internal
+        returns (uint256 loanId)
+    {
+        vm.startPrank(who);
+        based.approve(address(loans), tokenId);
+        loanId = loans.borrow(address(based), tokenId, term, principal);
         vm.stopPrank();
     }
 
@@ -337,7 +470,7 @@ contract NounLoansTest is Test {
         vm.prank(multisig);
         loans.setBorrowingPaused(true);
 
-        based.mint(bob, 2);
+        _mintAndChip(bob, 2);
         vm.startPrank(bob);
         based.approve(address(loans), 2);
         vm.expectRevert(NounLoans.BorrowingIsPaused.selector);
@@ -554,9 +687,7 @@ contract NounLoansTest is Test {
     /// @notice A $CHIP that reports a repayment it did not make must not free the Noun.
     function test_aLyingChipCannotFreeANoun() public {
         LyingToken liar = new LyingToken("Chipworks", "CHIP", 18);
-        NounLoans l2 = new NounLoans(multisig, address(liar), splitter, treasury, _defaultTerms());
-        vm.prank(multisig);
-        l2.setMaxPrincipal(address(based), CAP);
+        (NounLoans l2, ChipActivation a2) = _pairOn(address(liar));
 
         liar.mint(multisig, 50_000 ether);
         vm.startPrank(multisig);
@@ -566,6 +697,7 @@ contract NounLoansTest is Test {
 
         based.mint(alice, 1);
         vm.startPrank(alice);
+        a2.activate(address(based), 1, 0);
         based.approve(address(l2), 1);
         liar.approve(address(l2), type(uint256).max);
         uint256 id = l2.borrow(address(based), 1, 0, 1_000 ether);
@@ -583,7 +715,7 @@ contract NounLoansTest is Test {
     /// @notice And it cannot inflate the pool either.
     function test_aLyingChipCannotInflateThePool() public {
         LyingToken liar = new LyingToken("Chipworks", "CHIP", 18);
-        NounLoans l2 = new NounLoans(multisig, address(liar), splitter, treasury, _defaultTerms());
+        (NounLoans l2,) = _pairOn(address(liar));
 
         liar.mint(multisig, 1_000 ether);
         vm.startPrank(multisig);
@@ -598,9 +730,7 @@ contract NounLoansTest is Test {
 
     function test_aPausedChipBlocksBorrowingWithoutLosingTheNoun() public {
         PausableToken pt = new PausableToken("Chipworks", "CHIP", 18);
-        NounLoans l2 = new NounLoans(multisig, address(pt), splitter, treasury, _defaultTerms());
-        vm.prank(multisig);
-        l2.setMaxPrincipal(address(based), CAP);
+        (NounLoans l2, ChipActivation a2) = _pairOn(address(pt));
 
         pt.mint(multisig, 50_000 ether);
         vm.startPrank(multisig);
@@ -608,8 +738,11 @@ contract NounLoansTest is Test {
         l2.depositPool(50_000 ether);
         vm.stopPrank();
 
-        pt.setPaused(true);
         based.mint(alice, 1);
+        vm.prank(alice);
+        a2.activate(address(based), 1, 0); // free, so the pause does not block chipping
+
+        pt.setPaused(true);
         vm.startPrank(alice);
         based.approve(address(l2), 1);
         vm.expectRevert();

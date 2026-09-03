@@ -1,7 +1,11 @@
 # DEPLOY.md — Chipworks on Base (8453)
 
-Grows as each contract lands. Read `ASSUMPTIONS.md` first; several blockers there must be
-closed before anything is deployed to mainnet.
+**For the actual launch, read [LAUNCH_CONFIG.md](LAUNCH_CONFIG.md) instead.** It merges this
+sequence with the locked economics — $CHIP settings, the initial buy, the computed cost
+table, the launch caps — and is the file to execute from. This one explains *why* each
+contract is wired the way it is, and stays the reference when a decision needs re-examining.
+
+Read `ASSUMPTIONS.md` first.
 
 Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs.
 
@@ -709,6 +713,53 @@ Post-deploy checks:
 - take one small loan on a fork and confirm the Noun still scores weight in a round — that
   is the whole product, and it is the thing to check before anyone borrows for real
 - `recoverExcess(CHIP, ...)` moves nothing while the pool is exactly backed
+
+### 10. Anvil — **built**
+
+Buy a Noun from the protocol's shelf at a fixed price, in ETH. **Buy side only at launch.**
+
+Needs: `MULTISIG`, `FeeSplitter` (step 1), and Nouns to shelve.
+
+| Arg | Value | Meaning |
+|---|---|---|
+| `multisig` | `MULTISIG` | Owner. |
+| `feeSplitter_` | FeeSplitter from step 1 | **100% of revenue**, forwarded in the same transaction. |
+| `premiumBps` | `2500` | +25% to pick a specific Noun rather than take the next in line. |
+
+Then, from the multisig:
+
+| Call | Meaning |
+|---|---|
+| `collection.setApprovalForAll(anvil, true)` then `shelve(collection, ids[])` | **Deposit order IS sale order.** |
+| `queueQueuePrice(collection, wei)` → 48h → `executeQueuePrice(collection)` | The Box price. Zero means not for sale. |
+| `setPaused(collection, bool)` | Immediate halt. Does not disturb the shelf. |
+
+**Two ways to buy, and the difference is the product.** `buyNext` is the Box: it pays
+`queuePrice` for **the oldest Noun on the shelf**, and you do not choose. It is FIFO by
+design — `nextOnShelf(collection)` returns exactly which token you will receive before you
+call, so it is a queue with a readable head, **not a lottery**. Say that plainly on the site;
+"mystery box" invites the opposite assumption. `snipe` lets you pick any shelved Noun for
+`queuePrice × 1.25`, and sniping does **not** reorder the queue — the token is unlisted in
+place and the FIFO cursor skips it.
+
+**The sell side is not built.** `sellToAnvil` always reverts `SellNotOpen` and `sellEnabled`
+is a constant `false` **with no setter**, so it cannot be switched on by mistake. A
+guaranteed exit is a solvency commitment; it ships after the audit, in a deployment that
+implements it. The site reads `sellEnabled()` and says so.
+
+**A purchased Noun arrives un-chipped**, structurally: the Anvil is not a registered
+custodian, so shelving voids any prior activation and the buyer chips it themselves.
+
+**Withdrawals come off the TAIL.** `unshelve` pops from the most-recently-shelved end, so the
+multisig can shrink the shelf but can never take the Noun the next buyer is about to receive.
+
+Post-deploy checks:
+- `owner()` is the multisig, `feeSplitter()` is right
+- `sellEnabled()` is **false**, and `sellToAnvil` reverts `SellNotOpen`
+- `nextOnShelf(collection)` names the token you expect to go first
+- `prices(collection)` returns `(queuePrice, queuePrice + 25%)`
+- buy one at the exact price: confirm 100% landed at the FeeSplitter and
+  `address(anvil).balance` is **0** — the Anvil has no ETH withdraw path by design
 
 ---
 

@@ -299,10 +299,16 @@ that can cost a borrower their Noun while they are trying to pay.**
 The invariant is that a loan must never pay more than selling would, or defaulting becomes
 the rational move and the pool systematically buys Nouns at above market.
 
-The Anvil does not exist as a contract on Base, so there is no price to read and this cannot
-be a `require`. It is a number the multisig sets per collection and must keep reviewing
-against the floor. `setMaxPrincipal` is deliberately un-timelocked in both directions so it
-can be cut to zero the moment a floor moves.
+**Updated 2026-09-03: the Anvil now exists**, so for the first time there is a concrete
+number to measure against — `Anvil.queuePrice(collection)`. LAUNCH_CONFIG sets
+`maxPrincipal` at **~60% of the Anvil queue price**.
+
+It still **cannot** be a `require`. The Anvil prices in ETH and the loan cap is denominated
+in $CHIP, so enforcing the relationship on chain would mean trusting a $CHIP/ETH price inside
+the borrow path — importing an oracle dependency, and a manipulable one, to defend against a
+governance mistake. That is the wrong trade. It stays a number the multisig sets and must
+re-check whenever **either** side moves. `setMaxPrincipal` is deliberately un-timelocked in
+both directions so it can be cut to zero the moment a floor moves.
 
 **Worth building before volume:** an off-chain monitor that compares outstanding principal
 per collection against the observed floor and alerts when the ratio drifts. Not built.
@@ -383,3 +389,49 @@ silent-failure shape so it stays documented rather than becoming folklore.
 **Recovery is total and cheap**, which is what makes this acceptable: one call, retroactive,
 no action needed from any borrower, nothing lost in the meantime beyond the rounds that
 passed unnoticed.
+
+---
+
+## 15. NEW: the Anvil ships one-directional
+
+`sellToAnvil` always reverts `SellNotOpen`, and `sellEnabled` is a `constant false` **with no
+setter**. The buy side is live; the guaranteed exit is not built.
+
+**Why it is not a flag someone can flip.** A switch that exposes an unimplemented function is
+worse than no switch — it invites exactly one bad afternoon. Turning the sell side on means
+deploying the version that implements it, and the interface stub exists so the ABI and the
+site can be honest in the meantime rather than silently omitting a feature that has been
+talked about.
+
+**What has to be answered before it ships**, none of which is a contract question:
+
+- **What backs the bid.** A guaranteed exit is a standing offer to buy, and something has to
+  fund it. POL? A dedicated reserve? Round revenue?
+- **What happens when the backing runs out.** A floor that disappears under load is worse
+  than no floor, because people will have sized decisions against it.
+- **Who is left holding it.** If the protocol buys back at a floor while the market is below
+  it, the protocol is the counterparty to every seller at once.
+
+Those are solvency questions, not Solidity ones, and they should be answered on paper before
+anybody writes the function. Post-audit.
+
+## 16. NEW: the chip gate makes lending a holder benefit, and forecloses one ordering
+
+`NounLoans.borrow` now requires the collateral to be actively chipped **to the borrower**.
+
+**What it buys:** the pool's collateral is drawn from holders who have already burned $CHIP
+against that exact token, and "your collateral keeps earning" is not a claim made to somebody
+whose Noun was never earning.
+
+**What it costs:** *borrow first, chip later* is no longer possible through NounLoans. The
+ordering is forced — chip, then borrow. The underlying capability is unchanged and still
+tested (`ChipActivation.activate` resolves through a registered custodian, so a Noun already
+in the vault can be chipped and upgraded), but a user cannot enter that state via a loan any
+more. The site must lead with "chip it first", or the first thing a new borrower meets is a
+revert.
+
+**Deliberately checked at borrow time only, and never re-checked.** A borrower who lets their
+chip lapse keeps their loan and simply stops earning. Re-checking would turn a lapsed chip
+into a liquidation trigger — a wildly disproportionate penalty, and one that would hand the
+trigger to whoever controls the activation vault. `test_theGateIsBorrowTimeOnlyAndCannotTriggerALiquidation`
+pins that.

@@ -9,8 +9,8 @@ it earns.
 runs its own activation vault instead of depending on Clutch; see §7.
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
-**Size:** ~2,720 lines of non-comment source across 11 contracts + 1 base + 14 interfaces.
-**Tests:** 557 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
+**Size:** ~3,030 lines of non-comment source across 12 contracts + 1 base + 14 interfaces.
+**Tests:** 593 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
 against a live Base mainnet fork.
 
 `B20_DOCS.md` in this repo is Base's own tokenized-stock documentation, filed verbatim. It is
@@ -50,19 +50,20 @@ paths, or a paid endpoint, avoids it.
 ## 1. What each contract does
 
 Runtime sizes, all inside the 24,000-byte budget the size guard enforces (EIP-170 is 24,576):
-ChipRounds 20,834 · POLTreasury 15,190 · NounLoans 12,704 · ChipClaims 12,879 ·
-ChipActivation 10,023 · Pot 9,042 · StockRegistry 8,971 · Furnace 7,711 · FeeSplitter 4,782 ·
-ClaimRouter 3,149 · ClutchVaultAdapter 3,151. ChipRounds has the least headroom at 3,742
-bytes and is the one to watch.
+ChipRounds 20,834 · POLTreasury 15,190 · NounLoans 13,425 · ChipClaims 12,879 ·
+ChipActivation 10,023 · Anvil 9,359 · Pot 9,042 · StockRegistry 8,971 · Furnace 7,711 ·
+FeeSplitter 4,782 · ClaimRouter 3,149 · ClutchVaultAdapter 3,151. ChipRounds has the least
+headroom at 3,742 bytes and is the one to watch.
 
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
 | `ChipRounds.sol` | 532 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
-| `loans/NounLoans.sol` | 339 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
+| `loans/NounLoans.sol` | 363 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
 | `ChipClaims.sol` | 333 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
 | `activation/ChipActivation.sol` | 264 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
+| `anvil/Anvil.sol` | 291 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
 | `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn Lils + $CHIP to forge a Noun. **Outside the money path** |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
 | `FeeSplitter.sol` | 138 | transiently | Three-way split of every inflow: Pot / ops / POL |
@@ -153,6 +154,12 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
     skipped for a stale feed, a broken swap or a disabled market. No skip ever costs a cent.
 19. **No contract in `src/` identifies a stock by anything but its address**, enforced by a
     build-failing scan rather than by review.
+20. **The Anvil never holds ETH.** 100% of every sale is forwarded in the same transaction
+    and there is no withdraw path, so a balance would mean something already went wrong.
+21. **A snipe never reorders the FIFO queue**, and `buyNext` always returns the oldest token
+    still on the shelf.
+22. **A Noun cannot be borrowed against unless it is actively chipped to the borrower**, and
+    the chip survives custody untouched for the life of the loan.
 
 ## 4. Attack this first
 
@@ -359,7 +366,7 @@ the multisig-set activation source. The argument that this is not a new power: t
 contract already decides whose weight counts in every round, which is strictly more. Judge
 that argument.
 
-### 4.5b LENDING — `loans/NounLoans.sol` (339 LOC), NEW AND HOLDS ASSETS
+### 4.5b LENDING — `loans/NounLoans.sol` (363 LOC), NEW AND HOLDS ASSETS
 
 Borrow $CHIP against a Noun at a flat fee for a fixed term. It holds collateral NFTs and the
 lending pool, so it holds real value; but its accounting is deliberately simple — a flat fee
@@ -385,6 +392,14 @@ Attack, in order:
   callbacks and a hostile $CHIP.
 - **The repay deadline.** Repayment is refused after maturity plus the 7-day grace, even if
   nobody has liquidated yet. That is a deliberate, and harsh, product rule — see OPEN_ITEMS.
+- **The chip gate.** `borrow` requires the collateral to be actively chipped **to the
+  borrower** at that moment, read from the activation source rather than from a flag of this
+  contract's own — so there is only one notion of "chipped" and it cannot drift. Check the
+  gate cannot be satisfied by a lapsed or someone else's activation. Note it is checked at
+  borrow time and **never re-checked**: a borrower who loses their chip mid-loan keeps their
+  loan and simply stops earning. Re-checking would make a lapsed chip a liquidation trigger
+  and hand that trigger to whoever controls the vault, which is a far worse property than the
+  one it would buy.
 
 **Not enforceable on chain:** `maxPrincipal` must sit below Anvil parity so borrowing is
 never a better exit than selling. The Anvil is not a contract on Base, so there is nothing to
@@ -448,6 +463,44 @@ stock, so it cannot silently become someone's output.
 
 28 tests in `test/furnace/Furnace.t.sol`. Runtime size 7,711 bytes, and it is now covered by
 the `test/CodeSize.t.sol` guard alongside the money-path contracts.
+
+### 4.8b THE ANVIL — `anvil/Anvil.sol` (291 LOC), HOLDS NOUNS AND TAKES ETH
+
+The protocol's shop: a FIFO shelf of Nouns at a fixed ETH price. Like the Furnace it is
+outside the reward path — it cannot touch a credit, a round or the ledger — but unlike the
+Furnace it **takes money from the public**, so scope it accordingly.
+
+**Attack the payment tail first.** `_settle` is the only place ETH moves:
+
+- 100% of the price is forwarded to the FeeSplitter **in the same transaction**, and the
+  contract has **no ETH withdraw path at all**. Confirm there is genuinely none — that is
+  what makes "the Anvil holds no ETH" a structural claim rather than a policy.
+- A failed forward **reverts the sale** rather than holding the money. Deliberate: with no
+  withdraw path, a sale that could not forward would strand the proceeds permanently.
+- Overpayment is refunded, and that refund is the **only** callback in the contract. The
+  Noun is handed over with `transferFrom`, not `safeTransferFrom`, so there is no ERC-721
+  receiver hook to re-enter through. Both paths are tested; check the ordering holds.
+
+**Then the queue, which is the product.** `buyNext` is FIFO and `nextOnShelf` makes the head
+readable before anyone commits — the claim is that this is a queue, not a lottery. `snipe`
+takes a specific token at +25% and **unlists it in place**, so the cursor skips it and nobody
+is promoted past anybody. Attack: can a snipe reorder the queue, can a token be bought twice
+by the two routes racing, can the cursor be made to skip a still-listed token or to revisit a
+sold one? The cursor is persisted as it advances, which is what keeps `buyNext` from becoming
+quadratic on a heavily-sniped shelf — check it can never move backwards.
+
+**`unshelve` takes from the TAIL**, same rule as the Furnace: the multisig can shrink the
+shelf but never take the Noun the next buyer is about to receive. It also has to cope with
+tail entries that were already sniped; confirm the skipping cannot lose a listed token.
+
+**The sell side does not exist and cannot be switched on.** `sellEnabled` is a `constant`
+`false` with no setter, and `sellToAnvil` always reverts `SellNotOpen`. That is the honest
+shape for an unbuilt solvency commitment: a flag the site can read, and no lever that could
+expose an unimplemented function. Verify there is no path to enabling it.
+
+**A purchased Noun arrives un-chipped**, structurally rather than by policy — the Anvil is
+not a registered custodian, so shelving voids any prior activation. Nothing here calls the
+activation vault at all, which is the property to confirm.
 
 ### 4.9 THE B20 SURFACE — where one claim is weaker than the rest
 

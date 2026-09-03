@@ -14,6 +14,7 @@ import {ClutchVaultAdapter} from "../src/adapters/ClutchVaultAdapter.sol";
 import {Furnace} from "../src/furnace/Furnace.sol";
 import {ChipActivation} from "../src/activation/ChipActivation.sol";
 import {NounLoans} from "../src/loans/NounLoans.sol";
+import {Anvil} from "../src/anvil/Anvil.sol";
 
 /// @title CodeSizeTest
 /// @notice Fails the build if any deployable contract grows past the budget.
@@ -85,7 +86,11 @@ contract CodeSizeTest is Test {
         loanTerms.length = [uint64(30 days), 90 days, 180 days];
         loanTerms.feeBps = [uint32(200), 500, 900];
         loanTerms.bountyBps = 200;
-        _check("NounLoans", address(new NounLoans(multisig, _erc20(), multisig, multisig, loanTerms)));
+        address activation =
+            address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]));
+        _check("NounLoans", address(new NounLoans(multisig, _erc20(), multisig, multisig, activation, loanTerms)));
+
+        _check("Anvil", address(new Anvil(multisig, multisig, 2_500)));
 
         // Outside the money path, but just as undeployable if it grows past the limit.
         _check("Furnace", address(_furnace()));
