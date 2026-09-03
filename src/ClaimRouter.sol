@@ -8,37 +8,48 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IChipRewardsClaimable} from "./interfaces/IChipRewardsClaimable.sol";
-import {IClutchVaultRegistry} from "./interfaces/IClutchVaultRegistry.sol";
-import {ISoftStakingVault} from "./interfaces/ISoftStakingVault.sol";
 
 /// @title ClaimRouter
-/// @notice One transaction that claims Chipworks stock and Clutch $CHIP together.
+/// @notice One transaction that collects every Chipworks credit a holder has.
 ///
-/// @dev THE GUARANTEE: routing must never be worse than claiming each side directly.
-///      Three properties deliver that, and each has a test named after it.
+/// @dev THE CLUTCH LEG IS GONE, AND THAT IS THE HEADLINE CHANGE.
+///
+///      This contract used to claim a second time against a Clutch soft-staking vault, on
+///      the assumption that `claim(tokenId)` would pay the owner of record whoever called
+///      it. On-chain recon settled that it does not: Clutch's `claim` is permissioned to the
+///      owner of record and reverts `NotOwner()` for anybody else, so a router calling it
+///      from its own address could never have worked (CLUTCH_RECON section 4). The leg
+///      degraded safely — every leg was independently failable — but it degraded to nothing
+///      on every single call, which is a feature that does not exist rather than one that
+///      sometimes fails.
+///
+///      Chipworks now runs its own activation vault, {ChipActivation}, and there is no
+///      second reward stream to collect: activation is a cost that burns, not a position
+///      that accrues. So "claim everything" means exactly what it says with one leg, and the
+///      router needs no vault registry, no foreign-vault ABI, and no guess about who a
+///      third party pays. Claiming is `ChipClaims.claimFor`, which is permissionless and
+///      always pays the owner — there is no special case left to handle.
+///
+///      WHAT SURVIVES, because it was never about Clutch:
 ///
 ///      1. EVERY LEG IS INDEPENDENT. Each claim is a separate bounded call whose failure is
-///         recorded, not propagated. A frozen stock, a dead vault, an already-claimed round
-///         — none of them can stop the other legs. The router only reverts if EVERY leg
-///         failed, which means the caller learns nothing worked rather than silently paying
-///         gas for a no-op.
+///         recorded, not propagated. A frozen stock or an already-claimed round cannot stop
+///         the others. The router reverts only if EVERY leg failed, so the caller learns
+///         nothing worked rather than silently paying gas for a no-op.
 ///
-///      2. THE ROUTER NEVER HOLDS ANYTHING. Chipworks pays the owner directly via
-///         `claimFor`, so the router is never the claimant. The Clutch side is the open
-///         question — its docs do not say whether `claim` pays the owner of record or the
-///         caller (ASSUMPTIONS A-9). Rather than bet on the answer, the router sweeps its
-///         own balance of every caller-listed token to the owner at the end. If Clutch pays
-///         the owner, the sweep is a no-op. If Clutch pays the caller, the sweep delivers
-///         it. Correct either way, with no redeploy if the guess was wrong.
+///      2. THE ROUTER NEVER HOLDS ANYTHING. `claimFor` pays the owner directly, so the
+///         router is never the claimant. {sweepTo} remains as a permissionless safety valve
+///         for anything that lands here by accident; it is not part of any normal path.
 ///
-///      The claim window gate lives in ChipRewards and the router neither adds to it nor
-///      works around it: while claims are shut every Chipworks leg fails with ClaimsClosed
-///      and the Clutch legs, which run on Clutch's own schedule, still settle.
+///      3. GAS IS BOUNDED PER LEG. A token that fails with an invalid opcode consumes every
+///         wei of gas handed to it (ASSUMPTIONS A-17). Without a per-leg cap one hostile
+///         entry would starve every leg after it, which is precisely the "routing is worse
+///         than direct" failure this contract must not have.
 ///
-///      3. GAS IS BOUNDED PER LEG. A token or vault that fails with an invalid opcode
-///         consumes every wei of gas handed to it (ASSUMPTIONS A-17). Without a per-leg cap
-///         one hostile entry would starve every leg after it, which is precisely the
-///         "routing is worse than direct" failure this contract must not have.
+///      The claim window gate lives in `ChipClaims` and the router neither adds to it nor
+///      works around it: while claims are shut every leg fails with `ClaimsClosed`, and
+///      {claimWindowStatus} exists so the site can grey out the button instead of letting
+///      people burn gas on a call that cannot succeed.
 contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -48,29 +59,16 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
         address stock;
     }
 
-    /// @notice One Clutch activation to claim $CHIP for.
-    struct ClutchClaim {
-        address collection;
-        uint256 tokenId;
-    }
-
-    /// @notice ChipRewards.
+    /// @notice ChipClaims — the ledger. `claimFor` lives there, not on the engine.
     IChipRewardsClaimable public rewards;
-
-    /// @notice The Clutch adapter, used only to look up which vault serves a collection.
-    /// @dev Reading the vault from the adapter keeps the whole Clutch seam in one place.
-    IClutchVaultRegistry public vaultRegistry;
 
     /// @notice Gas handed to each individual leg.
     uint256 public legGasLimit;
 
-    event Routed(
-        address indexed owner, uint256 chipSucceeded, uint256 chipFailed, uint256 clutchSucceeded, uint256 clutchFailed
-    );
-    event LegFailed(address indexed owner, bool isClutchLeg, uint256 index, bytes reason);
-    event Swept(address indexed owner, address indexed token, uint256 amount);
+    event Routed(address indexed owner, uint256 succeeded, uint256 failed);
+    event LegFailed(address indexed owner, uint256 index, bytes reason);
+    event Swept(address indexed to, address indexed token, uint256 amount);
     event RewardsUpdated(address indexed previous, address indexed current);
-    event VaultRegistryUpdated(address indexed previous, address indexed current);
     event LegGasLimitUpdated(uint256 previous, uint256 current);
 
     error ZeroAddress();
@@ -78,11 +76,10 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     error EverythingFailed();
     error BadGasLimit();
 
-    constructor(address multisig, address rewards_, address vaultRegistry_, uint256 legGasLimit_) Ownable(multisig) {
+    constructor(address multisig, address rewards_, uint256 legGasLimit_) Ownable(multisig) {
         if (multisig == address(0) || rewards_ == address(0)) revert ZeroAddress();
         if (legGasLimit_ < 100_000) revert BadGasLimit();
         rewards = IChipRewardsClaimable(rewards_);
-        vaultRegistry = IClutchVaultRegistry(vaultRegistry_);
         legGasLimit = legGasLimit_;
     }
 
@@ -96,12 +93,6 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
         rewards = IChipRewardsClaimable(v);
     }
 
-    /// @notice Repoint at a new Clutch adapter, e.g. once the real vault ABI is confirmed.
-    function setVaultRegistry(address v) external onlyOwner {
-        emit VaultRegistryUpdated(address(vaultRegistry), v);
-        vaultRegistry = IClutchVaultRegistry(v);
-    }
-
     /// @notice Tune the per-leg gas budget. Multisig only.
     function setLegGasLimit(uint256 v) external onlyOwner {
         if (v < 100_000) revert BadGasLimit();
@@ -113,71 +104,47 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     /*                               CLAIM                                  */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Claim Chipworks stock and Clutch $CHIP in one transaction.
-    /// @param chipClaims   Chipworks (round, stock) credits to collect.
-    /// @param clutchClaims Clutch activations to collect $CHIP for.
-    /// @param sweepTokens  Tokens to forward to the caller if any land on the router. Pass
-    ///                     $CHIP here. Harmless to over-list; leaving it empty is safe only
-    ///                     if Clutch pays the owner of record directly (ASSUMPTIONS A-9).
-    /// @return chipSucceeded   How many Chipworks legs paid out.
-    /// @return clutchSucceeded How many Clutch legs paid out.
-    function claimEverything(
-        ChipClaim[] calldata chipClaims,
-        ClutchClaim[] calldata clutchClaims,
-        address[] calldata sweepTokens
-    ) external nonReentrant returns (uint256 chipSucceeded, uint256 clutchSucceeded) {
-        if (chipClaims.length == 0 && clutchClaims.length == 0) {
-            revert NothingRequested();
-        }
+    /// @notice Claim many Chipworks credits in one transaction.
+    /// @param claims_ The (round, stock) credits to collect. Proceeds go to `msg.sender`,
+    ///                who must be the owner of the credit; a credit belonging to somebody
+    ///                else simply fails its leg.
+    /// @return succeeded How many legs paid out.
+    function claimEverything(ChipClaim[] calldata claims_) external nonReentrant returns (uint256 succeeded) {
+        if (claims_.length == 0) revert NothingRequested();
 
         address owner = msg.sender;
-        uint256 chipFailed;
-        uint256 clutchFailed;
+        uint256 failed;
 
-        for (uint256 i; i < chipClaims.length; ++i) {
-            (bool ok, bytes memory reason) = _claimChip(owner, chipClaims[i]);
+        for (uint256 i; i < claims_.length; ++i) {
+            (bool ok, bytes memory reason) = _claimChip(owner, claims_[i]);
             if (ok) {
-                ++chipSucceeded;
+                ++succeeded;
             } else {
-                ++chipFailed;
-                emit LegFailed(owner, false, i, reason);
-            }
-        }
-
-        for (uint256 i; i < clutchClaims.length; ++i) {
-            (bool ok, bytes memory reason) = _claimClutch(clutchClaims[i]);
-            if (ok) {
-                ++clutchSucceeded;
-            } else {
-                ++clutchFailed;
-                emit LegFailed(owner, true, i, reason);
+                ++failed;
+                emit LegFailed(owner, i, reason);
             }
         }
 
         // Nothing worked. Tell the caller rather than charging them for silence.
-        if (chipSucceeded == 0 && clutchSucceeded == 0) revert EverythingFailed();
+        if (succeeded == 0) revert EverythingFailed();
 
-        _sweep(owner, sweepTokens);
-
-        emit Routed(owner, chipSucceeded, chipFailed, clutchSucceeded, clutchFailed);
+        emit Routed(owner, succeeded, failed);
     }
 
     /// @notice Whether Chipworks claims are currently open, and when they next open.
     /// @dev The router does not add a gate of its own and does not bypass the one in
-    ///      ChipRewards. Chipworks legs simply fail while claims are shut, with the
-    ///      ClaimsClosed reason carried back per leg. Clutch legs are unaffected: their
-    ///      schedule is Clutch's, not ours. Exposed so the site can grey out the button
-    ///      rather than letting people burn gas on a call that cannot succeed.
+    ///      `ChipClaims`. Exposed so the site can grey out the button.
     function claimWindowStatus() external view returns (bool open, uint64 nextOpenAt) {
         open = rewards.isClaimOpen();
         nextOpenAt = rewards.nextWindowOpensAt();
     }
 
-    /// @notice Forward any tokens sitting on the router to the caller. Permissionless
-    ///         safety valve: the router is not supposed to hold balances, so anyone finding
-    ///         one stuck can push it out.
-    /// @dev Sends to `to`, not to `msg.sender`, so it can be used to rescue a specific
-    ///      user's stranded tokens without the caller being able to take them.
+    /// @notice Forward tokens sitting on the router to `to`. Permissionless safety valve.
+    /// @dev The router is not supposed to hold a balance at any point — `claimFor` pays the
+    ///      owner directly and the router is never the claimant — so this exists only for
+    ///      something that arrived by accident. It sends to `to` rather than to
+    ///      `msg.sender`, so it can rescue a specific user's stranded tokens without the
+    ///      caller being able to take them.
     function sweepTo(address to, address[] calldata tokens) external nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         _sweep(to, tokens);
@@ -187,7 +154,7 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     /*                             INTERNALS                                */
     /* ------------------------------------------------------------------ */
 
-    /// @dev Chipworks pays `owner` directly, so the router never becomes the claimant.
+    /// @dev ChipClaims pays `owner` directly, so the router never becomes the claimant.
     function _claimChip(address owner, ChipClaim calldata c) internal returns (bool, bytes memory) {
         (bool ok, bytes memory ret) = address(rewards).call{gas: legGasLimit}(
             abi.encodeCall(IChipRewardsClaimable.claimFor, (owner, c.roundId, c.stock))
@@ -195,19 +162,8 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
         return (ok, ok ? bytes("") : ret);
     }
 
-    /// @dev Clutch is foreign code. Bounded, and a missing vault is a failed leg, not a
-    ///      revert of the whole batch.
-    function _claimClutch(ClutchClaim calldata c) internal returns (bool, bytes memory) {
-        if (address(vaultRegistry) == address(0)) return (false, "no vault registry");
-        address vault = vaultRegistry.vaultOf(c.collection);
-        if (vault == address(0)) return (false, "no vault for collection");
-
-        (bool ok, bytes memory ret) = vault.call{gas: legGasLimit}(abi.encodeCall(ISoftStakingVault.claim, (c.tokenId)));
-        return (ok, ok ? bytes("") : ret);
-    }
-
-    /// @dev Each token is swept independently and a failure is skipped, so one frozen
-    ///      token cannot strand the others or undo the claims that already succeeded.
+    /// @dev Each token is swept independently and a failure is skipped, so one frozen token
+    ///      cannot strand the others.
     function _sweep(address to, address[] calldata tokens) internal {
         for (uint256 i; i < tokens.length; ++i) {
             address token = tokens[i];

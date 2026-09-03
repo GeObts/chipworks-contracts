@@ -11,6 +11,9 @@ import {Pot} from "../src/Pot.sol";
 import {FeeSplitter} from "../src/FeeSplitter.sol";
 import {ClaimRouter} from "../src/ClaimRouter.sol";
 import {ClutchVaultAdapter} from "../src/adapters/ClutchVaultAdapter.sol";
+import {Furnace} from "../src/furnace/Furnace.sol";
+import {ChipActivation} from "../src/activation/ChipActivation.sol";
+import {NounLoans} from "../src/loans/NounLoans.sol";
 
 /// @title CodeSizeTest
 /// @notice Fails the build if any deployable contract grows past the budget.
@@ -70,9 +73,33 @@ contract CodeSizeTest is Test {
         _check("ClutchVaultAdapter", adapter);
 
         _check("ChipRounds", address(new ChipRounds(multisig, registry, pot, adapter, claims, 5_000 ether)));
+        _check(
+            "ChipActivation",
+            address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]))
+        );
         _check("FeeSplitter", address(new FeeSplitter(multisig, multisig, multisig, 2_000, 2_000)));
         _check("POLTreasury", address(new POLTreasury(multisig, _erc20(), _nft(), multisig)));
-        _check("ClaimRouter", address(new ClaimRouter(multisig, claims, adapter, 1_000_000)));
+        _check("ClaimRouter", address(new ClaimRouter(multisig, claims, 1_000_000)));
+
+        NounLoans.Terms memory loanTerms;
+        loanTerms.length = [uint64(30 days), 90 days, 180 days];
+        loanTerms.feeBps = [uint32(200), 500, 900];
+        loanTerms.bountyBps = 200;
+        _check("NounLoans", address(new NounLoans(multisig, _erc20(), multisig, multisig, loanTerms)));
+
+        // Outside the money path, but just as undeployable if it grows past the limit.
+        _check("Furnace", address(_furnace()));
+    }
+
+    /// @dev Two valid recipes; amounts are irrelevant to runtime size.
+    function _furnace() internal returns (Furnace) {
+        return new Furnace(
+            multisig,
+            _erc20(),
+            _nft721(),
+            Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), lilCost: 5, chipCost: 1 ether}),
+            Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), lilCost: 10, chipCost: 2 ether})
+        );
     }
 
     /* --------------------------- tiny stand-ins --------------------------- */
@@ -86,6 +113,10 @@ contract CodeSizeTest is Test {
     }
 
     function _nft() internal returns (address a) {
+        a = address(new SizeStub());
+    }
+
+    function _nft721() internal returns (address a) {
         a = address(new SizeStub());
     }
 }

@@ -133,6 +133,18 @@ contract ClutchVaultAdapter is IActivationSource, Ownable2Step {
         return (true, bps, ownerOfRecord);
     }
 
+    /// @inheritdoc IActivationSource
+    /// @dev Clutch has no notion of custody, so the effective owner is simply the live
+    ///      ERC-721 owner. A Noun deposited anywhere — a loan escrow included — reads as
+    ///      owned by that contract, which is exactly why Chipworks stopped using this
+    ///      implementation. See {ChipActivation}.
+    function effectiveOwner(address collection, uint256 tokenId) external view override returns (address) {
+        (bool ok, bytes memory ret) =
+            collection.staticcall{gas: VAULT_PROBE_GAS}(abi.encodeCall(IERC721.ownerOf, (tokenId)));
+        if (!ok || ret.length < 32) return address(0);
+        return abi.decode(ret, (address));
+    }
+
     /// @dev Gas-capped so a hostile or broken collection cannot wedge a round.
     function _stillHeldBy(address collection, uint256 tokenId, address expected) internal view returns (bool) {
         (bool ok, bytes memory ret) =

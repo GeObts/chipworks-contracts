@@ -27,6 +27,20 @@ interface IActivationSource {
         view
         returns (bool active, uint32 tierBps, address owner);
 
+    /// @notice Who counts as the owner of `tokenId` for Chipworks' purposes.
+    /// @dev Normally just `IERC721.ownerOf`. An implementation that supports custody — a Noun
+    ///      locked as loan collateral is deposited, not sold — resolves through to the real
+    ///      beneficiary instead, so the depositor stays in control of their own Noun.
+    ///
+    ///      Used to authorise `setSplit`, which is why it is on this interface rather than
+    ///      only on the implementation: without it, depositing a Noun as collateral would
+    ///      silently take away the owner's ability to re-pick their stocks, even though the
+    ///      Noun keeps earning for them.
+    ///
+    ///      MUST NOT revert. Returns the zero address when there is no answer, which every
+    ///      caller must treat as "nobody" rather than as a match.
+    function effectiveOwner(address collection, uint256 tokenId) external view returns (address);
+
     /// @notice True if `collection` is one this source can answer for.
     function isSupportedCollection(address collection) external view returns (bool);
 }

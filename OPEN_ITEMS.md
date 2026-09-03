@@ -1,50 +1,76 @@
 # OPEN_ITEMS.md
 
 What the full-system fork test surfaced, plus everything still unresolved. Ordered by how
-much it matters. The **Clutch seam** is item 0 and is marked throughout.
+much it matters. Item 0 used to be the **Clutch seam**, the one blocker on the whole repo;
+it is now closed, and the section records how, because the reasoning shaped a lot of what
+came after.
 
-Updated 2026-08-28 after the weekly-claim-window change. Generated from `test/fork/FullSystem.t.sol`, which runs the whole machine —
+Updated 2026-09-02 after Clutch was dropped and replaced by our own activation vault. Generated from `test/fork/FullSystem.t.sol`, which runs the whole machine —
 fees in → convert → round → claims → expiry sweep → POL mint → POL income back out — on a
 Base mainnet fork.
 
 ---
 
-## 0. THE CLUTCH SEAM — the one thing the test cannot verify
+## 0. THE CLUTCH SEAM — **CLOSED. The dependency is gone.**
 
-**Status: blocked on Clutch. Everything below it is our code; this is not.**
+**Was:** the one thing the full-system test could not verify. Everything vault-facing ran
+against a mock, seven assumptions (A-1 … A-9) were unverifiable, and the whole repo was
+frozen pending answers from Clutch that never came.
 
-The full-system test is real end to end *except* the Clutch soft-staking vault, which is a
-mock. It has to be: Clutch publishes no Base deployment at all (ApeChain 33139 and Robinhood
-4663 only), so there is nothing on Base to point at.
+**Now:** Chipworks runs its own activation vault, `src/activation/ChipActivation.sol`, behind
+the same `IActivationSource` interface `ChipRounds` already read. There is no third party in
+the weight path. `ClutchVaultAdapter` is retired in place — it still compiles and still has
+tests, and it is not deployed.
 
-Everything that depends on the vault is therefore unproven against reality:
+Three things settled it, in increasing order of how decisive they were:
 
-| Assumption | What we guessed | Blast radius if wrong |
+1. **No Base deployment, and no reply.** Four known Clutch factory/router addresses, all
+   empty on Base (`CLUTCH_RECON.md` §1).
+2. **BUSL-1.1.** The V3 generation that has non-custodial soft staking is source-available,
+   not open source. The MIT generation on ApeChain has no soft-staking vault at all — it
+   ships `NFTStakingVault`, custodial deposit (`CLUTCH_LICENSES.md`).
+3. **Their custody semantics cannot express ours**, and this one would have decided it even
+   with a Base deployment and a licence. Clutch voids an activation when the NFT moves, full
+   stop. Chipworks needs a Noun locked as loan collateral to keep earning **for the
+   borrower**, which means the vault has to tell a deposit from a sale. Nothing outside the
+   vault can add that.
+
+**What the replacement buys, beyond removing a dependency:**
+
+| | Clutch | ChipActivation |
 |---|---|---|
-| A-1 | Clutch will deploy on Base | Total. No foundation. |
-| A-2 | "Anvil V3" exists and does non-custodial soft staking | Wrong product. |
-| A-3 | One vault per collection | Based #5 and Dark #5 collide |
-| A-4 | `isActive(tokenId)` | Every round reverts. Loud. |
-| A-5 | `tierOf(tokenId)` | Every round reverts. Loud. |
-| A-6 | `ownerOfRecord(tokenId)` | Rewards booked to the wrong address |
-| A-8 | Voiding may be lazy, so we re-check the live NFT owner ourselves | Already mitigated |
-| A-9 | `claim` pays the owner of record, not the caller | Already mitigated |
+| Voiding | lazy; needs `kick`. 5 of 14 sampled live activations on Robinhood are earning for sellers **right now** | lazy **and atomic** — recomputed on every read, no keeper, no interval of wrongness |
+| Custody | a deposit is indistinguishable from a sale | allowlisted custodians; collateral keeps earning for the borrower |
+| Cost | 5% skimmed off every activation | **100% burns** to `0xdead` |
+| Governance | tier weights retunable in one transaction | costs **and** weights behind a 48h timelock |
+| Claiming | `claim` permissioned to the owner of record, so a router reverts | nothing to claim; `ChipClaims.claimFor` is permissionless |
 
-**Two of these are already neutralised, whatever the answer turns out to be.**
-- A-8: `ClutchVaultAdapter` independently checks `IERC721.ownerOf` against the vault's owner
-  of record, so a sold Noun stops earning immediately whether or not anyone calls `kick`.
-- A-9: `ClaimRouter` sweeps its own balance to the owner after claiming, so it works whether
-  Clutch pays the owner of record or the caller.
+**The seam survived and still earns its keep.** `ChipRounds` reads three values from one
+interface and does not know which implementation answers.
+`test/activation/ChipActivationParity.t.sol` proves it: the same round assertions, the new
+vault, only fixture wiring changed. If Clutch ships on Base with better economics it is one
+`setActivationSource` call.
 
-**The rest are concentrated in one small contract.** `ClutchVaultAdapter` is the only thing
-that talks to Clutch. If the real ABI differs we redeploy that one contract and repoint
-ChipRewards and ClaimRouter at it — no migration of anyone's credits, no redeploy of
-anything holding money.
+### 0a. CANCELLED: the keeper "kick job"
 
-**Action:** the four questions for Clutch are drafted and sitting with you. One answer
-closes A-2 through A-6 and A-9 at a stroke.
+Was planned because Clutch's voiding is lazy, so somebody had to call `kick` on sold Nouns or
+sellers would keep earning. **There is nothing to kick.** `ChipActivation` stores no `active`
+flag; `activation()` recomputes the effective owner and compares it to the owner at
+activation, so a sold Noun scores zero in the same block it is sold, for everybody, with
+nothing running. A keeper job would have no state to advance.
 
----
+This also removes a liveness dependency from the design: there is now no scheduled task
+whose failure would misallocate rewards.
+
+### 0b. CANCELLED: the `VerifyClutchV3` script
+
+Was to re-verify A-8 against `SoftStakingVaultV3`'s real logic, because `CLUTCH_LICENSES.md`
+§4b found V3's natspec claiming atomic voiding while the recon observed five stale records
+live. **Moot.** We do not call Clutch, the question only affected a vault we no longer use,
+and the BUSL licence made reading that code for anything beyond comprehension awkward anyway.
+
+The observed stale records stand as evidence for why our own reset is computed rather than
+stored — which is the only lasting thing that question was ever going to tell us.
 
 ## 1. POL income stranded as AERO — **CLOSED**
 
@@ -200,3 +226,52 @@ round. Now measured and tolerated, with the shortfall stranded and reported.
 - B20 token addresses and decimals — all nine verified, 8 decimals
 - Contracts may hold B20 — confirmed by Base docs, secondary trading is permissionless
 - AERO/USD feed and AERO/USDC pool — verified on fork, route registered
+
+---
+
+## 10. NEW: NounLoans refuses repayment after the grace period
+
+`repay` reverts once `block.timestamp > dueAt + 7 days`, whether or not anyone has actually
+liquidated the loan. The deadline is the deadline.
+
+**The argument for it:** leaving repayment open until someone happens to liquidate makes the
+grace period unbounded in practice, and makes a borrower's outcome depend on how attentive
+liquidators are that week rather than on the terms they agreed.
+
+**The argument against it, which is not weak:** a borrower who turns up on day 38 with the
+money in hand is refused, and then loses the Noun to a liquidator who may not arrive for
+days. The protocol gains nothing from that window — it is holding collateral it has not
+seized, refusing money it is owed.
+
+**Options if you want it changed:** allow repayment until liquidation actually happens (the
+loan is closed by whoever acts first), or add a second, longer "late" tier with a penalty fee.
+Both are small changes. **Built as specified; flagging it because it is the one rule here
+that can cost a borrower their Noun while they are trying to pay.**
+
+## 11. NEW: `maxPrincipal` vs Anvil parity is operational, not enforced
+
+The invariant is that a loan must never pay more than selling would, or defaulting becomes
+the rational move and the pool systematically buys Nouns at above market.
+
+The Anvil does not exist as a contract on Base, so there is no price to read and this cannot
+be a `require`. It is a number the multisig sets per collection and must keep reviewing
+against the floor. `setMaxPrincipal` is deliberately un-timelocked in both directions so it
+can be cut to zero the moment a floor moves.
+
+**Worth building before volume:** an off-chain monitor that compares outstanding principal
+per collection against the observed floor and alerts when the ratio drifts. Not built.
+
+## 12. NEW: the lending pool has one depositor, on purpose
+
+V1 has no public lender side: `depositPool` and `withdrawPool` are multisig only. That is
+what keeps `NounLoans` free of the hardest problem in lending — solvency between depositors —
+because there is exactly one and it is the protocol.
+
+It also means the protocol carries 100% of default risk, and that `withdrawPool` can drain
+the pool below what pending liquidation bounties would cost. The second is handled (the
+bounty is capped at the balance rather than reverting, so collateral is always recoverable);
+the first is a business decision, not a bug.
+
+**Phase 2 question:** if a public lender side is ever added, the fixed-fee model has to
+become a yield model and the exclusion-based rescue has to become share accounting. Do not
+retrofit that onto this contract.

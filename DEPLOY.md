@@ -13,12 +13,12 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 |---|---|---|
 | `MULTISIG` | _TBD_ | Owner of every governed contract. Existing Chipworks/Goya Safe. |
 | `OPS_WALLET` | _TBD_ | Goya's Bankr wallet. Receives the 20% ops share. |
-| `CLUTCH_VAULT_LIL` | _TBD_ | Not deployed yet, not ours. See ASSUMPTIONS A-1. |
-| `CLUTCH_VAULT_BASED` | _TBD_ | Not deployed yet, not ours. See ASSUMPTIONS A-1. |
-| `CLUTCH_VAULT_DARK` | _TBD_ | Same. |
+| `LOAN_TREASURY` | _TBD_ | Where liquidated NounLoans collateral goes. May be the Safe. |
+| ~~`CLUTCH_VAULT_*`~~ | — | **Gone.** Chipworks runs its own activation vault; see step 4. |
 | `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
+| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead`. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). |
 
 ---
 
@@ -180,29 +180,71 @@ keeper does all three.
 Un-converted ETH does not count toward the $250 gate. `sweepEth` remains the escape hatch
 if the route breaks.
 
-### 4. ClutchVaultAdapter — **built**
+### 4. ChipActivation — **built**
 
-Needs: `MULTISIG`. Deploy before ChipRewards.
+Chipworks' own non-custodial soft-staking vault. **This replaces Clutch entirely.**
+
+Needs: `MULTISIG`, `$CHIP`. Deploy before ChipRounds.
 
 | Arg | Value |
 |---|---|
 | `multisig` | `MULTISIG` |
+| `chipToken_` | `CHIP` |
 | `tierBps_` | `[10000, 12500, 16000, 20000, 33300]` (1.00 / 1.25 / 1.60 / 2.00 / 3.33) |
 
-Then, once the Clutch market exists:
-- `setVault(LIL_NOUNS, CLUTCH_VAULT_LIL)`
-- `setVault(BASED_NOUNS, CLUTCH_VAULT_BASED)`
-- `setVault(DARK_NOUNS, CLUTCH_VAULT_DARK)`
+**No collection can be activated until it is priced**, and pricing is the same call that
+registers it. A freshly deployed ChipActivation accepts nothing, which is the intended
+failure mode: forgetting a collection makes it earn zero rather than earn for free.
 
-**Three collections, no code change.** Everything collection-shaped is a mapping keyed by
-address, so a collection is two multisig calls — `setCollectionBaseBps` on the engine and
-`setVault` on the adapter. Proven by `test/ThreeCollections.t.sol`, which also checks that a
-FOURTH needs nothing new. A collection with no base configured earns zero rather than
-defaulting to 1.0x, so forgetting the call fails closed.
+**Every economic parameter is behind a 48-hour timelock**, including the first configuration
+of a collection. Budget for that in the launch schedule — it is two transactions per
+collection, two days apart:
 
-**This is the contract to redeploy if Clutch's real interface differs from our guess.**
-Nothing else changes; ChipRewards just gets pointed at the new adapter. Every Clutch
-assumption (A-3 to A-8) lives here.
+```
+queueCosts(LIL_NOUNS,   [c0, c1, c2, c3, c4])     // $CHIP to hold each tier outright
+... wait 48h ...
+executeCosts(LIL_NOUNS)                            // also marks the collection live
+```
+
+Costs must be **non-decreasing** across tiers, or the call reverts — an upgrade pays the
+difference between tiers and a decreasing table would make that meaningless. All-zero is
+accepted, if a collection should activate for free. Repeat for `BASED_NOUNS` and
+`DARK_NOUNS`. Denominations are set at token launch; nothing is hardcoded.
+
+Changing the weight curve uses the same shape, `queueTierBps` / `executeTierBps`, and is
+deliberately stricter than the retired Clutch adapter, which allowed a one-transaction
+retune. The curve decides what everybody earns and should not move without notice.
+
+Then, once NounLoans exists (step 8):
+
+```
+setCustodian(nounLoans, true)
+```
+
+**What a custodian is, and why it matters.** Soft staking voids an activation the moment the
+Noun changes hands — correct for a sale, wrong for a deposit. A registered custodian is
+asked `beneficiaryOf(collection, tokenId)` and its answer becomes the effective owner, so a
+Noun locked as loan collateral keeps earning **for the borrower**. Register only contracts
+you have read: a custodian is trusted over the tokens it holds, though **only** over those.
+De-registering is immediate and resets every activation that custodian was carrying — that
+is the emergency stop, and pulling it costs depositors their activation until they withdraw.
+
+**Users pay in $CHIP and must approve it**: `chip.approve(chipActivation, cost)` before
+`activate(collection, tokenId, tier)`. 100% of the cost burns to `0xdead`; there is no
+protocol cut, and the contract holds no $CHIP between transactions.
+
+Post-deploy checks:
+- `owner()` is the multisig, `chipToken()` is $CHIP
+- `allTierBps()` is `[10000, 12500, 16000, 20000, 33300]`
+- `isSupportedCollection(BASED_NOUNS)` is **false** before `executeCosts` and true after
+- activate one Noun, then transfer it, and confirm `isActive` flips to false with **no
+  keeper call in between** — the reset is lazy and needs nothing run against it
+- `chip.balanceOf(chipActivation)` is 0 after a test activation
+
+**`ClutchVaultAdapter` is retired, not deleted.** It stays in `src/adapters/` as the
+alternative implementation of the same interface and **is not deployed**. If Clutch ever
+ships on Base and the economics look better, it is one `setActivationSource` call — which is
+also why the seam was built this way in the first place. See AUDIT_BRIEF section 7.
 
 ### 5a. ChipClaims — **built** (deploy BEFORE the engine)
 
@@ -235,14 +277,14 @@ enforce.
 
 The engine. Buys stock and hands it to the ledger; it can never pay a holder.
 
-Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ClutchVaultAdapter`, **`ChipClaims`**.
+Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ChipActivation`, **`ChipClaims`**.
 
 | Arg | Value |
 |---|---|
 | `multisig` | `MULTISIG` |
 | `registry_` | StockRegistry from step 2 |
 | `pot_` | Pot from step 3 |
-| `source_` | ClutchVaultAdapter from step 4 |
+| `source_` | **ChipActivation** from step 4 |
 | `claims_` | ChipClaims from step 5a |
 | `splitChangeFeeChip_` | `5000e18` (5,000 CHIP) |
 
@@ -256,7 +298,7 @@ Then configure, all from the multisig:
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |
 | `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02; Slipstream router |
 | `setPolTreasury(polTreasury)` | after step 6 — receives the holdback |
-| `setChip(chipToken, 0x…dead)` | after the Clutch market mints $CHIP |
+| `setChip(chipToken, 0x…dead)` | after the $CHIP launch |
 | `setHoodie(hoodieCollection, 11000)` | 1.10x boost |
 | `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |
 | `setDefaultMaxSlippageBps(200)` | 2% around the Chainlink mark |
@@ -273,6 +315,14 @@ Then configure, all from the multisig:
 5. `polTreasury.setRewards(claims)` — compound credits are notified by the **ledger**, not
    the engine.
 6. `ClaimRouter` points at **`claims`**, not the engine: `claimFor` lives on the ledger.
+
+**Three collections, no code change.** Everything collection-shaped is a mapping keyed by
+address, so adding one is two multisig calls: `setCollectionBaseBps` here and the timelocked
+`queueCosts` / `executeCosts` on ChipActivation. Proven by `test/ThreeCollections.t.sol`,
+which also checks that a FOURTH needs nothing new. **A collection with no base configured
+earns zero rather than defaulting to 1.0x**, so forgetting the call fails closed — and it
+fails closed on both sides, because ChipActivation refuses to activate an unpriced
+collection too.
 
 **Daily operation** (keeper bot, all permissionless — anyone can run these):
 1. `pot.convert()` and `pot.convert(AERO)`
@@ -291,7 +341,8 @@ If a round is opened and then abandoned, anyone can call `rounds.cancelRound(rou
 Post-deploy checks:
 - `claims.rounds()` is ChipRounds, `rounds.claims()` is ChipClaims
 - `pot.rewards()` is ChipRounds
-- `collectionBaseBps` is 10000 / 20000 for the two collections
+- `collectionBaseBps` is 5000 / 10000 / 20000 for Lil / Based / Dark
+- `rounds.activationSource()` is ChipActivation
 - open a tiny test round end to end on a fork before funding the real Pot
 
 ### 6. POLTreasury — **built**
@@ -327,22 +378,153 @@ Post-deploy checks:
 
 ### 7. ClaimRouter — **built**
 
-Needs: `MULTISIG`, ChipRewards, ClutchVaultAdapter.
+Needs: `MULTISIG`, `ChipClaims`.
 
 | Arg | Value |
 |---|---|
 | `multisig` | `MULTISIG` |
 | `rewards_` | **ChipClaims** from step 5a — `claimFor` lives on the ledger |
-| `vaultRegistry_` | ClutchVaultAdapter from step 4 |
 | `legGasLimit_` | `1000000` |
 
-No further wiring. The router holds no funds and needs no permissions: ChipRewards pays
-holders directly via the permissionless `claimFor`, and the Clutch vault is reached through
-the adapter.
+**One leg now.** The router used to make a second claim against a Clutch vault. That leg is
+gone: Clutch's `claim` is permissioned to the owner of record and reverts `NotOwner()` for
+any other caller, so a router could never have used it (CLUTCH_RECON section 4), and
+Chipworks' own activation vault has nothing to claim — activation is a burned cost, not a
+position that accrues. There is no vault registry argument any more and no `sweepTokens`
+parameter on the claim.
 
-Front-end usage: `claimEverything(chipClaims, clutchClaims, sweepTokens)`. Pass $CHIP in
-`sweepTokens`. Legs fail independently and are reported per-leg; the call reverts only if
-every leg failed.
+No further wiring. The router holds no funds and needs no permissions: ChipClaims pays
+holders directly through the permissionless `claimFor`.
+
+Front-end usage: `claimEverything(chipClaims)`. Legs fail independently and are reported per
+leg; the call reverts only if every leg failed. `claimWindowStatus()` tells the site whether
+to grey out the button.
+
+Post-deploy checks:
+- `rewards()` is **ChipClaims**, not ChipRounds
+- `claimWindowStatus()` agrees with `claims.isClaimOpen()`
+- claim one credit through the router and confirm the router's balance is still zero
+
+### 8. Furnace — **built**
+
+Needs: `MULTISIG`, `$CHIP`, `LIL_NOUNS`, and the two output collections.
+
+**Deploy this last, and understand that it is not part of the money path.** The Furnace
+shares no storage, no inheritance and no call path with ChipRounds, ChipClaims, Pot or
+POLTreasury, and nothing in that set references it. It can be deployed, paused, or never
+deployed at all without touching a single reward. Order relative to steps 1–7 does not
+matter; it is listed last because it depends on `$CHIP` existing.
+
+| Arg | Value | Meaning |
+|---|---|---|
+| `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
+| `chipToken_` | `$CHIP` | Burned alongside the Lils. Must exist first. |
+| `lilCollection_` | `LIL_NOUNS` | The fuel. `0xe3c5Ef27B80481518a2363406e354a9361415556`. |
+| `basedRecipe` | `{outputCollection: BASED_NOUNS, lilCost, chipCost}` | Recipe id 0, `FORGE_BASED`. |
+| `darkRecipe` | `{outputCollection: DARK_NOUNS, lilCost, chipCost}` | Recipe id 1, `FORGE_DARK`. |
+
+Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
+their value in calldata is ignored. `lilCost` must be in `1..100` (`MAX_LIL_COST`) or the
+constructor reverts. `chipCost` may be zero, which makes a recipe Lils-only.
+
+**Recipe amounts are deploy arguments on purpose.** Do not treat them as final: they are
+the one thing here that will be tuned after launch, and tuning them costs two multisig
+transactions 48 hours apart (below).
+
+After deploy, from the multisig:
+
+1. **Approve, then stock.** `BASED_NOUNS.setApprovalForAll(furnace, true)` and the same for
+   `DARK_NOUNS`, then `depositStock(collection, tokenIds[])` for each. `depositStock` pulls
+   with `transferFrom`, so without the approval it reverts.
+2. **Check the queue.** `stockRemaining(0)` and `stockRemaining(1)` should equal what you
+   deposited, and `nextOutput(id)` should name the token you expect to go first.
+
+**Forging is FIFO and the multisig cannot jump the queue.** `forge` always hands out the
+oldest unforged token; `withdrawStock` removes from the **tail**, the most recently
+deposited end. So the multisig can shrink the pool but can never pull the specific token a
+user is about to forge out from under them. Deposit in the order you want tokens to leave.
+
+**Changing prices — 48h timelock, two transactions:**
+
+```
+queueRecipeChange(recipeId, lilCost, chipCost)     // emits RecipeChangeQueued(.., executableAt)
+... wait 48h ...
+executeRecipeChange(recipeId)                       // emits RecipeChangeExecuted
+```
+
+`cancelRecipeChange(recipeId)` drops a queued change. **Pausing is deliberately NOT
+timelocked**: `setPaused(recipeId, true)` bites immediately, because halting a recipe is a
+safety action. Pause first, then queue the price change, if a price is actively wrong.
+
+**Users must approve two things** before forging, and the site should ask for both:
+`lilCollection.setApprovalForAll(furnace, true)` and `chip.approve(furnace, chipCost)`.
+
+Post-deploy checks:
+- `owner()` is the multisig, `chipToken()` and `lilCollection()` are right
+- `recipe(0).outputCollection` is Based, `recipe(1).outputCollection` is Dark, neither paused
+- `costOf(0)` and `costOf(1)` match what you intended
+- `chip.balanceOf(furnace)` is **0**, and stays 0 after a test forge — inputs go straight to
+  `0xdead` inside `forge`, so the contract never holds a Lil or a $CHIP at rest
+- forge one token end to end on a fork before stocking the real thing
+
+**If an NFT arrives without `depositStock`** — someone `safeTransferFrom`s one in — it is
+accepted but **not** registered as stock, so it can never silently become a user's output.
+Recover it with `rescueStrayNFT(collection, tokenId, to)`, which reverts if the token is in
+the live unforged queue.
+
+### 9. NounLoans — **built**
+
+Borrow $CHIP against a Noun. **Deploy after ChipActivation, and register it there.**
+
+Needs: `MULTISIG`, `$CHIP`, `FeeSplitter` (step 1), a treasury for liquidated collateral.
+
+| Arg | Value | Meaning |
+|---|---|---|
+| `multisig` | `MULTISIG` | Owner. |
+| `chipToken_` | `CHIP` | What is lent and repaid. |
+| `feeSplitter_` | FeeSplitter from step 1 | Fees flow here, so a loan funds the next round. |
+| `treasury_` | `LOAN_TREASURY` | Where liquidated collateral goes. |
+| `terms_` | `{length: [30d, 90d, 180d], feeBps: [200, 500, 900], bountyBps: 200}` | Terms, fees, bounty. |
+
+Term lengths must strictly increase and fees must not decrease across them; `feeBps` is
+capped at `MAX_FEE_BPS` (5000) and `bountyBps` at `MAX_BOUNTY_BPS` (1000). Those two ceilings
+are immutable — a compromised multisig cannot exceed them.
+
+Then, from the multisig:
+
+| Call | Meaning |
+|---|---|
+| `chipActivation.setCustodian(nounLoans, true)` | **The one that makes collateral keep earning.** |
+| `setMaxPrincipal(LIL_NOUNS, amount)` | Per collection, in $CHIP. Zero means "cannot borrow". |
+| `setMaxPrincipal(BASED_NOUNS, amount)` | Same. |
+| `setMaxPrincipal(DARK_NOUNS, amount)` | Same. |
+| `chip.approve(nounLoans, amount)` then `depositPool(amount)` | Seed the lending pool. |
+
+**`maxPrincipal` MUST be set below Anvil parity.** The invariant is that borrowing is never a
+better exit than selling, or defaulting becomes the rational move. The Anvil does not exist
+as a contract on Base, so there is nothing to read and this cannot be enforced on chain — it
+is an operational parameter the multisig sets and must keep reviewing against the floor.
+Setting it to zero disables a collection immediately, in one transaction, with no timelock.
+
+**V1 is a seeded pool, not a lending market.** `depositPool` and `withdrawPool` are multisig
+only; there are no public lenders and no LP shares. `poolBalance` counts only $CHIP actually
+on hand — principal out on loan is already deducted — so `withdrawPool` cannot spend money
+that is not there.
+
+**Fees are flat and paid up front.** A borrower receives principal minus the term's fee and
+repays principal only. Nothing accrues, so nothing grows while a borrower is not looking.
+
+**Daily operation** (all permissionless, anyone may run them):
+- `repay(loanId)` — **anyone** may repay; the Noun always returns to the borrower.
+- `liquidate(loanId)` — after maturity + 7 days grace, pays a bounty from the pool.
+
+Post-deploy checks:
+- `owner()` is the multisig, `feeSplitter()` and `treasury()` are right
+- `chipActivation.isCustodian(nounLoans)` is **true**
+- `poolBalance()` equals what you deposited, and equals `chip.balanceOf(nounLoans)`
+- take one small loan on a fork and confirm the Noun still scores weight in a round — that
+  is the whole product, and it is the thing to check before anyone borrows for real
+- `recoverExcess(CHIP, ...)` moves nothing while the pool is exactly backed
 
 ---
 

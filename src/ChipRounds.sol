@@ -278,14 +278,27 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Choose up to three stocks and the whole-percent split between them.
-    /// @dev Callable by the Noun's current owner. The first set is free; every later change
+    /// @dev Callable by the Noun's EFFECTIVE owner. The first set is free; every later change
     ///      burns a flat amount of $CHIP, which is what stops split-flipping right before a
     ///      round to chase whichever stock happens to be cheapest.
+    ///
+    ///      EFFECTIVE, NOT `ownerOf`, and that difference is the whole point of custody
+    ///      support. A Noun locked as loan collateral keeps earning for the borrower, so the
+    ///      borrower must also keep the ability to re-pick what it earns — a raw `ownerOf`
+    ///      check would hand that right to the loan vault, which cannot use it. The
+    ///      activation source resolves through a registered custodian to the beneficiary;
+    ///      for a Noun in an ordinary wallet the two answers are identical.
+    ///
+    ///      This does put `setSplit` authorisation behind the multisig-set activation source.
+    ///      That is not a new power: the same contract already decides whose weight counts in
+    ///      every round, which is strictly more than deciding whose split may change, and it
+    ///      still cannot move a token.
     function setSplit(address collection, uint256 tokenId, address[] calldata stocks, uint8[] calldata pcts)
         external
         nonReentrant
     {
-        if (IERC721(collection).ownerOf(tokenId) != msg.sender) revert NotNounOwner(msg.sender);
+        address effective = activationSource.effectiveOwner(collection, tokenId);
+        if (effective == address(0) || effective != msg.sender) revert NotNounOwner(msg.sender);
         if (stocks.length == 0 || stocks.length > 3 || stocks.length != pcts.length) revert BadSplit();
 
         uint256 sum;

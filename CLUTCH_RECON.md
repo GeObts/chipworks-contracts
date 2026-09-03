@@ -6,6 +6,23 @@ contracts** rather than documentation prose.
 
 ---
 
+> **OUTCOME, 2026-09-02: CHIPWORKS DROPPED CLUTCH.**
+> This file is now a record of why, not a description of a live dependency.
+> `src/activation/ChipActivation.sol` is our own non-custodial soft-staking vault behind the
+> same `IActivationSource` interface; `ClutchVaultAdapter` is retired in place and not
+> deployed. Three reasons, in increasing order of how decisive they were: no Base deployment
+> and no reply; the V3 generation is BUSL-1.1 (`CLUTCH_LICENSES.md`); and — the one that
+> would have decided it anyway — Clutch voids an activation whenever the NFT moves, which
+> cannot express "a Noun locked as loan collateral keeps earning for its borrower". Only the
+> vault can tell a deposit from a sale, so it had to be ours. Full reasoning in
+> `OPEN_ITEMS.md` §0.
+>
+> Two findings here outlived the decision. **§3's A-8 evidence** — five of fourteen sampled
+> live activations earning for sellers — is why `ChipActivation` recomputes the effective
+> owner on every read instead of storing a flag that needs kicking. **§4's finding** that
+> `claim` is permissioned to the owner of record is why `ClaimRouter`'s second leg was
+> deleted outright (option 1 of the three below) rather than reworked.
+>
 > **CORRECTIONS, 2026-08-30 — read before relying on this file.**
 > A follow-up licence audit (`CLUTCH_LICENSES.md`) surfaced verified SOURCE, which was not
 > available when this was written from bytecode alone. Two conclusions here are affected:
@@ -158,9 +175,14 @@ and `test_clutchFailureDoesNotBlockChipworks` already covers exactly this shape.
 router is not *broken* — it silently degrades to Chipworks-only, which is the correct
 behaviour but not the advertised feature.
 
-**Options, none applied yet:**
-1. **Drop the Clutch leg from the router.** The site does two transactions: ours, then
-   Clutch's directly from the user's wallet. Honest, simple, and removes a dependency.
+**Options — OPTION 1 WAS TAKEN, 2026-09-02.** The Clutch leg is deleted from `ClaimRouter`.
+There is no second transaction for the user either, because there is no second reward stream:
+our activation burns $CHIP rather than accruing it, so "claim everything" is one leg and
+`ChipClaims.claimFor` is permissionless.
+
+1. **Drop the Clutch leg from the router.** ✅ **APPLIED.** The site does two transactions:
+   ours, then Clutch's directly from the user's wallet. Honest, simple, and removes a
+   dependency.
 2. **Ask Clutch for a `claimFor(tokenId, owner)`** that pays the owner of record regardless
    of caller. This is the clean fix and costs them very little.
 3. **EIP-7702 / smart-account batching** on the site, so the user's own account makes both

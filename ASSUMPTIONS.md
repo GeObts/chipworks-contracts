@@ -4,7 +4,35 @@ Every guess this codebase makes about a contract **we do not control**. Verify e
 before mainnet. Anything marked **BLOCKER** can cause wrong payouts or lost funds if the
 guess is wrong.
 
-Last updated: 2026-08-30 (Clutch recon: see CLUTCH_RECON.md) · against spec v0.2. Part 2 verified on a Base mainnet fork.
+Last updated: 2026-09-02 · against spec v0.2. Part 2 verified on a Base mainnet fork.
+
+---
+
+## PART 1 IS NOW HISTORY — read this first
+
+**Chipworks no longer calls Clutch.** `src/activation/ChipActivation.sol` is our own
+non-custodial soft-staking vault, behind the same `IActivationSource` interface, and
+`ClutchVaultAdapter` is retired in place and not deployed.
+
+**So every assumption in Part 1 — A-1 through A-12 — is moot.** They were guesses about a
+contract we do not control; we now control it. Nothing in the deployed system depends on any
+of them. They are kept below, unedited, for two reasons:
+
+1. **A-12 became a real design decision.** The tier-0 collision (spec: "a transferred Noun
+   reads as tier 0" vs the tier table: "index 0 is the 1.00x base tier") is inherited by our
+   own vault, and `ChipActivation` resolves it explicitly — activation status is never
+   inferred from tier. The warning in A-12 against "fixing" it the other way still applies,
+   now to our code.
+2. **A-8 is why our reset is computed rather than stored.** Five of fourteen sampled live
+   Robinhood activations are earning for sellers because voiding there is lazy. That
+   observation is the reason `ChipActivation` recomputes the effective owner on every read
+   instead of keeping a flag someone has to `kick`.
+
+Why the dependency was dropped — no Base deployment, BUSL-1.1 on the V3 generation, and
+custody semantics that cannot express "collateral keeps earning" — is in `OPEN_ITEMS.md` §0.
+
+**Parts 2 and 3 are current and unaffected.** They cover Base addresses, B20 behaviour and
+our own design decisions, none of which involved Clutch.
 
 ---
 
@@ -64,7 +92,10 @@ quoted from prose documentation or invented by me.
 
 ---
 
-## Part 1 — Clutch Anvil (BLOCKERS)
+## Part 1 — Clutch Anvil — **HISTORICAL, NO LONGER LOAD-BEARING**
+
+*Everything in this part concerned a dependency that has been removed. Kept for the record
+and for A-8 and A-12, which shaped our own vault. See the note at the top of this file.*
 
 ### A-1 · Clutch does not currently support Base — **BLOCKER**
 Docs list ApeChain and Robinhood Chain only. The spec assumes a Base market.

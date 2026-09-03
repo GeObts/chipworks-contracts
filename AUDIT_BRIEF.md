@@ -1,13 +1,16 @@
 # AUDIT_BRIEF.md — Chipworks phase 1
 
-Chipworks pays Coinbase B20 tokenized stocks to holders of two Base NFT collections, funded
-by protocol fee streams, in permissionless 24-hour rounds.
+Chipworks pays Coinbase B20 tokenized stocks to holders of three Base NFT collections,
+funded by protocol fee streams, in permissionless 24-hour rounds. Holders opt in by burning
+$CHIP to activate a Noun at a tier, and may borrow against that Noun without giving up what
+it earns.
 
-**Status:** feature-complete for phase 1, frozen pending answers from Clutch (see §7).
+**Status:** feature-complete for phase 1. **No longer blocked on anyone.** Chipworks now
+runs its own activation vault instead of depending on Clutch; see §7.
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
-**Size:** ~2,120 lines of non-comment source across 8 contracts + 1 base + 13 interfaces.
-**Tests:** 361 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 31 tests
+**Size:** ~2,700 lines of non-comment source across 11 contracts + 1 base + 14 interfaces.
+**Tests:** 522 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 35 tests
 against a live Base mainnet fork.
 
 Fork tests run against the **latest** Base block, not a pinned one, so live prices and pool
@@ -21,6 +24,8 @@ forge test --no-match-contract "Fork"        # no RPC needed
 forge test --match-contract Invariant        # ~105s
 forge test --match-path "test/fork/*" -j 1   # serialise: a free-tier RPC will 429 otherwise
 forge test --match-contract CodeSizeTest     # the size guard
+forge test --match-path "test/activation/*"  # our own vault, incl. the parity proof
+forge test --match-path "test/loans/*"       # lending + the custody integration
 ```
 
 **Size guard.** `test/CodeSize.t.sol` fails the build if any deployable contract exceeds
@@ -40,19 +45,27 @@ paths, or a paid endpoint, avoids it.
 
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
-| `ChipRounds.sol` | 605 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
-| `ChipClaims.sol` | 372 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
+| `ChipRounds.sol` | 514 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
+| `loans/NounLoans.sol` | 339 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
+| `ChipClaims.sol` | 333 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
+| `activation/ChipActivation.sol` | 266 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
+| `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn Lils + $CHIP to forge a Noun. **Outside the money path** |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
 | `FeeSplitter.sol` | 138 | transiently | Three-way split of every inflow: Pot / ops / POL |
-| `ClaimRouter.sol` | 119 | **never** | One-tx claim across Chipworks and Clutch |
 | `Pot.sol` | 103 | **yes, round budget** | Holds round budget, converts inflows to USDC |
-| `adapters/ClutchVaultAdapter.sol` | 70 | no | The entire Clutch seam, isolated on purpose |
+| `ClaimRouter.sol` | 84 | **never** | Batches many Chipworks claims into one transaction |
+| `adapters/ClutchVaultAdapter.sol` | 76 | no | **RETIRED, not deployed.** The old Clutch seam, kept as an alternative implementation |
 
 Money flows: fee sources → `FeeSplitter` → `Pot` (+ ops, + POL) → `Pot.convert()` → round
-budget → `ChipRewards` buys stock → credits → `claim` → holders. Unclaimed after 90 days →
-`POLTreasury`. POL income → `FeeSplitter` → back to the Pot.
+budget → `ChipRounds` buys stock → credits → `claim` → holders. Unclaimed after 30 days →
+`POLTreasury`. POL income → `FeeSplitter` → back to the Pot. Loan fees → `FeeSplitter`, so a
+loan funds the next round like any other inflow.
+
+$CHIP flows one way only: **out of circulation.** Activations and Furnace forges burn it to
+`0xdead`; the split-change fee burns it. Nothing in this repo mints it and no contract here
+holds it at rest except the NounLoans pool, which is seeded by the multisig.
 
 ## 2. External dependencies
 
@@ -66,7 +79,8 @@ budget → `ChipRewards` buys stock → credits → `claim` → holders. Unclaim
 | Uniswap v3 factory / SwapRouter02 | `0x3312…FDfD` / `0x2626…e481` | Standard | on fork |
 | Aerodrome Slipstream factory / NPM | `0x5e7B…809A` / `0x8279…5b72` | `mint` keyed by tickSpacing + sqrtPriceX96 | **selector-probed against deployed bytecode** |
 | AERO | `0x9401…8631` | Standard | on fork |
-| **Clutch soft-staking vault** | **does not exist on Base** | **entirely assumed** | **NO — see §7** |
+| ~~Clutch soft-staking vault~~ | — | **NO LONGER A DEPENDENCY.** Replaced by `ChipActivation`; see §7 | n/a |
+| $CHIP | _TBD_ | Standard ERC-20, Doppler/Bankr launch, **no `burn()`** | at launch |
 
 Two dependency facts that shape the whole codebase:
 
@@ -113,6 +127,16 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
     that randomly retunes the schedule mid-run.
 13. **Nothing still claimable is ever swept.** Claim and sweep eligibility are disjoint in
     time, and an expired credit earns no compound-share ledger entry for anyone.
+14. **A sold Noun is inactive in the same block, with no keeper.** `ChipActivation` stores no
+    `active` flag; every read recomputes the effective owner. There is no interval in which a
+    stale record scores weight, and nothing has to be run for that to be true.
+15. **A custodian can only speak for tokens it actually holds.** `beneficiaryOf` is only ever
+    called on the address `ownerOf` returned, so a hostile custodian's blast radius is its
+    own custody and nothing else.
+16. **`ChipActivation` holds no $CHIP between transactions**, so 100% of every activation
+    cost burns and the rescue has nothing to protect.
+17. **`NounLoans.poolBalance` never exceeds the $CHIP actually held**, through borrow, repay
+    and liquidation, and a borrower's collateral leaves by exactly two paths.
 
 ## 4. Attack this first
 
@@ -201,20 +225,98 @@ Note the deliberate asymmetry: the sweep marks `hasClaimed` for each holder it p
 That is what makes interleaved batches safe, but confirm it can never be reached while a
 claim is still legal.
 
-### 4.4 Rescue exclusions — THREE `recoverExcess` implementations
-Three now, protecting different quantities. `ChipClaims` subtracts `totalOwed` (booked
+### 4.4 Rescue exclusions — FIVE `recoverExcess` implementations
+Five now, protecting different quantities. `ChipClaims` subtracts `totalOwed` (booked
 credits). `ChipRounds` subtracts `committedQuote` (a live round's budget) and nothing else,
 because credits are not held there at all — so stranded stock in the engine IS recoverable
-while committed budget is NOT. `POLTreasury` uses a strict exclusion list. Attack all three: can an attacker or the
-multisig get value out through a path other than the intended one? In POLTreasury check
-`decreaseLiquidity` → does anything let withdrawn tokens leave to a wallet? (Intended: no.)
-Check that marking a token as POL/income is enough to protect it retroactively.
+while committed budget is NOT. `POLTreasury` uses a strict exclusion list. `NounLoans` subtracts `poolBalance` for $CHIP and
+sweeps anything else whole, and separately refuses to move an NFT that is live collateral.
+`ChipActivation` subtracts **nothing at all**, on the claim that it never holds a user asset
+in the first place — no $CHIP between transactions and no custody of a Noun — which is the
+one to test hardest, because it is the only one whose safety is an argument rather than an
+arithmetic. Attack all five: can an attacker or the multisig get value out through a path
+other than the intended one? In POLTreasury check `decreaseLiquidity` → does anything let
+withdrawn tokens leave to a wallet? (Intended: no.) Check that marking a token as POL/income
+is enough to protect it retroactively.
 
-### 4.5 The adapter seam — `ClutchVaultAdapter.sol` (70 LOC)
-Small but load-bearing. It independently re-checks `IERC721.ownerOf` against the vault's
-owner of record, so a lazily-kicked activation cannot pay a seller. Attack: can a vault
-return values that make an unowned Noun score weight? Are all four foreign calls gas-capped?
-Does a de-registered vault fail closed?
+### 4.5 ACTIVATION — `activation/ChipActivation.sol` (266 LOC), NEW AND CORE
+
+This replaced the Clutch adapter and is now the source of every weight in the system. It was
+the thinnest, most-hedged part of the design; it is now one of the largest. Scope it as core.
+
+**What it does.** Burn $CHIP to activate a Noun at a tier. The Noun never moves. The
+activation is void the instant the Noun changes hands.
+
+**Attack the reset first.** There is no stored `active` flag and no `kick`: `activation()`
+recomputes the effective owner on every read and compares it to `ownerAtActivation`. The
+claim is that this makes a sold Noun score zero in the same block, unconditionally and with
+nobody running anything. Try to find a state where a stale record scores: a re-entered read,
+a collection that returns garbage, a token id that was never minted, an `ownerOf` that
+returns the zero address.
+
+- **The tier-0 collision.** ASSUMPTIONS A-12: the spec calls a reset Noun "tier 0" while the
+  tier table calls index 0 the 1.00x base tier. This contract resolves it by never inferring
+  activation from tier — a reset returns `active = false`, not `tierBps = 10000`. **Verify
+  there is no path that treats tier index 0 as inactive**, which would silently zero every
+  base-tier Noun, and none that treats a reset as tier 0's weight, which would pay sellers.
+- **Resurrection is deliberate.** A Noun sold and bought back by the same address reads
+  active again. That is safe here because the record only ever pays the address that bought
+  the tier and that address is the live owner again — but check the reasoning holds when a
+  custodian is in the path.
+
+**Then attack the custodian registry**, which is the part with real trust in it. When
+`ownerOf` is a registered custodian, its `beneficiaryOf` answer becomes the effective owner.
+
+- The stated bound is that a custodian can only speak for tokens it actually holds, because
+  it is only ever asked about the address `ownerOf` returned. **Try to break that**: can a
+  registered custodian influence a Noun it does not hold, in this collection or another?
+- Both foreign calls are gas-capped staticcalls and any failure returns zero, which reads as
+  "nobody" and resets. Confirm a hostile custodian cannot revert, return short data, or burn
+  gas in a way that wedges `contributeWeights` for a whole round.
+- De-registering resets everything that custodian holds. Confirm that is immediate and total,
+  since it is the emergency stop.
+
+**And the burn.** `_burnChip` measures `balanceOf(0xdead)` either side of the transfer and
+reverts on a shortfall, so a lying $CHIP cannot buy an activation for free. The contract
+holds no $CHIP between transactions — which is why `recoverExcess` needs no exclusion list,
+and is a claim worth trying to falsify.
+
+Costs and the tier curve both move only through a 48h queue/execute, **stricter than the
+retired adapter**, which allowed a one-transaction retune of tier weights. Check that a
+queued change cannot bite before execution and that executing never reaches a live
+activation retroactively.
+
+### 4.5b LENDING — `loans/NounLoans.sol` (339 LOC), NEW AND HOLDS ASSETS
+
+Borrow $CHIP against a Noun at a flat fee for a fixed term. It holds collateral NFTs and the
+lending pool, so it holds real value; but its accounting is deliberately simple — a flat fee
+taken up front, principal-only repayment, no accrual, no rate, no compounding, and exactly
+one depositor (the multisig) so there is no solvency-between-lenders problem to get wrong.
+
+Attack, in order:
+
+- **The pool accounting.** `poolBalance` is the only number that matters. Principal out on
+  loan is deducted at `borrow` and added back at `repay`. Can you make `poolBalance` exceed
+  `chip.balanceOf(this)`? Can `withdrawPool` reach money that is out on loan? Can a
+  liquidation bounty overdraw it? (It is capped at the balance rather than reverting, on
+  purpose: collateral must be recoverable from an empty pool.)
+- **The collateral exits.** A borrower's Noun leaves in exactly two ways — `repay` to the
+  borrower, `liquidate` to the treasury. `recoverNFT` reverts on live collateral. **Look for
+  a third path.**
+- **`beneficiaryOf` truthfulness.** It must name the borrower while the loan is open and
+  nobody once it is not, and must never speak for a token it is not holding under an open
+  loan. A bug here misdirects rewards through ChipActivation, which is the one way this
+  contract can affect the money path at all.
+- **Reentrancy across the seam.** `borrow` takes the NFT before paying out; `repay` measures
+  the $CHIP delta before returning the NFT. Both are `nonReentrant`. Attack the ERC-721
+  callbacks and a hostile $CHIP.
+- **The repay deadline.** Repayment is refused after maturity plus the 7-day grace, even if
+  nobody has liquidated yet. That is a deliberate, and harsh, product rule — see OPEN_ITEMS.
+
+**Not enforceable on chain:** `maxPrincipal` must sit below Anvil parity so borrowing is
+never a better exit than selling. The Anvil is not a contract on Base, so there is nothing to
+read and this is an operational parameter, not a `require`. Flag it if you disagree with that
+call, but there is no on-chain fix available.
 
 ### 4.6 Conversions — `base/ConversionRoutes.sol` (163 LOC)
 The most security-sensitive shared code. Attack: decimal handling across (token, feed,
@@ -226,6 +328,53 @@ blast radius).
 ### 4.7 Everything else
 `FeeSplitter` three-way split and share-bound arithmetic; `StockRegistry` pool verification
 against the real factory; `ClaimRouter` leg isolation and the sweep.
+
+**`ClaimRouter` lost its second leg.** It used to claim against a Clutch vault as well. That
+call was permissioned to the owner of record and would have reverted for a router on every
+invocation (CLUTCH_RECON section 4), and there is no second reward stream now in any case —
+activation is a burned cost, not a position that accrues. The router is a batch of
+`ChipClaims.claimFor` calls and nothing else: no vault registry, no `sweepTokens` argument,
+4,213 bytes down to 3,149. The properties that were never about Clutch all still hold and
+are still tested — leg independence, per-leg gas bounding, routed-equals-direct, a failed leg
+leaving the credit claimable, and no bypass of the claim window.
+
+### 4.8 The Furnace — separately scopeable, and scope it that way
+
+`src/furnace/Furnace.sol` shares no storage, no inheritance and no call path with
+ChipRounds, ChipClaims, Pot or POLTreasury, and nothing in that set references it. **A bug
+here loses forge stock; it cannot lose a reward.** It can be audited on its own, or dropped
+from scope entirely, without weakening any statement made about the rest of this document.
+
+What it does: burn `lilCost` Lil Based Nouns and `chipCost` $CHIP, receive one Based Noun or
+DarkNOUN from stock the multisig has deposited.
+
+Four properties to attack, each of which is structural rather than policy:
+
+- **"Burned means burned" is structural.** Inputs are transferred straight to `0xdead`
+  *inside* `forge`, so the contract holds neither a Lil nor a $CHIP between transactions.
+  There is no admin function that could reach them because there is nothing to reach.
+  Confirm that: is there any ordering where an input lands on the contract and stays?
+- **FIFO, and the admin cannot jump the queue.** `forge` takes `_stock[c][forgedFrom[c]]`;
+  `withdrawStock` pops from the **tail**. The claim is that the multisig can shrink the pool
+  but can never take the specific token the next forger is about to get. Check the boundary
+  where `count == available`, and whether `rescueStrayNFT` can reach live stock (it scans
+  the unforged range and reverts — verify the range bounds).
+- **Reentrancy on the output hand-off.** The output NFT leaves **last**, after `forgedFrom`
+  has already advanced, and `forge` is `nonReentrant`. Attack the `onERC721Received` hook on
+  a contract recipient: can it re-enter and claim stock this call already consumed?
+- **The $CHIP burn is measured, not assumed.** `forge` reads `balanceOf(0xdead)` either side
+  of the transfer and reverts on a shortfall, so a fee-on-transfer or lying $CHIP cannot buy
+  a forge under-paid. Failing closed is deliberate: the forge reverts and nothing is
+  consumed. Check the case where $CHIP's `balanceOf(0xdead)` is itself manipulable.
+
+Also worth a look: duplicate detection in `lilIds` is an O(n²) inner loop bounded by
+`MAX_LIL_COST = 100`; recipe cost changes are behind a 48h timelock with events at queue and
+execute, while **pausing is deliberately immediate** because halting a recipe is a safety
+action; and an NFT that arrives via `safeTransferFrom` is accepted but never registered as
+stock, so it cannot silently become someone's output.
+
+28 tests in `test/furnace/Furnace.t.sol`. Runtime size 7,711 bytes, and it is now covered by
+the `test/CodeSize.t.sol` guard alongside the money-path contracts.
 
 ## 5. Deliberate design decisions an auditor may flag
 
@@ -250,7 +399,7 @@ Full list with reasoning in `OPEN_ITEMS.md`. Summary:
 
 | # | Item | Status |
 |---|---|---|
-| 0 | **The Clutch seam** | **Blocked — see §7** |
+| 0 | ~~The Clutch seam~~ | **CLOSED — dependency removed, see §7** |
 | 1 | POL income stranded as AERO | **CLOSED** — per-token route table |
 | 2 | Nothing routed USDC to POL | **CLOSED** — optional splitter leg + POL converter |
 | 3 | Gauge address has no on-chain verification | Open, low risk |
@@ -258,17 +407,23 @@ Full list with reasoning in `OPEN_ITEMS.md`. Summary:
 | 5 | B20-specific behaviour covered by mocks only | Open, unfixable locally |
 | 6 | Equity feed staleness policy undecided | **Open — needs a decision** |
 | 7 | Compound shares have no redemption path | Open, phase 2 |
+| 10 | Keeper "kick job" | **CANCELLED** — the reset is lazy and atomic |
+| 11 | `VerifyClutchV3` script | **CANCELLED** — nothing left to verify |
+| 12 | NounLoans: no repay after grace | **Open — product decision** |
+| 13 | `maxPrincipal` vs Anvil parity is operational | Open, not enforceable on chain |
 
 Also unresolved: **C-10**, the one place failure isolation does not hold — if USDC itself
-policy-blocked ChipRewards, a round in `Buying` could not settle or finalize. Every stock
+policy-blocked `ChipRounds`, a round in `Buying` could not settle or finalize. Every stock
 path degrades gracefully; the quote token has no fallback.
 
 ## 6b. Deploy config now lists THREE collections
 
 Lil Based Nouns (`0xe3c5Ef27B80481518a2363406e354a9361415556`, 4,420 supply) joins Based and
 Dark at a 0.5x collection base. **No contract changed.** Everything collection-shaped is a
-mapping keyed by address, so a collection is two multisig calls — `setCollectionBaseBps` on
-`ChipRounds` and `setVault` on `ClutchVaultAdapter`.
+mapping keyed by address, so a collection is two multisig actions — `setCollectionBaseBps` on
+`ChipRounds` and the timelocked `queueCosts`/`executeCosts` on `ChipActivation`. It fails
+closed on both sides: no base means zero weight, and no cost table means the collection
+cannot be activated at all.
 
 For an auditor this is a config surface, not new code, but two properties are worth
 confirming and both have tests in `test/ThreeCollections.t.sol`:
@@ -285,33 +440,57 @@ Verified on a Base fork in `test/fork/LilNouns.t.sol`: real ERC-721, 4,420 suppl
 proxy, **not Enumerable**. Not-Enumerable is fine for the contracts, which never enumerate,
 but the site and keeper cannot enumerate holders on chain either and must index events.
 
-## 7. The Clutch seam — read this before scoping
+## 7. Clutch is gone — what used to be here, and why it matters to scoping
 
-Chipworks reads NFT activation state from a **Clutch Anvil soft-staking vault that does not
-exist on Base**. Clutch publishes deployments on ApeChain (33139) and Robinhood Chain (4663)
-only, and their public docs describe Anvil **v2**, with no mention of the "V3" the spec
-assumes.
+**This section used to be the reason the audit could not be fully scoped.** It said seven
+assumptions about a Clutch Anvil soft-staking vault were unverifiable because no such vault
+exists on Base, and asked you to treat `ClutchVaultAdapter` as an interface boundary with a
+stated contract rather than as reviewed code.
 
-Consequences for an audit:
+**None of that applies any more. Chipworks runs its own activation vault.** The dependency is
+removed, not deferred, and `ClutchVaultAdapter` is retired in place: it still compiles and
+still has tests, it implements the same `IActivationSource`, and it **is not deployed**. If
+you want to skip it, skip it; nothing on Base will point at it.
 
-- Everything vault-facing is tested against `MockSoftStakingVault`, not reality.
-- Seven assumptions (A-1 … A-9) are unverified. They are enumerated in `ASSUMPTIONS.md`.
-- **All of them are confined to `ClutchVaultAdapter.sol`, 70 lines.** If the real ABI
-  differs, that one contract is redeployed and `ChipRewards` and `ClaimRouter` are
-  repointed. No credit migration, no redeploy of anything holding money.
-- Two assumptions are already neutralised whichever way they resolve: A-8 (the adapter
-  re-checks the live NFT owner) and A-9 (the router sweeps to the owner regardless of who
-  Clutch pays).
+Three things settled it, all of them recorded in `CLUTCH_RECON.md` and `CLUTCH_LICENSES.md`:
 
-**Update 2026-08-30:** on-chain recon settled most of this — see `CLUTCH_RECON.md`. There is
-still no Clutch market on Base, but five real vaults on Robinhood Chain were read directly.
-A-3, A-8 and A-11 are confirmed; A-4, A-5 and A-6 are refuted as function names but their
-substance survives in a single `activations()` call; A-9 is confirmed in a way that breaks
-ClaimRouter's Clutch leg. All of it still lands inside `ClutchVaultAdapter`.
+1. **No Base deployment, and no reply.** Clutch ships on ApeChain (33139) and Robinhood
+   (4663) only. All four known factory and router addresses are empty on Base. Deploying
+   there was theirs to decide and they did not.
+2. **BUSL-1.1.** The V3 generation — the one with non-custodial soft staking — is
+   source-available, not open source. The MIT generation on ApeChain does not contain a
+   soft-staking vault at all; it ships `NFTStakingVault`, which is custodial deposit. So
+   "just fork the MIT version" does not reach the thing we wanted.
+3. **Their custody semantics cannot express ours.** This is the one that would have mattered
+   even with a Base deployment and a licence. Clutch voids an activation when the NFT moves,
+   full stop. Chipworks needs a Noun locked as loan collateral to keep earning for its
+   borrower, and that requires the vault to distinguish a deposit from a sale. It cannot be
+   bolted on from outside: the vault is the thing that decides.
 
-**Suggested scoping:** audit the seven contracts as written, and treat the adapter as an
-interface boundary with a stated contract. When Clutch answers, the adapter gets a short
-follow-up review rather than reopening the whole scope.
+**What this changes for an audit, concretely:**
+
+| Before | Now |
+|---|---|
+| 7 unverifiable assumptions (A-1 … A-9) | **Zero.** All were about a third party we no longer call. |
+| The riskiest contract was 70 lines and swappable | The riskiest contract is 266 lines and core: §4.5 |
+| `ClaimRouter` had a leg that could never work | That leg is deleted: §4.7 |
+| A keeper "kick job" was planned | **Cancelled.** The reset is lazy and atomic; nothing to run. |
+| Scope excluded the vault | **Scope includes the vault.** It is ours now. |
+
+The one thing that got *harder*: there is more of our own code to review, and the part that
+grew is the part that decides who earns. That is the correct trade — an unverifiable
+dependency became reviewable code — but it should be reflected in the hours.
+
+**Two mitigations that were built for Clutch survived, and are still load-bearing:**
+
+- The `IActivationSource` seam itself. `ChipRounds` reads three values from one interface and
+  does not know which implementation answers. `test/activation/ChipActivationParity.t.sol`
+  proves that by running the same round assertions against the new vault with only fixture
+  wiring changed. If Clutch ever ships on Base with better economics, it is one
+  `setActivationSource` call.
+- The independent live-owner check. It was written to defend against Clutch's lazy voiding
+  (five of fourteen sampled Robinhood activations are earning for sellers right now). It is
+  now not a defence but the mechanism itself: the comparison IS the reset.
 
 ## 8. Deployment posture
 

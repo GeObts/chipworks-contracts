@@ -20,6 +20,8 @@ import {INonfungiblePositionManager} from "../../src/interfaces/INonfungiblePosi
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockNoun} from "../mocks/MockNoun.sol";
 import {MockSoftStakingVault} from "../mocks/MockSoftStakingVault.sol";
+import {MockAggregatorV3} from "../mocks/MockAggregatorV3.sol";
+import {IAggregatorV3} from "../../src/interfaces/IAggregatorV3.sol";
 
 /// @title FullSystemForkTest
 /// @notice The whole machine on a Base mainnet fork:
@@ -89,7 +91,7 @@ contract FullSystemForkTest is Test {
         rounds =
             new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), 5_000 ether);
         polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter));
-        router = new ClaimRouter(multisig, address(claims), address(adapter), 1_000_000);
+        router = new ClaimRouter(multisig, address(claims), 1_000_000);
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");
@@ -261,23 +263,18 @@ contract FullSystemForkTest is Test {
         assertEq(IERC20(USDC).balanceOf(address(claims)), claims.totalOwed(USDC), "USDC solvent");
 
         // ---------------------------------------------------------------
-        // 6. CLAIMS, through the router, both sides at once.
+        // 6. CLAIMS, through the router. One leg now: the Clutch leg is gone
+        //    (CLUTCH_RECON section 4), and activation is a burned cost rather
+        //    than a second reward stream, so there is no second side to claim.
         // ---------------------------------------------------------------
-        chipToken.mint(address(basedVault), 500 ether);
-        basedVault.setPendingReward(1, address(chipToken), 500 ether);
-
         ClaimRouter.ChipClaim[] memory chipClaims = new ClaimRouter.ChipClaim[](1);
         chipClaims[0] = ClaimRouter.ChipClaim({roundId: roundId, stock: WETH});
-        ClaimRouter.ClutchClaim[] memory clutchClaims = new ClaimRouter.ClutchClaim[](1);
-        clutchClaims[0] = ClaimRouter.ClutchClaim({collection: address(basedNouns), tokenId: 1});
 
         vm.prank(alice);
-        (uint256 chipOk, uint256 clutchOk) = router.claimEverything(chipClaims, clutchClaims, _one(address(chipToken)));
+        uint256 chipOk = router.claimEverything(chipClaims);
 
         assertEq(chipOk, 1, "stock claimed");
-        assertEq(clutchOk, 1, "CHIP claimed");
         assertEq(IERC20(WETH).balanceOf(alice), wethAcquired, "alice has her WETH");
-        assertEq(chipToken.balanceOf(alice), 500 ether, "and her CHIP");
         assertEq(IERC20(WETH).balanceOf(address(router)), 0, "router keeps nothing");
 
         // ---------------------------------------------------------------
@@ -374,9 +371,26 @@ contract FullSystemForkTest is Test {
         splitter.distributeETH();
         pot.convert();
 
-        // Round 1 with an impossible slippage bound: the buy must skip and carry.
+        // Round 1 with an unreachable Chainlink mark: the buy must skip and carry.
+        //
+        // A TIGHT SLIPPAGE BOUND IS NOT ENOUGH, AND THIS TEST USED TO ASSUME IT WAS. The
+        // original version set maxSlippageBps to 1 on the theory that a 0.01% tolerance
+        // cannot survive a 0.05% pool fee. It can: when Uniswap spot happens to sit a few
+        // bps better than the Chainlink mark, the pool price absorbs the fee and the swap
+        // clears the bound. That is exactly what live prices did on 2026-09-02, filling at
+        // 0.146 bps off the mark against a 1 bps bound, and the assertion failed on a
+        // healthy contract.
+        //
+        // These fork tests run against the LATEST block, so any threshold derived from a
+        // guess about the live spread is a time bomb. Point the stock at a feed marking ETH
+        // at a THIRD of its real price instead. The round is buying WETH with USDC, so the
+        // expected output is `quoteIn / price`: understating the price triples the WETH the
+        // bound demands, `minOut` lands about 3x above anything the pool can deliver, and
+        // the skip is guaranteed by arithmetic rather than by market conditions.
+        (, int256 livePrice,,,) = IAggregatorV3(ETH_USD_FEED).latestRoundData();
+        MockAggregatorV3 cheapFeed = new MockAggregatorV3(8, livePrice / 3, "ETH / USD, third");
         vm.prank(multisig);
-        rounds.setMaxSlippageBps(WETH, 1); // 0.01% tolerance vs a 0.05% pool fee
+        registry.setFeed(WETH, address(cheapFeed));
 
         uint256 r1 = rounds.openRound();
         uint256 budget = rounds.getRound(r1).budget;
@@ -389,9 +403,9 @@ contract FullSystemForkTest is Test {
         assertTrue(rounds.stockSkipped(r1, WETH), "impossible bound -> skipped");
         assertEq(pot.available(), budget, "every cent carried back");
 
-        // Round 2 with a sane bound spends it.
+        // Round 2 against the real feed spends it.
         vm.prank(multisig);
-        rounds.setMaxSlippageBps(WETH, 200);
+        registry.setFeed(WETH, ETH_USD_FEED);
         vm.warp(block.timestamp + 24 hours);
 
         uint256 r2 = rounds.openRound();
