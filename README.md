@@ -1,5 +1,17 @@
 # Chipworks contracts
 
+> ## 🔍 Reviewing this code? Start at **[REVIEW_PACKAGE.md](REVIEW_PACKAGE.md)**.
+>
+> It is the self-contained reviewer entry point: how to build and run the 593 tests (553 need
+> no RPC), the eleven-contract inventory grouped by blast radius, the 22 invariants we claim,
+> which open items are accepted-by-design versus genuinely open, and how we would like
+> severity judged against the launch caps currently in effect.
+>
+> Check out the **`review-1`** tag — identical contracts to `launch-candidate-1`, plus the
+> review package. Findings are processed per **[TRIAGE.md](TRIAGE.md)**.
+>
+> **Not audited. Not deployed.** Launch caps are in effect until independent review completes.
+
 Lil Based Nouns, Based Nouns and DarkNOUNs earn Coinbase B20 tokenized stocks on Base, funded
 by protocol fee streams, in permissionless 24-hour rounds.
 
