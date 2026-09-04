@@ -64,7 +64,7 @@ headroom at 3,742 bytes and is the one to watch.
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
 | `anvil/Anvil.sol` | 291 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
-| `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn Lils + $CHIP to forge a Noun. **Outside the money path** |
+| `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn fuel NFTs + $CHIP to forge a Noun. **Outside the money path** |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
 | `FeeSplitter.sol` | 178 | transiently, **plus ETH escrow** | Three-way split of every inflow: Pot / ops / POL |
 | `Pot.sol` | 103 | **yes, round budget** | Holds round budget, converts inflows to USDC |
@@ -142,7 +142,8 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
     that randomly retunes the schedule mid-run.
 13. **Nothing still claimable is ever swept.** Claim and sweep eligibility are disjoint in
     time, and an expired credit earns no compound-share ledger entry for anyone.
-14. **A sold Noun is inactive in the same block, with no keeper.** `ChipActivation` stores no
+14. **A sold Noun is inactive in the same block, with no keeper**, and a round's weight is
+    fixed when it is CONTRIBUTED — not at round open, and never re-read at settlement. `ChipActivation` stores no
     `active` flag; every read recomputes the effective owner. There is no interval in which a
     stale record scores weight, and nothing has to be run for that to be true.
 15. **A custodian can only speak for tokens it actually holds.** `beneficiaryOf` is only ever
@@ -342,6 +343,30 @@ Noun back. Try to break that bound:
   `test_aLyingCustodianOverItsOwnCustodyIsBoundedToThatToken` are the two tests that claim
   this. Check they claim what they appear to.
 
+**WHEN WEIGHT IS FIXED, PRECISELY — the mental model to get right.**
+
+There is **no round-open snapshot** in this system, and there cannot be one: it would require
+enumerating every activated Noun at `openRound`, and no such enumeration exists (ASSUMPTIONS
+A-10). That absence is exactly why `contributeWeights` takes a caller-supplied list.
+
+What actually happens is a **contribution-time snapshot**. `ChipRounds` reads
+`activationSource.activation` in exactly one place — `contributeWeights` — and writes the
+result into `ChipClaims`. `settleStock` and `finalizeRound` never touch the activation source.
+So:
+
+| Moment | Can a custodian de-registration still change this round? |
+|---|---|
+| Before `openRound` | Yes — the Noun simply scores nothing when contributed |
+| Between `openRound` and `contributeWeights` | **Yes.** This is the whole exposure, and it is the 2-hour accumulation window |
+| After `contributeWeights` books the weight | **No. Never.** Not at settle, not at finalize, not at claim |
+
+This is the answer to both TRIAGE SEC-ACT-001 and SEC-LN-004 — one property seen from two
+contracts. A reviewer who believes the protection comes from an open-snapshot will look for a
+mechanism that is not there and may conclude the exposure is larger or smaller than it is.
+
+The residual is bounded twice over: a Noun that scored zero is **never marked counted**, so it
+can be contributed again once the custodian is restored, as long as the window is still open.
+
 **Failure modes to push on:**
 
 - Both foreign calls are gas-capped staticcalls, and any failure — revert, short return
@@ -439,8 +464,19 @@ ChipRounds, ChipClaims, Pot or POLTreasury, and nothing in that set references i
 here loses forge stock; it cannot lose a reward.** It can be audited on its own, or dropped
 from scope entirely, without weakening any statement made about the rest of this document.
 
-What it does: burn `lilCost` Lil Based Nouns and `chipCost` $CHIP, receive one Based Noun or
-DarkNOUN from stock the multisig has deposited.
+What it does: burn `fuelCost` tokens of the **fuel collection** and `chipCost` $CHIP, receive
+one Based Noun or DarkNOUN from stock the multisig has deposited.
+
+**THE FUEL IS A CONSTRUCTOR ARGUMENT AND IS CURRENTLY UNDECIDED.** It was going to be Lil
+Based Nouns; that was cancelled, and a DN404 "Chip" collection from a separate workstream
+replaces it. Lils revert to a normal family collection — a 0.5x earner, never burned, same
+status as Based and Dark.
+
+Nothing in the logic ever depended on which collection it was: the fuel is an *input to every
+recipe* rather than a recipe of its own, so there is no "Lil recipe" to remove. Proven by
+`test_theFuelCollectionIsADeployArgumentNotAnAssumption`, which forges both Based and Dark
+against a completely different fuel collection. **Review the Furnace against an unknown
+ERC-721**, and see the fuel-collection note in the source for what a DN404 would change.
 
 Four properties to attack, each of which is structural rather than policy:
 

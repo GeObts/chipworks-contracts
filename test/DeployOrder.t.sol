@@ -198,11 +198,11 @@ contract DeployOrderTest is Test {
             address(chip),
             address(lil),
             Furnace.Recipe({
-                exists: true, paused: false, outputCollection: address(based), lilCost: 3, chipCost: 1 ether
+                exists: true, paused: false, outputCollection: address(based), fuelCost: 3, chipCost: 1 ether
             }),
             Furnace.Recipe({
-                    exists: true, paused: false, outputCollection: address(based), lilCost: 5, chipCost: 2 ether
-                })
+                exists: true, paused: false, outputCollection: address(based), fuelCost: 5, chipCost: 2 ether
+            })
         );
 
         for (uint256 i = 1; i <= 3; ++i) {

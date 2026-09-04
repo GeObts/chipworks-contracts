@@ -102,8 +102,8 @@ contract CodeSizeTest is Test {
             multisig,
             _erc20(),
             _nft721(),
-            Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), lilCost: 5, chipCost: 1 ether}),
-            Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), lilCost: 10, chipCost: 2 ether})
+            Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), fuelCost: 5, chipCost: 1 ether}),
+            Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), fuelCost: 10, chipCost: 2 ether})
         );
     }
 

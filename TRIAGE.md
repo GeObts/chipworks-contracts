@@ -203,7 +203,9 @@ the single most useful result in this batch.
 **PARTIAL. The conclusion is much smaller than the finding, and the proposed fix is not
 implementable in this design.**
 
-**Round scoring already snapshots.** `ChipRounds` calls `activationSource.activation` in
+**Round scoring already snapshots — AT CONTRIBUTION TIME, not at round open.** The
+distinction matters and is easy to blur: there is no open-snapshot anywhere in this system and
+there cannot be (see below). `ChipRounds` calls `activationSource.activation` in
 exactly one place — `contributeWeights` — and writes the result into the ledger.
 `settleStock` and `finalizeRound` never touch the activation source at all. So the premise
 "reads live at settle" is wrong, and **once a borrower's weight is booked, pulling the

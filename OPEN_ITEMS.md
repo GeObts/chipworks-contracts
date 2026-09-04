@@ -513,3 +513,47 @@ activation and every loan, and whether the cost tables in §4 need to account fo
 
 **Ask Bankr directly.** It is one question and it affects a number in the runbook rather than
 a line of code.
+
+---
+
+## 20. NEW: Lils are no longer Furnace fuel — and the Anvil's Lil price assumed they were
+
+**The change:** Lil Based Nouns revert to a normal family collection — a 0.5x earner, never
+burned, exactly the same status as Based Nouns and DarkNOUNs. A DN404 "Chip" collection from a
+separate workstream becomes the Furnace's burn input instead.
+
+**The contract side is clean.** The fuel is a constructor argument and an input to *every*
+recipe rather than a recipe of its own, so there is nothing to remove and both forge paths are
+untouched. `test_theFuelCollectionIsADeployArgumentNotAnAssumption` forges Based and Dark
+against a different fuel collection to prove it. The vocabulary that baked the assumption in
+(`lilCollection`, `lilCost`, `NotLilOwner` …) has been renamed to `fuel*`; a pure rename, no
+logic touched.
+
+### ⚠️ THE FLAG: the Anvil's Lil price was set BECAUSE Lils were burned
+
+`chipworks-spec-v0.3.md` §  prices a Lil at 100,000 — one fifth of a Based Noun — and says why:
+
+> *"That is deliberately below its 0.5× rewards weight: the Furnace consumes Lils, so the
+> anvil should not be the cheaper way to acquire one for burning."*
+
+**That rationale is now void.** The Furnace no longer consumes Lils, so there is no burn demand
+to underprice against — and what remains is a Lil priced below what it earns. That is an
+arbitrage: buy Lils cheap from the Anvil, chip them, collect 0.5x weight in every round,
+indefinitely. The Anvil is the protocol's own shelf, so the protocol would be the one selling
+the mispriced asset.
+
+**This is a pricing decision, not a code change**, and it is exactly the kind of assumption
+that outlives the thing it was made for. `Anvil.queuePrice(LIL_NOUNS)` should be reconsidered
+against the 0.5x weight now that nothing burns Lils. It is a timelocked multisig setting, so
+the fix is one queued transaction — but it has to be *noticed*, which is why it is here.
+
+**Also now false in the spec:** §2's line *"Only Lils can be burned, and only in the Furnace"*.
+Based and Dark are still never burned; Lils have joined them.
+
+### Blocking
+
+The Furnace **cannot be deployed** until the DN404 address exists — `fuelCollection_` is a
+required non-zero constructor argument. DEPLOY step 8 carries the blocker and the DN404
+caveats: it must be the ERC-721 **mirror**, ids may be reassigned when the fungible side moves,
+and *"burned means burned"* needs re-proving because sending a mirror token to `0xdead` also
+moves the underlying balance.

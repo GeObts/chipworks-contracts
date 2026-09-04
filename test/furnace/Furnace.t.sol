@@ -38,12 +38,12 @@ contract FurnaceTest is Test {
     event Forged(
         address indexed caller,
         uint8 indexed recipeId,
-        uint256[] lilIds,
+        uint256[] fuelIds,
         uint256 chipBurned,
         address indexed outputCollection,
         uint256 outputTokenId
     );
-    event RecipeChangeQueued(uint8 indexed recipeId, uint16 lilCost, uint256 chipCost, uint64 executableAt);
+    event RecipeChangeQueued(uint8 indexed recipeId, uint16 fuelCost, uint256 chipCost, uint64 executableAt);
 
     function setUp() public {
         vm.warp(1_700_000_000);
@@ -57,10 +57,14 @@ contract FurnaceTest is Test {
             address(chip),
             address(lil),
             Furnace.Recipe({
-                exists: true, paused: false, outputCollection: address(based), lilCost: BASED_LILS, chipCost: BASED_CHIP
+                exists: true,
+                paused: false,
+                outputCollection: address(based),
+                fuelCost: BASED_LILS,
+                chipCost: BASED_CHIP
             }),
             Furnace.Recipe({
-                exists: true, paused: false, outputCollection: address(dark), lilCost: DARK_LILS, chipCost: DARK_CHIP
+                exists: true, paused: false, outputCollection: address(dark), fuelCost: DARK_LILS, chipCost: DARK_CHIP
             })
         );
 
@@ -116,7 +120,7 @@ contract FurnaceTest is Test {
         assertEq(chip.balanceOf(DEAD), BASED_CHIP, "CHIP burned");
         assertEq(chip.balanceOf(alice), 0);
 
-        assertEq(furnace.totalLilsBurned(), BASED_LILS);
+        assertEq(furnace.totalFuelBurned(), BASED_LILS);
         assertEq(furnace.totalChipBurned(), BASED_CHIP);
         assertEq(furnace.totalForged(), 1);
         assertEq(furnace.stockRemaining(BASED_RECIPE), 2);
@@ -131,7 +135,7 @@ contract FurnaceTest is Test {
         assertEq(got, 200, "oldest Dark in stock");
         assertEq(dark.ownerOf(200), alice);
         assertEq(chip.balanceOf(DEAD), DARK_CHIP);
-        assertEq(furnace.totalLilsBurned(), DARK_LILS);
+        assertEq(furnace.totalFuelBurned(), DARK_LILS);
         assertEq(furnace.stockRemaining(DARK_RECIPE), 1);
         assertEq(furnace.stockRemaining(BASED_RECIPE), 3, "Based stock untouched");
     }
@@ -157,8 +161,8 @@ contract FurnaceTest is Test {
     }
 
     function test_viewsTheSiteNeeds() public {
-        (uint16 lilCost, uint256 chipCost) = furnace.costOf(BASED_RECIPE);
-        assertEq(lilCost, BASED_LILS);
+        (uint16 fuelCost, uint256 chipCost) = furnace.costOf(BASED_RECIPE);
+        assertEq(fuelCost, BASED_LILS);
         assertEq(chipCost, BASED_CHIP);
 
         (bool available, uint256 tokenId) = furnace.nextOutput(BASED_RECIPE);
@@ -178,7 +182,7 @@ contract FurnaceTest is Test {
     function test_wrongLilCountReverts() public {
         uint256[] memory four = _fuel(alice, 1, 4, BASED_CHIP);
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Furnace.WrongLilCount.selector, uint256(4), BASED_LILS));
+        vm.expectRevert(abi.encodeWithSelector(Furnace.WrongFuelCount.selector, uint256(4), BASED_LILS));
         furnace.forge(BASED_RECIPE, four);
     }
 
@@ -192,7 +196,7 @@ contract FurnaceTest is Test {
         dup[4] = 1; // repeat
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Furnace.DuplicateLil.selector, uint256(1)));
+        vm.expectRevert(abi.encodeWithSelector(Furnace.DuplicateFuelToken.selector, uint256(1)));
         furnace.forge(BASED_RECIPE, dup);
     }
 
@@ -202,7 +206,7 @@ contract FurnaceTest is Test {
         chip.mint(bob, BASED_CHIP);
         vm.startPrank(bob);
         chip.approve(address(furnace), type(uint256).max);
-        vm.expectRevert(abi.encodeWithSelector(Furnace.NotLilOwner.selector, uint256(1), bob));
+        vm.expectRevert(abi.encodeWithSelector(Furnace.NotFuelOwner.selector, uint256(1), bob));
         furnace.forge(BASED_RECIPE, ids);
         vm.stopPrank();
     }
@@ -312,8 +316,8 @@ contract FurnaceTest is Test {
         furnace.executeRecipeChange(BASED_RECIPE);
 
         // The old price still applies throughout the delay.
-        (uint16 lilCost,) = furnace.costOf(BASED_RECIPE);
-        assertEq(lilCost, BASED_LILS, "unchanged until executed");
+        (uint16 fuelCost,) = furnace.costOf(BASED_RECIPE);
+        assertEq(fuelCost, BASED_LILS, "unchanged until executed");
 
         vm.warp(expectedEta);
         vm.prank(multisig);
@@ -342,7 +346,7 @@ contract FurnaceTest is Test {
         furnace.queueRecipeChange(BASED_RECIPE, 0, 1 ether); // zero Lils
 
         vm.expectRevert(Furnace.BadConfig.selector);
-        furnace.queueRecipeChange(BASED_RECIPE, 101, 1 ether); // past MAX_LIL_COST
+        furnace.queueRecipeChange(BASED_RECIPE, 101, 1 ether); // past MAX_FUEL_COST
         vm.stopPrank();
     }
 
@@ -429,10 +433,14 @@ contract FurnaceTest is Test {
             chipAddr,
             address(lil),
             Furnace.Recipe({
-                exists: true, paused: false, outputCollection: address(based), lilCost: BASED_LILS, chipCost: BASED_CHIP
+                exists: true,
+                paused: false,
+                outputCollection: address(based),
+                fuelCost: BASED_LILS,
+                chipCost: BASED_CHIP
             }),
             Furnace.Recipe({
-                exists: true, paused: false, outputCollection: address(dark), lilCost: DARK_LILS, chipCost: DARK_CHIP
+                exists: true, paused: false, outputCollection: address(dark), fuelCost: DARK_LILS, chipCost: DARK_CHIP
             })
         );
         uint256[] memory ids = new uint256[](2);
@@ -595,6 +603,96 @@ contract FurnaceTest is Test {
 
         // The invariant that ties it together: every token ever forged left the contract.
         assertEq(furnace.totalForged(), furnace.forgedByRecipe(BASED_RECIPE) + furnace.forgedByRecipe(DARK_RECIPE));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*        THE FUEL IS AN ARGUMENT, NOT AN ASSUMPTION                    */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice A Furnace deployed against a COMPLETELY DIFFERENT fuel collection forges Based
+    ///         and Dark exactly as before.
+    ///
+    /// @dev Lil Based Nouns are no longer the burn input — a separate DN404 "Chip" collection
+    ///      will be, once it exists. This proves the swap is a deploy-time argument and
+    ///      nothing more: there is no "Lil recipe" to remove, because the fuel is an INPUT to
+    ///      every recipe rather than a recipe of its own. Both output paths are unaffected.
+    function test_theFuelCollectionIsADeployArgumentNotAnAssumption() public {
+        MockNoun otherFuel = new MockNoun("Some Other Fuel", "FUEL");
+
+        Furnace f = new Furnace(
+            multisig,
+            address(chip),
+            address(otherFuel),
+            Furnace.Recipe({
+                exists: true,
+                paused: false,
+                outputCollection: address(based),
+                fuelCost: BASED_LILS,
+                chipCost: BASED_CHIP
+            }),
+            Furnace.Recipe({
+                exists: true, paused: false, outputCollection: address(dark), fuelCost: DARK_LILS, chipCost: DARK_CHIP
+            })
+        );
+
+        assertEq(address(f.fuelCollection()), address(otherFuel), "not Lils, and it does not care");
+
+        // Stock both outputs.
+        based.mint(multisig, 500);
+        dark.mint(multisig, 600);
+        vm.startPrank(multisig);
+        based.setApprovalForAll(address(f), true);
+        dark.setApprovalForAll(address(f), true);
+        uint256[] memory oneBased = new uint256[](1);
+        oneBased[0] = 500;
+        uint256[] memory oneDark = new uint256[](1);
+        oneDark[0] = 600;
+        f.depositStock(address(based), oneBased);
+        f.depositStock(address(dark), oneDark);
+        vm.stopPrank();
+
+        // Fund alice with the NEW fuel and forge both paths.
+        uint256[] memory basedFuel = new uint256[](BASED_LILS);
+        for (uint256 i; i < BASED_LILS; ++i) {
+            basedFuel[i] = 1000 + i;
+            otherFuel.mint(alice, basedFuel[i]);
+        }
+        uint256[] memory darkFuel = new uint256[](DARK_LILS);
+        for (uint256 i; i < DARK_LILS; ++i) {
+            darkFuel[i] = 2000 + i;
+            otherFuel.mint(alice, darkFuel[i]);
+        }
+        chip.mint(alice, BASED_CHIP + DARK_CHIP);
+
+        vm.startPrank(alice);
+        otherFuel.setApprovalForAll(address(f), true);
+        chip.approve(address(f), type(uint256).max);
+        assertEq(f.forge(BASED_RECIPE, basedFuel), 500, "Based path unaffected");
+        assertEq(f.forge(DARK_RECIPE, darkFuel), 600, "Dark path unaffected");
+        vm.stopPrank();
+
+        assertEq(based.ownerOf(500), alice);
+        assertEq(dark.ownerOf(600), alice);
+        assertEq(otherFuel.ownerOf(basedFuel[0]), DEAD, "the new fuel burns the same way");
+        assertEq(f.totalFuelBurned(), BASED_LILS + DARK_LILS);
+    }
+
+    /// @notice And a recipe can ship switched OFF at deploy, which is the other half of
+    ///         "removable": at launch the Dark recipe ships paused.
+    function test_aRecipeCanShipDisabledWithoutTouchingTheOther() public {
+        vm.prank(multisig);
+        furnace.setPaused(DARK_RECIPE, true);
+
+        // Based still forges.
+        uint256[] memory ids = _fuel(alice, 700, BASED_LILS, BASED_CHIP);
+        vm.prank(alice);
+        furnace.forge(BASED_RECIPE, ids);
+
+        // Dark is inert.
+        uint256[] memory darkIds = _fuel(bob, 800, DARK_LILS, DARK_CHIP);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Furnace.RecipeIsPaused.selector, DARK_RECIPE));
+        furnace.forge(DARK_RECIPE, darkIds);
     }
 }
 

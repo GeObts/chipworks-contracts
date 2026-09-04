@@ -19,7 +19,8 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `OPS_WALLET` | _TBD_ | Goya's Bankr wallet. Receives the 20% ops share. |
 | `LOAN_TREASURY` | _TBD_ | Where liquidated NounLoans collateral goes. May be the Safe. |
 | ~~`CLUTCH_VAULT_*`~~ | — | **Gone.** Chipworks runs its own activation vault; see step 4. |
-| `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. |
+| `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. **A normal family collection: 0.5x earner, never burned.** |
+| `FURNACE_FUEL` | **_TBD_** | The collection the Furnace consumes. A DN404 "Chip" collection from a separate workstream. **Was Lil Based Nouns; no longer.** See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
 | `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead`. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). |
@@ -620,8 +621,8 @@ matter; it is listed last because it depends on `$CHIP` existing.
 | Arg | Value | Meaning |
 |---|---|---|
 | `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
-| `chipToken_` | `$CHIP` | Burned alongside the Lils. Must exist first. |
-| `lilCollection_` | `LIL_NOUNS` | The fuel. `0xe3c5Ef27B80481518a2363406e354a9361415556`. |
+| `chipToken_` | `$CHIP` | Burned alongside the fuel. Must exist first. |
+| `fuelCollection_` | **`FURNACE_FUEL` — TBD** | The collection consumed as fuel. **No longer Lil Based Nouns.** Blocks the Furnace deploy until the DN404 address exists. |
 | `basedRecipe` | `{outputCollection: BASED_NOUNS, lilCost, chipCost}` | Recipe id 0, `FORGE_BASED`. |
 | `darkRecipe` | `{outputCollection: DARK_NOUNS, lilCost, chipCost}` | Recipe id 1, `FORGE_DARK`. |
 

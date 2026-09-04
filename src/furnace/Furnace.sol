@@ -10,8 +10,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title Furnace
-/// @notice Burn Lil Based Nouns and $CHIP to forge a Based Noun or a DarkNOUN out of stock
-///         the protocol has deposited.
+/// @notice Burn a fuel NFT and $CHIP to forge a Based Noun or a DarkNOUN out of stock the
+///         protocol has deposited.
 ///
 /// @dev ISOLATED FROM THE MONEY PATH ON PURPOSE. This contract shares no storage, no
 ///      inheritance and no call path with ChipRounds, ChipClaims, Pot or POLTreasury. It
@@ -19,7 +19,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///      set. A bug here loses forge stock; it cannot lose a reward.
 ///
 ///      BURNED MEANS BURNED — STRUCTURALLY, NOT BY POLICY. Inputs are transferred straight
-///      to `0xdead` inside `forge`, so the Furnace never holds a single Lil or a single
+///      to `0xdead` inside `forge`, so the Furnace never holds a single fuel token or a single
 ///      $CHIP at rest. There is no admin function that could reach them because there is
 ///      nothing to reach: the balance is always zero between transactions. `withdrawStock`
 ///      touches only deposited OUTPUT NFTs.
@@ -41,29 +41,51 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /// @notice Delay between queueing a recipe change and being able to execute it.
     uint64 public constant RECIPE_TIMELOCK = 48 hours;
 
-    /// @notice Most Lils one recipe may ever demand. Bounds a mis-keyed config.
-    uint16 public constant MAX_LIL_COST = 100;
+    /// @notice Most fuel tokens one recipe may ever demand. Bounds a mis-keyed config.
+    uint16 public constant MAX_FUEL_COST = 100;
 
     struct Recipe {
         bool exists;
         bool paused;
         address outputCollection;
-        uint16 lilCost;
+        uint16 fuelCost;
         uint256 chipCost;
     }
 
     struct PendingChange {
         bool queued;
-        uint16 lilCost;
+        uint16 fuelCost;
         uint256 chipCost;
         uint64 executableAt;
     }
 
-    /// @notice The token burned alongside the Lils.
+    /// @notice The token burned alongside the fuel.
     IERC20 public immutable chipToken;
 
     /// @notice The collection whose tokens are consumed as fuel.
-    IERC721 public immutable lilCollection;
+    ///
+    /// @dev A CONSTRUCTOR ARGUMENT, NOT A HARDCODED COLLECTION. The Furnace shipped assuming
+    ///      Lil Based Nouns would be the fuel, and that assumption lived only in the naming —
+    ///      never in the logic. It is now named for what it is.
+    ///
+    ///      Swapping the fuel is a deploy-time decision: pass a different address and both
+    ///      recipes carry on unchanged, because the fuel is an INPUT to every recipe rather
+    ///      than a recipe of its own. There is no "Lil recipe" to remove.
+    ///
+    ///      **Immutable on purpose.** The fuel is the thing holders are asked to destroy;
+    ///      being able to repoint it after launch would let governance change what a forge
+    ///      costs people without the 48h notice that guards every other economic parameter
+    ///      here. Changing it means a redeploy, which is the right amount of friction.
+    ///
+    ///      WHAT A NON-ERC-721 FUEL WOULD NEED CHECKING — the interface here is plain
+    ///      ERC-721: `ownerOf` then `transferFrom` to `0xdead`. A hybrid such as DN404 has an
+    ///      ERC-20 base and an ERC-721 mirror, so this must point at the MIRROR, and three
+    ///      things stop being obvious: token ids may be reassigned when the fungible side
+    ///      moves, `ownerOf` may not be stable between a user's approval and their forge, and
+    ///      "burned means burned" needs re-proving because sending the mirror token to
+    ///      `0xdead` also moves the underlying balance. None of that is a reason it cannot
+    ///      work; all of it is a reason not to assume it does.
+    IERC721 public immutable fuelCollection;
 
     mapping(uint8 recipeId => Recipe) internal _recipes;
     mapping(uint8 recipeId => PendingChange) internal _pending;
@@ -75,7 +97,7 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     mapping(address collection => uint256) public forgedFrom;
 
     /// @notice Running totals, for the site.
-    uint256 public totalLilsBurned;
+    uint256 public totalFuelBurned;
     uint256 public totalChipBurned;
     uint256 public totalForged;
     mapping(uint8 recipeId => uint256) public forgedByRecipe;
@@ -83,25 +105,25 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     event Forged(
         address indexed caller,
         uint8 indexed recipeId,
-        uint256[] lilIds,
+        uint256[] fuelIds,
         uint256 chipBurned,
         address indexed outputCollection,
         uint256 outputTokenId
     );
     event StockDeposited(address indexed collection, uint256 tokenId, uint256 remaining);
     event StockWithdrawn(address indexed collection, uint256 tokenId, address indexed to, uint256 remaining);
-    event RecipeSet(uint8 indexed recipeId, address outputCollection, uint16 lilCost, uint256 chipCost);
-    event RecipeChangeQueued(uint8 indexed recipeId, uint16 lilCost, uint256 chipCost, uint64 executableAt);
-    event RecipeChangeExecuted(uint8 indexed recipeId, uint16 lilCost, uint256 chipCost);
+    event RecipeSet(uint8 indexed recipeId, address outputCollection, uint16 fuelCost, uint256 chipCost);
+    event RecipeChangeQueued(uint8 indexed recipeId, uint16 fuelCost, uint256 chipCost, uint64 executableAt);
+    event RecipeChangeExecuted(uint8 indexed recipeId, uint16 fuelCost, uint256 chipCost);
     event RecipeChangeCancelled(uint8 indexed recipeId);
     event RecipePaused(uint8 indexed recipeId, bool paused);
 
     error ZeroAddress();
     error BadRecipe(uint8 recipeId);
     error RecipeIsPaused(uint8 recipeId);
-    error WrongLilCount(uint256 provided, uint16 required);
-    error DuplicateLil(uint256 tokenId);
-    error NotLilOwner(uint256 tokenId, address caller);
+    error WrongFuelCount(uint256 provided, uint16 required);
+    error DuplicateFuelToken(uint256 tokenId);
+    error NotFuelOwner(uint256 tokenId, address caller);
     error OutOfStock(uint8 recipeId, address outputCollection);
     error NothingQueued(uint8 recipeId);
     error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
@@ -111,21 +133,22 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     /// @param multisig       Owner.
     /// @param chipToken_     $CHIP.
-    /// @param lilCollection_ Lil Based Nouns.
-    /// @param basedRecipe    FORGE_BASED: output collection, Lil cost, $CHIP cost.
-    /// @param darkRecipe     FORGE_DARK: output collection, Lil cost, $CHIP cost.
+    /// @param fuelCollection_ The collection consumed as fuel. **NOT hardcoded** — see the
+    ///        note on the fuel collection above.
+    /// @param basedRecipe    FORGE_BASED: output collection, fuel cost, $CHIP cost.
+    /// @param darkRecipe     FORGE_DARK: output collection, fuel cost, $CHIP cost.
     /// @dev Recipe ids are fixed at 0 (Based) and 1 (Dark). Both are configured here so the
     ///      deployed contract is immediately usable and every amount is a deploy argument.
     constructor(
         address multisig,
         address chipToken_,
-        address lilCollection_,
+        address fuelCollection_,
         Recipe memory basedRecipe,
         Recipe memory darkRecipe
     ) Ownable(multisig) {
-        if (multisig == address(0) || chipToken_ == address(0) || lilCollection_ == address(0)) revert ZeroAddress();
+        if (multisig == address(0) || chipToken_ == address(0) || fuelCollection_ == address(0)) revert ZeroAddress();
         chipToken = IERC20(chipToken_);
-        lilCollection = IERC721(lilCollection_);
+        fuelCollection = IERC721(fuelCollection_);
 
         _setRecipe(FORGE_BASED, basedRecipe);
         _setRecipe(FORGE_DARK, darkRecipe);
@@ -136,27 +159,31 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     function _setRecipe(uint8 id, Recipe memory r) internal {
         if (r.outputCollection == address(0)) revert ZeroAddress();
-        if (r.lilCost == 0 || r.lilCost > MAX_LIL_COST) revert BadConfig();
+        if (r.fuelCost == 0 || r.fuelCost > MAX_FUEL_COST) revert BadConfig();
         _recipes[id] = Recipe({
-            exists: true, paused: false, outputCollection: r.outputCollection, lilCost: r.lilCost, chipCost: r.chipCost
+            exists: true,
+            paused: false,
+            outputCollection: r.outputCollection,
+            fuelCost: r.fuelCost,
+            chipCost: r.chipCost
         });
-        emit RecipeSet(id, r.outputCollection, r.lilCost, r.chipCost);
+        emit RecipeSet(id, r.outputCollection, r.fuelCost, r.chipCost);
     }
 
     /* ------------------------------------------------------------------ */
     /*                               FORGE                                  */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Burn `lilIds` and the recipe's $CHIP cost, receive the oldest token in stock.
+    /// @notice Burn `fuelIds` and the recipe's $CHIP cost, receive the oldest token in stock.
     ///
     /// @dev Order is checks → effects → interactions, and the output NFT leaves last, so the
     ///      `onERC721Received` hook on a contract recipient cannot re-enter into a second
     ///      forge against stock this call has already claimed. `nonReentrant` belts it.
-    function forge(uint8 recipeId, uint256[] calldata lilIds) external nonReentrant returns (uint256 outputTokenId) {
+    function forge(uint8 recipeId, uint256[] calldata fuelIds) external nonReentrant returns (uint256 outputTokenId) {
         Recipe memory r = _recipes[recipeId];
         if (!r.exists) revert BadRecipe(recipeId);
         if (r.paused) revert RecipeIsPaused(recipeId);
-        if (lilIds.length != r.lilCost) revert WrongLilCount(lilIds.length, r.lilCost);
+        if (fuelIds.length != r.fuelCost) revert WrongFuelCount(fuelIds.length, r.fuelCost);
 
         // ---- checks: stock first, so a doomed forge burns nothing ----
         uint256 cursor = forgedFrom[r.outputCollection];
@@ -165,16 +192,16 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         outputTokenId = stock[cursor];
 
         // ---- checks: inputs are the caller's, and distinct ----
-        for (uint256 i; i < lilIds.length; ++i) {
-            if (lilCollection.ownerOf(lilIds[i]) != msg.sender) revert NotLilOwner(lilIds[i], msg.sender);
+        for (uint256 i; i < fuelIds.length; ++i) {
+            if (fuelCollection.ownerOf(fuelIds[i]) != msg.sender) revert NotFuelOwner(fuelIds[i], msg.sender);
             for (uint256 j; j < i; ++j) {
-                if (lilIds[j] == lilIds[i]) revert DuplicateLil(lilIds[i]);
+                if (fuelIds[j] == fuelIds[i]) revert DuplicateFuelToken(fuelIds[i]);
             }
         }
 
         // ---- effects ----
         forgedFrom[r.outputCollection] = cursor + 1;
-        totalLilsBurned += lilIds.length;
+        totalFuelBurned += fuelIds.length;
         totalChipBurned += r.chipCost;
         totalForged += 1;
         forgedByRecipe[recipeId] += 1;
@@ -182,8 +209,8 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         // ---- interactions: burn the inputs ----
         // transferFrom, not safeTransferFrom: 0xdead has no code, so the receiver hook would
         // be a no-op, and transferFrom cannot be made to call back into anything.
-        for (uint256 i; i < lilIds.length; ++i) {
-            lilCollection.transferFrom(msg.sender, BURN_ADDRESS, lilIds[i]);
+        for (uint256 i; i < fuelIds.length; ++i) {
+            fuelCollection.transferFrom(msg.sender, BURN_ADDRESS, fuelIds[i]);
         }
 
         if (r.chipCost != 0) {
@@ -199,7 +226,7 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         // ---- interactions: hand over the output, last ----
         IERC721(r.outputCollection).transferFrom(address(this), msg.sender, outputTokenId);
 
-        emit Forged(msg.sender, recipeId, lilIds, r.chipCost, r.outputCollection, outputTokenId);
+        emit Forged(msg.sender, recipeId, fuelIds, r.chipCost, r.outputCollection, outputTokenId);
     }
 
     /* ------------------------------------------------------------------ */
@@ -246,9 +273,9 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     }
 
     /// @notice What a forge would cost right now.
-    function costOf(uint8 recipeId) external view returns (uint16 lilCost, uint256 chipCost) {
+    function costOf(uint8 recipeId) external view returns (uint16 fuelCost, uint256 chipCost) {
         Recipe storage r = _recipes[recipeId];
-        return (r.lilCost, r.chipCost);
+        return (r.fuelCost, r.chipCost);
     }
 
     /* ------------------------------------------------------------------ */
@@ -305,14 +332,14 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /// @notice Queue a change to a recipe's costs. Multisig only. Executable after 48h.
     /// @dev The delay and the event exist so a price change is public well before it binds,
     ///      rather than landing on someone mid-transaction.
-    function queueRecipeChange(uint8 recipeId, uint16 lilCost, uint256 chipCost) external onlyOwner {
+    function queueRecipeChange(uint8 recipeId, uint16 fuelCost, uint256 chipCost) external onlyOwner {
         if (!_recipes[recipeId].exists) revert BadRecipe(recipeId);
-        if (lilCost == 0 || lilCost > MAX_LIL_COST) revert BadConfig();
+        if (fuelCost == 0 || fuelCost > MAX_FUEL_COST) revert BadConfig();
 
         uint64 executableAt = uint64(block.timestamp) + RECIPE_TIMELOCK;
         _pending[recipeId] =
-            PendingChange({queued: true, lilCost: lilCost, chipCost: chipCost, executableAt: executableAt});
-        emit RecipeChangeQueued(recipeId, lilCost, chipCost, executableAt);
+            PendingChange({queued: true, fuelCost: fuelCost, chipCost: chipCost, executableAt: executableAt});
+        emit RecipeChangeQueued(recipeId, fuelCost, chipCost, executableAt);
     }
 
     /// @notice Apply a queued change once its timelock has elapsed. Multisig only.
@@ -321,11 +348,11 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         if (!p.queued) revert NothingQueued(recipeId);
         if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
 
-        _recipes[recipeId].lilCost = p.lilCost;
+        _recipes[recipeId].fuelCost = p.fuelCost;
         _recipes[recipeId].chipCost = p.chipCost;
         delete _pending[recipeId];
 
-        emit RecipeChangeExecuted(recipeId, p.lilCost, p.chipCost);
+        emit RecipeChangeExecuted(recipeId, p.fuelCost, p.chipCost);
     }
 
     /// @notice Drop a queued change. Multisig only.
