@@ -32,6 +32,11 @@ import {IActivationSource} from "../interfaces/IActivationSource.sol";
 ///      it truthful; ChipActivation does the rest. That split is deliberate — this contract
 ///      cannot mint weight, cannot reach a credit, and cannot pay itself a reward.
 ///
+///      REPAYMENT ENDS AT LIQUIDATION, NOT AT A DEADLINE. Past maturity plus grace a loan is
+///      seizable by anyone, but the borrower may still repay — with a late fee — right up
+///      until somebody actually does. A late borrower races a liquidator rather than being
+///      told the money they are holding is no longer wanted. See {repay}.
+///
 ///      SHORT TERMS BY DESIGN. 7 / 14 / 30 / 90 / 180 days, all configurable behind the 48h
 ///      timelock. The short end is the product — fast churn and fast liquidations — which is
 ///      also why the grace period is derived from the term rather than fixed: see {graceFor}.
@@ -88,6 +93,9 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         /// @dev Snapshotted at borrow, so a later terms change cannot move a live loan's
         ///      deadline in either direction. See {graceFor}.
         uint64 gracePeriod;
+        /// @dev Snapshotted with everything else, so a terms change cannot re-price a
+        ///      borrower who is already late.
+        uint32 lateFeeBps;
         uint8 termIndex;
         bool closed;
         bool liquidated;
@@ -97,6 +105,9 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         uint64[TERM_COUNT] length;
         uint32[TERM_COUNT] feeBps;
         uint32 bountyBps;
+        /// @notice Extra fee, in bps of principal, for repaying after the deadline.
+        /// @dev See {repay}. Zero is a valid setting and makes lateness free.
+        uint32 lateFeeBps;
     }
 
     struct PendingTerms {
@@ -130,6 +141,18 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     /// @notice $CHIP the pool actually holds and may lend. Tracked explicitly so the rescue
     ///         can exclude it: see {recoverExcess}.
     uint256 public poolBalance;
+
+    /// @notice $CHIP set aside purely to pay liquidation bounties.
+    ///
+    /// @dev SEC-LN-002. The bounty used to come out of `poolBalance` and was capped at it, so
+    ///      a drained pool paid nothing — exactly when liquidation matters most. A protocol
+    ///      whose pool is empty is one with bad loans outstanding, and that is the worst
+    ///      possible moment for searchers to lose interest in seizing the collateral.
+    ///
+    ///      This buffer is separate and **`withdrawPool` cannot touch it**. Emptying it takes
+    ///      the deliberate, separately-named {withdrawBountyReserve}, so it cannot be drained
+    ///      as a side effect of taking lending capital back out.
+    uint256 public bountyReserve;
 
     /// @notice New borrowing can be halted immediately. Repay and liquidate never can.
     bool public borrowingPaused;
@@ -169,6 +192,9 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     );
     event PoolDeposited(address indexed from, uint256 amount, uint256 poolBalance);
     event PoolWithdrawn(address indexed to, uint256 amount, uint256 poolBalance);
+    event BountyReserveFunded(address indexed from, uint256 amount, uint256 reserve);
+    event BountyReserveWithdrawn(address indexed to, uint256 amount, uint256 reserve);
+    event LateFeeCharged(uint256 indexed loanId, address indexed borrower, uint256 lateFee);
     event TermsQueued(uint64[TERM_COUNT] length, uint32[TERM_COUNT] feeBps, uint32 bountyBps, uint64 executableAt);
     event TermsExecuted(uint64[TERM_COUNT] length, uint32[TERM_COUNT] feeBps, uint32 bountyBps);
     event TermsCancelled();
@@ -294,6 +320,7 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
                 startedAt: uint64(block.timestamp),
                 dueAt: dueAt,
                 gracePeriod: grace,
+                lateFeeBps: _terms.lateFeeBps,
                 termIndex: termIndex,
                 closed: false,
                 liquidated: false
@@ -321,40 +348,72 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     ///      `ChipClaims.claimFor`. It also means a borrower can be bailed out by a friend
     ///      without handing over a key.
     ///
-    ///      The window closes at maturity plus the loan's own grace period — `min(7 days,
-    ///      term / 2)`, snapshotted at borrow, so on a 7-day loan it is 3.5 days rather than
-    ///      another full week. After that the loan is liquidatable and repayment is no longer
-    ///      accepted, even if nobody has liquidated it yet — the deadline is the deadline, and
-    ///      leaving it open would make the grace period unbounded in practice.
-    function repay(uint256 loanId) external nonReentrant {
+    ///      REPAYMENT STAYS OPEN UNTIL SOMEBODY ACTUALLY LIQUIDATES, not until a deadline.
+    ///
+    ///      This used to close at maturity plus grace, and that was a bad rule. A borrower who
+    ///      turned up on day 8 of a 7-day loan holding the full principal was refused — and
+    ///      then kept waiting, still owning the Noun, until a liquidator happened to appear.
+    ///      The protocol gained nothing from that window: it was refusing money it was owed on
+    ///      collateral it had not seized. Raised by external review as SEC-LN-003.
+    ///
+    ///      Now the only thing that ends the right to repay is the thing that actually takes
+    ///      the Noun away. Past the deadline a `lateFeeBps` surcharge applies, so lateness has
+    ///      a price and the term structure still means something — without it, a term would be
+    ///      advisory and the cheapest strategy would be to never repay on time.
+    ///
+    ///      The deadline still governs LIQUIDATION: past it anyone may seize the collateral,
+    ///      and whoever moves first wins. A late borrower is racing a liquidator, which is the
+    ///      honest description of their position.
+    function repay(uint256 loanId) external nonReentrant returns (uint256 paid) {
         Loan storage l = _loanAt(loanId);
         if (l.closed) revert LoanClosed(loanId);
-
-        uint64 deadline = l.dueAt + l.gracePeriod;
-        if (block.timestamp > deadline) revert RepayWindowOver(loanId, deadline);
 
         uint256 principal = l.principal;
         address borrower = l.borrower;
         address collection = l.collection;
         uint256 tokenId = l.tokenId;
 
+        uint256 lateFee = _lateFeeOn(l);
+        paid = principal + lateFee;
+
         // ---- effects ----
         l.closed = true;
         delete _openLoanOf[collection][tokenId];
         poolBalance += principal;
         totalRepaid += principal;
+        totalFees += lateFee;
         openLoanCount -= 1;
 
         // ---- interactions ----
         // Measured, so a $CHIP that reports a transfer it did not make cannot free a Noun.
         uint256 before = chipToken.balanceOf(address(this));
-        chipToken.safeTransferFrom(msg.sender, address(this), principal);
+        chipToken.safeTransferFrom(msg.sender, address(this), paid);
         uint256 delivered = chipToken.balanceOf(address(this)) - before;
-        if (delivered < principal) revert ChipShortfall(delivered, principal);
+        if (delivered < paid) revert ChipShortfall(delivered, paid);
+
+        // The late fee follows the origination fee: out to the FeeSplitter, never into the
+        // pool, so a late repayment funds the next round rather than quietly growing the pool.
+        if (lateFee != 0) chipToken.safeTransfer(feeSplitter, lateFee);
 
         IERC721(collection).transferFrom(address(this), borrower, tokenId);
 
         emit LoanRepaid(loanId, borrower, msg.sender, principal, uint64(block.timestamp));
+        if (lateFee != 0) emit LateFeeCharged(loanId, borrower, lateFee);
+    }
+
+    /// @dev Zero until the deadline passes, then a flat percentage of principal. Flat rather
+    ///      than accruing, for the same reason the origination fee is: nothing in this
+    ///      contract should grow while a borrower is not looking.
+    function _lateFeeOn(Loan storage l) internal view returns (uint256) {
+        if (block.timestamp <= l.dueAt + l.gracePeriod) return 0;
+        return (l.principal * l.lateFeeBps) / BPS;
+    }
+
+    /// @notice What repaying `loanId` costs right now, principal plus any late fee.
+    function repayAmount(uint256 loanId) external view returns (uint256 principal, uint256 lateFee) {
+        Loan storage l = _loanAt(loanId);
+        principal = l.principal;
+        lateFee = _lateFeeOn(l);
     }
 
     /// @notice Seize the collateral of a loan that ran past its grace period.
@@ -376,14 +435,19 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         uint256 tokenId = l.tokenId;
         address to = treasury;
 
+        // SEC-LN-002: the reserve pays first, so a drained pool still rewards a liquidator.
         bounty = (l.principal * _terms.bountyBps) / BPS;
-        if (bounty > poolBalance) bounty = poolBalance;
+        uint256 fromReserve = bounty <= bountyReserve ? bounty : bountyReserve;
+        uint256 fromPool = bounty - fromReserve;
+        if (fromPool > poolBalance) fromPool = poolBalance;
+        bounty = fromReserve + fromPool;
 
         // ---- effects ----
         l.closed = true;
         l.liquidated = true;
         delete _openLoanOf[collection][tokenId];
-        poolBalance -= bounty;
+        bountyReserve -= fromReserve;
+        poolBalance -= fromPool;
         totalLiquidations += 1;
         openLoanCount -= 1;
 
@@ -525,6 +589,31 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         emit PoolDeposited(msg.sender, amount, poolBalance);
     }
 
+    /// @notice Top up the liquidation bounty buffer. Multisig only.
+    /// @dev Measured, like every other inbound transfer here.
+    function fundBountyReserve(uint256 amount) external onlyOwner nonReentrant {
+        if (amount == 0) revert ZeroPrincipal();
+        uint256 before = chipToken.balanceOf(address(this));
+        chipToken.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 delivered = chipToken.balanceOf(address(this)) - before;
+        if (delivered < amount) revert ChipShortfall(delivered, amount);
+
+        bountyReserve += amount;
+        emit BountyReserveFunded(msg.sender, amount, bountyReserve);
+    }
+
+    /// @notice Take $CHIP back out of the bounty buffer. Multisig only.
+    /// @dev DELIBERATELY SEPARATE FROM {withdrawPool}. Draining the buffer should be an
+    ///      explicit decision to stop paying liquidators, never a side effect of pulling
+    ///      lending capital.
+    function withdrawBountyReserve(uint256 amount, address to) external onlyOwner nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0 || amount > bountyReserve) revert PoolTooSmall(amount, bountyReserve);
+        bountyReserve -= amount;
+        chipToken.safeTransfer(to, amount);
+        emit BountyReserveWithdrawn(to, amount, bountyReserve);
+    }
+
     /// @notice Take $CHIP back out of the pool. Multisig only.
     /// @dev Bounded by `poolBalance`, which already excludes every principal that is out on
     ///      loan, so this cannot spend money that is not there. It CAN drain the pool below
@@ -616,6 +705,7 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
 
     function _validateTerms(Terms memory t) internal pure {
         if (t.bountyBps > MAX_BOUNTY_BPS) revert BadConfig();
+        if (t.lateFeeBps > MAX_FEE_BPS) revert BadConfig();
         for (uint256 i; i < TERM_COUNT; ++i) {
             if (t.length[i] == 0 || t.length[i] > MAX_TERM) revert BadConfig();
             if (t.feeBps[i] > MAX_FEE_BPS) revert BadConfig();
@@ -644,7 +734,7 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         uint256 balance = IERC20(token).balanceOf(address(this));
         uint256 amount = balance;
         if (token == address(chipToken)) {
-            uint256 reserved = poolBalance;
+            uint256 reserved = poolBalance + bountyReserve;
             amount = balance > reserved ? balance - reserved : 0;
         }
         if (amount != 0) {

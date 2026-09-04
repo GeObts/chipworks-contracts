@@ -1,7 +1,6 @@
 # REVIEW_PACKAGE.md
 
-**Chipworks — security review package. Check out `review-1`; the contracts under review are
-`launch-candidate-1`.**
+**Chipworks — security review package. Check out the latest `launch-candidate-*` tag.**
 
 Self-contained. Everything you need to check out, build, run, and judge is here; the deep
 brief is `AUDIT_BRIEF.md` and you should read it before forming an opinion, but you do not
@@ -16,7 +15,7 @@ should be read.
 
 ```bash
 git clone <repo> chipworks-contracts && cd chipworks-contracts
-git checkout review-1
+git checkout launch-candidate-8
 git submodule update --init --recursive     # forge-std, openzeppelin-contracts
 
 cp .env.example .env                        # then set BASE_RPC_URL
@@ -24,20 +23,25 @@ forge build
 forge test                                  # everything: 593 tests
 ```
 
-### Two tags, and why
+### One tag now, not two
 
-`launch-candidate-1` is the frozen **contract** state — the thing being reviewed.
-`review-1` is that same tree **plus this package** (`REVIEW_PACKAGE.md`, `TRIAGE.md`,
-`review/`), which was written afterwards. Check out `review-1` so you have the documents;
-the Solidity is identical, and you can prove it rather than trust it:
+`review-1` was a separate tag because this package was written after `launch-candidate-1` was
+frozen, and tags here are never moved. **That split is retired.** Every `launch-candidate-*`
+tag from `-3` onwards carries the review package with it — `REVIEW_PACKAGE.md`, `TRIAGE.md`
+and regenerated `review/flattened/` sources — so the current candidate is the only thing to
+check out.
+
+**Reference `launch-candidate-8`.** Review is iterative rather than a single frozen pass:
+findings arrive in batches, each batch is triaged in `TRIAGE.md` and lands in the next
+candidate, and the tag numbering is honest history — no tag is ever moved or deleted, so you
+can always diff the tree you read against the tree that shipped:
 
 ```bash
-git diff launch-candidate-1 review-1 -- src/     # empty
+git diff launch-candidate-7 launch-candidate-8 -- src/
 ```
 
-Tags are never moved in this repo, which is why the package got its own rather than being
-back-dated into the tag reviewers are reading. Fixes arising from this review land in
-`launch-candidate-2` — see `TRIAGE.md`.
+`review-1` and `launch-candidate-1` still exist and still resolve; they are simply eight
+batches out of date.
 
 **Toolchain:** Foundry, Solidity **0.8.24**, EVM **cancun**, OpenZeppelin **v5.1.0**,
 optimizer on at **200 runs**, **no `via_ir`**. Pinned in `foundry.toml`; do not override them,
@@ -276,7 +280,7 @@ requiring a test that fails on the old code before the new tag is cut.
 
 Please send:
 
-- **File and line** at `launch-candidate-1` / `review-1` (the same code), or a failing test.
+- **File and line** at the candidate tag you reviewed, or a failing test.
 - **A concrete failure scenario** — inputs, state, and what ends up wrong. We will try to
   reproduce it as a test before agreeing.
 - **Both severities** per §6.

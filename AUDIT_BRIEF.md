@@ -10,7 +10,7 @@ runs its own activation vault instead of depending on Clutch; see §7.
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
 **Size:** ~3,030 lines of non-comment source across 12 contracts + 1 base + 14 interfaces.
-**Tests:** 593 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
+**Tests:** 649 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
 against a live Base mainnet fork.
 
 `B20_DOCS.md` in this repo is Base's own tokenized-stock documentation, filed verbatim. It is
@@ -58,7 +58,7 @@ headroom at 3,742 bytes and is the one to watch.
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
 | `ChipRounds.sol` | 532 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
-| `loans/NounLoans.sol` | 378 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
+| `loans/NounLoans.sol` | 418 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
 | `ChipClaims.sol` | 333 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
 | `activation/ChipActivation.sol` | 264 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
@@ -368,7 +368,7 @@ the multisig-set activation source. The argument that this is not a new power: t
 contract already decides whose weight counts in every round, which is strictly more. Judge
 that argument.
 
-### 4.5b LENDING — `loans/NounLoans.sol` (378 LOC), NEW AND HOLDS ASSETS
+### 4.5b LENDING — `loans/NounLoans.sol` (418 LOC), NEW AND HOLDS ASSETS
 
 Borrow $CHIP against a Noun at a flat fee for a fixed term. It holds collateral NFTs and the
 lending pool, so it holds real value; but its accounting is deliberately simple — a flat fee

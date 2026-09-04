@@ -272,7 +272,7 @@ forge(1, ids) -> reverts RecipeIsPaused
 ```
 
 **9. NounLoans** — `(MULTISIG, CHIP, FeeSplitter, LOAN_TREASURY, **ChipActivation**, terms)`
-Terms: `{length: [7d, 14d, 30d, 90d, 180d], feeBps: [50, 100, 200, 500, 900], bountyBps: 200}`.
+Terms: `{length: [7d, 14d, 30d, 90d, 180d], feeBps: [50, 100, 200, 500, 900], bountyBps: 200, lateFeeBps: 100}`.
 
 **Short terms are the product** — fast churn, fast liquidations — so the ladder starts at a
 week. The fee rises with duration while the per-day rate falls (7.1 bps/day at 7d down to 5.0

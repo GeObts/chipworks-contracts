@@ -67,6 +67,117 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 5: NounLoans.sol
+
+Against `launch-candidate-7`.
+
+**External validation, recorded:** the cross-contract trust attacks against ChipActivation all
+came back safe — a Noun cannot earn without collateral being genuinely held, a repaying
+borrower is never stranded, and principal is conserved across the borrow/repay/liquidate
+cycle. That is the seam between the two newest contracts in the repo, so an independent pass
+over it is worth more than most single findings.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| SEC-LN-003 | Rigid grace blocks day-8 repayment with no liquidator | Medium | **Medium / Medium** | **VALID** | **FIXED** — repay stays open until liquidation |
+| SEC-LN-002 | Bounty is zero when the pool is drained | Medium | **Low / Medium** | **VALID** | **FIXED** — non-withdrawable bounty reserve |
+| SEC-LN-001 | `maxPrincipal` is manual vs a crashing floor | Medium | Low / Medium | **ACCEPTED with process** | OPEN_ITEMS 11, no code change |
+| SEC-LN-004 | Custodian de-registration kills yield mid-loan | Medium | Low / Low | **COVERED** — but **not by the fix assumed** |
+
+---
+
+#### SEC-LN-003 — repayment now ends at liquidation, not at a deadline
+
+**VALID, and the old rule was worse than the finding says.** A borrower who turned up on day 8
+of a 7-day loan holding the full principal was refused — and then kept waiting, still owning
+the Noun, until a liquidator happened to appear. The protocol gained nothing from that window:
+it was refusing money it was owed on collateral it had not seized.
+
+**`repay` is now bounded by the thing that actually takes the Noun away.** Past maturity plus
+grace anyone may liquidate, but the borrower may still repay right up until somebody does. A
+late borrower races a liquidator, which is the honest description of their position, rather
+than being told the money they are holding is no longer wanted.
+
+**With a late fee, and the fee is load-bearing.** `lateFeeBps` (1% of principal at launch) is
+charged on any repayment past the deadline. Without it a term would be advisory — the cheapest
+strategy would be to never repay on time — so the surcharge is what keeps the ladder meaning
+something now that the hard cut-off is gone. It is snapshotted at borrow like everything else,
+capped at `MAX_FEE_BPS`, and routed to the FeeSplitter rather than the pool, so a late
+repayment funds the next round.
+
+This **closes OPEN_ITEMS 10**, which recorded the old rule as the one place a borrower could
+lose a Noun while actively trying to pay.
+
+---
+
+#### SEC-LN-002 — the bounty must survive a drained pool
+
+**VALID, and sharper than it looks.** A protocol whose pool is empty is one with bad loans
+outstanding — which is the worst possible moment for searchers to lose interest in seizing
+collateral. The old bounty came out of `poolBalance` and was capped at it, so the incentive
+evaporated exactly when it was needed.
+
+**`bountyReserve` is a separate, non-withdrawable-by-accident buffer.** It pays first;
+`poolBalance` only tops up a shortfall. `withdrawPool` cannot touch it — asserted by
+`test_withdrawPoolCannotDrainTheBountyReserve`, which drains the entire pool and shows the
+buffer still there — and `recoverExcess` now excludes both balances.
+
+Emptying the buffer is still possible, through the separately-named
+`withdrawBountyReserve`. That is deliberate: stopping paying liquidators should be an explicit
+decision, never a side effect of pulling lending capital back out.
+
+**And the degenerate case still works.** With neither pool nor buffer, `liquidate` pays a zero
+bounty rather than reverting — collateral must always be seizable, even when there is nothing
+left to reward it with.
+
+Not funded from FeeSplitter directly, as the finding offered as an alternative: fees flow
+FeeSplitter → Pot → rounds, and diverting them would need a new push path into this contract.
+Topping the buffer up is an ops action, recorded in LAUNCH_CONFIG.
+
+---
+
+#### SEC-LN-001 — `maxPrincipal` vs a crashing floor
+
+**ACCEPTED with process, no code change — and we agree with the reasoning as stated.** An
+on-chain NFT floor oracle is more manipulable than the risk it solves; the same argument
+already settled the Anvil parity question. It stays a multisig parameter reviewed against the
+observed floor.
+
+**The short terms genuinely help**, and it is worth saying why rather than just noting it: an
+underwater position on a 7-day term is resolved within ten and a half days of being taken,
+against thirty-seven on the old shortest term. The maximum time the protocol can be exposed to
+a stale `maxPrincipal` fell by roughly two thirds as a side effect of the term rework.
+
+Recorded in OPEN_ITEMS 11 with a keeper-alert recommendation rather than a contract change.
+
+---
+
+#### SEC-LN-004 — custodian de-registration mid-loan
+
+**COVERED — but NOT by the fix the finding assumes, and that distinction matters.**
+
+The finding cross-references "the round-open snapshot fix" in ChipActivation. **No such fix
+exists.** SEC-ACT-001 was triaged as PARTIAL and the snapshot-at-open change was explicitly
+*not* made: it would require enumerating every activated Noun at `openRound`, and there is no
+such enumeration (ASSUMPTIONS A-10) — that absence is why `contributeWeights` takes a
+caller-supplied list in the first place.
+
+**The protection is real but comes from somewhere else.** Weight is snapshotted when it is
+*contributed*, not read at settlement: `ChipRounds` calls `activation()` in exactly one place,
+`contributeWeights`, and writes the result into the ledger. So a mid-loan de-registration
+cannot strip a borrower of a round whose weight is already booked
+(`test_deregisteringAfterWeightsAreBookedCannotStripTheBorrower`).
+
+The residual is identical to SEC-ACT-001's: the window between `openRound` and
+`contributeWeights`, at most two hours, costing at most one round, recoverable inside the same
+window because a zero-scored token is never marked counted. Same exposure, same reasoning,
+same three tests — this is one finding seen from two contracts, not two findings.
+
+**Flagged rather than quietly accepted** because a reviewer marking SEC-LN-004 closed on the
+strength of a fix that was never written would carry a false belief into the next batch.
+
+---
+
 ### External review — Bankr, batch 4: ChipActivation.sol
 
 Against `launch-candidate-5`.
@@ -885,7 +996,9 @@ on every build.
 | `launch-candidate-3` | EXT-R-M-1, EXT-R-M-2 (removal), EXT-R-I-1, EXT-C-H-1, **plus** SLI-001 and SLI-005 | Superseded |
 | `launch-candidate-4` | SEC-POT-001 … 006 (all six) | Superseded |
 | `launch-candidate-5` | SEC-FEE-001 … 004 | Superseded |
-| `launch-candidate-6` | SEC-ACT-001 … 004 — documentation and tests; **no contract logic changed** | **Current** |
+| `launch-candidate-6` | SEC-ACT-001 … 004 — documentation and tests; **no contract logic changed** | Superseded |
+| `launch-candidate-7` | Short term ladder 7/14/30/90/180 and derived grace — product change, not a finding | Superseded |
+| `launch-candidate-8` | SEC-LN-002, SEC-LN-003; SEC-LN-001 and SEC-LN-004 documented | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read

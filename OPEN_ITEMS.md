@@ -275,31 +275,23 @@ round. Now measured and tolerated, with the shortfall stranded and reported.
 
 ---
 
-## 10. NEW: NounLoans refuses repayment after the grace period
+## 10. RESOLVED: NounLoans refused repayment after the grace period
 
-`repay` reverts once `block.timestamp > dueAt + gracePeriod`, whether or not anyone has
-actually liquidated the loan. The deadline is the deadline.
+**Closed by external review batch 5 (TRIAGE SEC-LN-003), in `launch-candidate-8`.**
 
-**Sharper since the short terms landed.** Grace is now `min(7 days, term / 2)`, so a 7-day
-loan gives a borrower 3.5 days past maturity rather than a week. The rule has not changed but
-the window has, and on the shortest term a borrower who is away for a long weekend can miss it
-entirely. **The site must show the deadline, not just the maturity date**, and should warn
-ahead of it — that was a nice-to-have on a 30-day ladder and is close to mandatory on a
-7-day one.
+Was: `repay` reverted once past maturity plus grace, whether or not anyone had liquidated. A
+borrower turning up on day 8 of a 7-day loan holding the full principal was refused, then kept
+waiting — still owning the Noun — for a liquidator who might not come for days. The protocol
+gained nothing from that window.
 
-**The argument for it:** leaving repayment open until someone happens to liquidate makes the
-grace period unbounded in practice, and makes a borrower's outcome depend on how attentive
-liquidators are that week rather than on the terms they agreed.
+Now: **repayment ends when somebody actually liquidates, not at a deadline.** Past the
+deadline a `lateFeeBps` surcharge applies (1% of principal at launch), so lateness has a price
+and the term ladder still means something, but the borrower keeps the right to pay until the
+collateral is genuinely seized. A late borrower races a liquidator.
 
-**The argument against it, which is not weak:** a borrower who turns up on day 38 with the
-money in hand is refused, and then loses the Noun to a liquidator who may not arrive for
-days. The protocol gains nothing from that window — it is holding collateral it has not
-seized, refusing money it is owed.
-
-**Options if you want it changed:** allow repayment until liquidation actually happens (the
-loan is closed by whoever acts first), or add a second, longer "late" tier with a penalty fee.
-Both are small changes. **Built as specified; flagging it because it is the one rule here
-that can cost a borrower their Noun while they are trying to pay.**
+The site guidance from the original item stands and is now more useful rather than less: show
+the deadline, not just maturity, and warn ahead of it. Missing it is no longer terminal, but it
+does start a race and it does cost 1%.
 
 ## 11. NEW: `maxPrincipal` vs Anvil parity is operational, not enforced
 
@@ -316,6 +308,15 @@ the borrow path — importing an oracle dependency, and a manipulable one, to de
 governance mistake. That is the wrong trade. It stays a number the multisig sets and must
 re-check whenever **either** side moves. `setMaxPrincipal` is deliberately un-timelocked in
 both directions so it can be cut to zero the moment a floor moves.
+
+**External review batch 5 (SEC-LN-001) reached the same conclusion**: an on-chain NFT floor
+oracle is more manipulable than the risk it solves. Accepted with process.
+
+**The short-term ladder helped more than expected.** An underwater position on a 7-day term is
+resolved within 10.5 days of being taken, against 37 on the old shortest term — the maximum
+time the protocol can be exposed to a stale `maxPrincipal` fell by roughly two thirds as a side
+effect of the term rework. Still worth a keeper alert comparing outstanding principal per
+collection against the observed floor; that remains unbuilt.
 
 **Worth building before volume:** an off-chain monitor that compares outstanding principal
 per collection against the observed floor and alerts when the ratio drifts. Not built.

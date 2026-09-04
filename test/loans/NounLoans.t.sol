@@ -66,6 +66,7 @@ contract NounLoansTest is Test {
         t.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
         t.feeBps = [uint32(50), 100, 200, 500, 900];
         t.bountyBps = 200;
+        t.lateFeeBps = 100; // 1% of principal for repaying past the deadline
     }
 
     function _priceFree(address collection) internal {
@@ -340,14 +341,193 @@ contract NounLoansTest is Test {
         assertEq(based.ownerOf(1), alice);
     }
 
-    function test_repayIsRefusedOneSecondAfterGrace() public {
+    /// @notice SEC-LN-003. Past the deadline the borrower may STILL repay, for a late fee,
+    ///         right up until somebody actually liquidates.
+    ///
+    /// @dev This replaces `test_repayIsRefusedOneSecondAfterGrace`, which asserted the old
+    ///      rule: refused on day 8 of a 7-day loan while still holding the Noun, waiting for a
+    ///      liquidator who might not come for days. The protocol gained nothing from that
+    ///      window — it was refusing money it was owed on collateral it had not seized.
+    function test_repayIsStillAllowedAfterTheDeadlineForALateFee() public {
         uint256 id = _borrow(alice, 1, 0, 1_000 ether);
-        uint64 deadline = loans.deadlineOf(id);
-        vm.warp(deadline + 1);
+        uint256 before = chip.balanceOf(alice);
+        uint256 splitterBefore = chip.balanceOf(splitter);
+
+        vm.warp(loans.deadlineOf(id) + 1 days); // comfortably late, unliquidated
+
+        (uint256 principal, uint256 lateFee) = loans.repayAmount(id);
+        assertEq(principal, 1_000 ether);
+        assertEq(lateFee, 10 ether, "1% of principal");
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(NounLoans.RepayWindowOver.selector, id, deadline));
+        uint256 paid = loans.repay(id);
+
+        assertEq(paid, 1_010 ether);
+        assertEq(before - chip.balanceOf(alice), 1_010 ether, "principal plus the late fee");
+        assertEq(based.ownerOf(1), alice, "she gets her Noun back");
+        assertEq(chip.balanceOf(splitter) - splitterBefore, 10 ether, "the late fee funds the next round");
+        assertEq(loans.poolBalance(), 500_000 ether, "the pool got its principal, not the fee");
+    }
+
+    /// @notice And the only thing that ends the right to repay is a real liquidation.
+    function test_repayIsRefusedOnlyOnceLiquidationHasActuallyHappened() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        vm.warp(loans.deadlineOf(id) + 30 days); // very late, still nobody has acted
+
+        // Still repayable a month past the deadline.
+        assertTrue(loans.isLiquidatable(id), "and simultaneously seizable: she is racing");
+        (, uint256 lateFee) = loans.repayAmount(id);
+        assertEq(lateFee, 10 ether);
+
+        // A liquidator wins the race.
+        vm.prank(liquidator);
+        loans.liquidate(id);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.LoanClosed.selector, id));
         loans.repay(id);
+        assertEq(based.ownerOf(1), treasury, "the Noun is gone, and only then");
+    }
+
+    /// @notice No late fee at all if the repayment lands on or before the deadline.
+    function test_noLateFeeRightUpToTheDeadline() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        vm.warp(loans.deadlineOf(id));
+
+        (, uint256 lateFee) = loans.repayAmount(id);
+        assertEq(lateFee, 0, "exactly on the line is not late");
+
+        uint256 before = chip.balanceOf(alice);
+        vm.prank(alice);
+        loans.repay(id);
+        assertEq(before - chip.balanceOf(alice), 1_000 ether, "principal only");
+    }
+
+    /// @notice A live loan keeps the late fee it was written with.
+    function test_aTermsChangeCannotRepriceALateBorrower() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+
+        NounLoans.Terms memory t = _defaultTerms();
+        t.lateFeeBps = 5_000; // 50%
+        vm.prank(multisig);
+        loans.queueTerms(t);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        loans.executeTerms();
+
+        vm.warp(loans.deadlineOf(id) + 1);
+        (, uint256 lateFee) = loans.repayAmount(id);
+        assertEq(lateFee, 10 ether, "still the 1% she borrowed under");
+    }
+
+    function test_theLateFeeIsCappedLikeTheOriginationFee() public {
+        NounLoans.Terms memory t = _defaultTerms();
+        t.lateFeeBps = 5_001; // over MAX_FEE_BPS
+        vm.prank(multisig);
+        vm.expectRevert(NounLoans.BadConfig.selector);
+        loans.queueTerms(t);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*        SEC-LN-002 — THE BOUNTY MUST SURVIVE A DRAINED POOL           */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice THE FINDING. A liquidation still pays a bounty with `poolBalance` at zero.
+    ///
+    /// @dev A protocol whose pool is empty is one with bad loans outstanding, which is the
+    ///      worst possible moment for searchers to lose interest in seizing collateral. The
+    ///      reserve exists so the incentive does not evaporate exactly when it is needed.
+    function test_aLiquidationPaysABountyEvenWithThePoolAtZero() public {
+        _fundReserve(1_000 ether);
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+
+        // Drain every last wei of lending capital.
+        uint256 remaining = loans.poolBalance();
+        vm.prank(multisig);
+        loans.withdrawPool(remaining, multisig);
+        assertEq(loans.poolBalance(), 0);
+
+        vm.warp(loans.deadlineOf(id) + 1);
+        uint256 before = chip.balanceOf(liquidator);
+        vm.prank(liquidator);
+        uint256 bounty = loans.liquidate(id);
+
+        assertEq(bounty, 20 ether, "2% of principal, paid from the reserve");
+        assertEq(chip.balanceOf(liquidator) - before, 20 ether);
+        assertEq(loans.bountyReserve(), 980 ether, "drawn from the buffer");
+        assertEq(based.ownerOf(1), treasury);
+    }
+
+    /// @notice `withdrawPool` cannot reach the buffer, however much it asks for.
+    function test_withdrawPoolCannotDrainTheBountyReserve() public {
+        _fundReserve(1_000 ether);
+        uint256 pool = loans.poolBalance();
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.PoolTooSmall.selector, pool + 1, pool));
+        loans.withdrawPool(pool + 1, multisig);
+
+        // Taking the whole pool leaves the reserve untouched.
+        vm.prank(multisig);
+        loans.withdrawPool(pool, multisig);
+        assertEq(loans.poolBalance(), 0);
+        assertEq(loans.bountyReserve(), 1_000 ether, "the buffer is not lending capital");
+        assertEq(chip.balanceOf(address(loans)), 1_000 ether, "and it is really still there");
+    }
+
+    /// @notice Nor can the rescue, which now excludes both balances.
+    function test_recoverExcessCannotReachTheBountyReserve() public {
+        _fundReserve(1_000 ether);
+        uint256 backed = loans.poolBalance() + loans.bountyReserve();
+        chip.mint(address(loans), 3 ether); // a stray donation on top
+
+        vm.prank(multisig);
+        loans.recoverExcess(address(chip), multisig);
+
+        assertEq(chip.balanceOf(multisig), 3 ether, "only the surplus");
+        assertEq(chip.balanceOf(address(loans)), backed, "pool and buffer both intact");
+    }
+
+    /// @notice Emptying the buffer is possible, but only deliberately and by its own name.
+    function test_theReserveHasItsOwnExplicitWithdrawal() public {
+        _fundReserve(1_000 ether);
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.PoolTooSmall.selector, 1_001 ether, 1_000 ether));
+        loans.withdrawBountyReserve(1_001 ether, multisig);
+
+        vm.prank(multisig);
+        loans.withdrawBountyReserve(1_000 ether, multisig);
+        assertEq(loans.bountyReserve(), 0);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        loans.withdrawBountyReserve(1, alice);
+    }
+
+    /// @notice With neither pool nor buffer the collateral must STILL be seizable — the
+    ///         bounty degrades to zero rather than blocking the liquidation.
+    function test_liquidationStillWorksWithNoPoolAndNoReserve() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        uint256 remaining = loans.poolBalance();
+        vm.prank(multisig);
+        loans.withdrawPool(remaining, multisig);
+
+        vm.warp(loans.deadlineOf(id) + 1);
+        vm.prank(liquidator);
+        uint256 bounty = loans.liquidate(id);
+
+        assertEq(bounty, 0, "nothing to pay with");
+        assertEq(based.ownerOf(1), treasury, "but the collateral still moves");
+    }
+
+    /// @dev Fund the bounty buffer from the multisig.
+    function _fundReserve(uint256 amount) internal {
+        chip.mint(multisig, amount);
+        vm.startPrank(multisig);
+        chip.approve(address(loans), amount);
+        loans.fundBountyReserve(amount);
+        vm.stopPrank();
     }
 
     /// @notice Anyone may repay, and the Noun always goes back to the BORROWER.
@@ -844,9 +1024,12 @@ contract NounLoansTest is Test {
         vm.warp(deadline + 1);
         assertTrue(loans.isLiquidatable(id), "and liquidatable one second later");
 
+        // Repayment is NOT closed by the deadline — only liquidation opens (SEC-LN-003).
+        (, uint256 lateFee) = loans.repayAmount(id);
+        assertEq(lateFee, 10 ether, "late, but still hers to repay");
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(NounLoans.RepayWindowOver.selector, id, deadline));
         loans.repay(id);
+        assertEq(based.ownerOf(1), alice);
     }
 
     /// @notice FAST LIQUIDATION IS THE POINT. A 7-day loan is seizable on day 10.5, not 14.
