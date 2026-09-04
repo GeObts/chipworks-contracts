@@ -96,18 +96,18 @@ contract ThreeCollectionsTest is ChipRewardsBase {
         assertGt(claims.acquired(id, address(nvda)), 0);
     }
 
-    /// @notice The hoodie boost composes with a fractional base rather than colliding.
-    function test_hoodieBoostAppliesOnTopOfTheHalfBase() public {
+    /// @notice A fractional base applies uniformly: no owner-dependent term exists to
+    ///         compose with it. Replaces the removed hoodie-boost composition test.
+    function test_theHalfBaseAppliesUniformlyToEveryHolder() public {
         _fundPot(1_000e6);
         _chip(lilNouns, lilVault, 1, alice, 0);
         _chip(lilNouns, lilVault, 2, bob, 0);
-        hoodies.mint(bob, 1);
 
         uint256 id = rounds.openRound();
         rounds.contributeWeights(id, address(lilNouns), _ids(1, 2));
 
         assertEq(claims.weightOf(id, address(usdc), alice), 5_000);
-        assertEq(claims.weightOf(id, address(usdc), bob), 5_500, "0.5x base then 1.10x boost");
+        assertEq(claims.weightOf(id, address(usdc), bob), 5_000, "0.5x base, same for both");
     }
 
     /// @notice Tiers scale a fractional base without rounding to zero.

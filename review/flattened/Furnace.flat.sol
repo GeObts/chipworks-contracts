@@ -1142,8 +1142,9 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     function _setRecipe(uint8 id, Recipe memory r) internal {
         if (r.outputCollection == address(0)) revert ZeroAddress();
         if (r.lilCost == 0 || r.lilCost > MAX_LIL_COST) revert BadConfig();
-        _recipes[id] =
-            Recipe({exists: true, paused: false, outputCollection: r.outputCollection, lilCost: r.lilCost, chipCost: r.chipCost});
+        _recipes[id] = Recipe({
+            exists: true, paused: false, outputCollection: r.outputCollection, lilCost: r.lilCost, chipCost: r.chipCost
+        });
         emit RecipeSet(id, r.outputCollection, r.lilCost, r.chipCost);
     }
 
@@ -1261,7 +1262,12 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     /// @notice Deposit output NFTs. Multisig only. They queue behind existing stock.
     /// @dev Pulls with transferFrom, so the multisig must have approved this contract.
-    function depositStock(address collection, uint256[] calldata tokenIds) external onlyOwner {
+    /// @dev `nonReentrant` for consistency with every other NFT-moving function here, not
+    ///      because a path exists: a callback from a hostile collection arrives with
+    ///      `msg.sender == collection`, which `onlyOwner` already rejects. Raised by static
+    ///      analysis (TRIAGE SLI-001); added because the inconsistency was an omission rather
+    ///      than a decision, and the next reader should not have to re-derive that.
+    function depositStock(address collection, uint256[] calldata tokenIds) external onlyOwner nonReentrant {
         if (collection == address(0)) revert ZeroAddress();
         for (uint256 i; i < tokenIds.length; ++i) {
             IERC721(collection).transferFrom(msg.sender, address(this), tokenIds[i]);

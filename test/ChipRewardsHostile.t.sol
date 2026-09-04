@@ -6,6 +6,10 @@ import {ChipRounds} from "../src/ChipRounds.sol";
 import {ChipClaims} from "../src/ChipClaims.sol";
 import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 import {GasBombNoun} from "./mocks/MockNoun.sol";
+import {FeeOnTransferToken} from "./mocks/HostileTokens.sol";
+import {StockRegistry} from "../src/StockRegistry.sol";
+import {Venue} from "../src/interfaces/IStockRegistry.sol";
+import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 
 /// @notice The property that matters most: a stock whose token misbehaves must fail IN
 ///         ISOLATION. It must not strand another stock's claims, block a round from
@@ -240,19 +244,15 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         assertEq(claims.weightOf(id, address(usdc), alice), 10_000, "healthy Noun still counted");
     }
 
-    /// @notice A hoodie contract that burns all gas must degrade to "no boost", not revert.
-    function test_gasBombHoodieDegradesToNoBoost() public {
-        _fundPot(1_000e6);
-        _chip(basedNouns, basedVault, 1, alice, 0);
-
-        GasBombNoun bomb = new GasBombNoun();
-        vm.prank(multisig);
-        rounds.setHoodie(address(bomb), 11_000);
-
-        uint256 id = rounds.openRound();
-        rounds.contributeWeights(id, address(basedNouns), _ids(1));
-        assertEq(claims.weightOf(id, address(usdc), alice), 10_000, "unboosted, not reverted");
-    }
+    /// @notice REMOVED WITH ITS SUBJECT. `test_gasBombHoodieDegradesToNoBoost` proved that a
+    ///         hostile external NFT read during weight scoring degraded to "no boost" rather
+    ///         than reverting a round. The hoodie boost is gone, and with it the only place
+    ///         weight scoring called an address the protocol did not choose.
+    ///
+    ///         Weight is now `tier x collectionBase`, read entirely from ChipActivation and
+    ///         `collectionBaseBps`. The equivalent hostile surface — a collection whose
+    ///         `ownerOf` burns all gas — is covered in `test/activation/ChipActivation.t.sol`
+    ///         by `test_aGasBombCollectionCannotWedgeAread`.
 
     /// @notice A router that reverts must skip the stock, not kill the round.
     function test_deadRouterSkipsRatherThanReverts() public {
@@ -331,5 +331,155 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         // The ledger is still exactly solvent for what it owes.
         assertEq(aapl.balanceOf(address(claims)), claims.totalOwed(address(aapl)));
         assertEq(nvda.balanceOf(address(claims)), claims.totalOwed(address(nvda)));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*        THE LEDGER ACCEPTS THE TOKENS BUT REFUSES TO BOOK THEM        */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice EXT-R-M-1. The transfer to the ledger SUCCEEDS, and `recordAcquired` reverts.
+    ///
+    /// @dev This is the gap `test_aBlockedLedgerStrandsOneStockWithoutWedgingTheRound` does
+    ///      not cover. That test blocks the transfer, so `_deliver` sees `ok == false`, books
+    ///      nothing and never calls the ledger. Here the transfer lands — so the engine's
+    ///      balance delta says it sent the full amount — but a fee-on-transfer stock means the
+    ///      LEDGER received less, and `recordAcquired` reverts `Underfunded` because its own
+    ///      balance does not cover `totalOwed + amount`.
+    ///
+    ///      Before the fix that revert propagated: `settleStock` reverted, so the stock could
+    ///      never be settled, `finalizeRound` requires every stock settled and could never
+    ///      succeed, `cancelRound` is blocked by the `Buying` state, and `committedQuote`
+    ///      stranded permanently. One misbehaving stock wedged every holder in the round.
+    ///
+    ///      After the fix the booking failure is caught, the round completes, and the tokens
+    ///      sitting unbooked at the ledger are recoverable — see the assertions at the end.
+    function test_aLedgerThatRefusesToBookDoesNotWedgeTheRound() public {
+        (FeeOnTransferToken fot,) = _registerFeeOnTransferStock();
+
+        _fundPot(2_000e6);
+        _chip(basedNouns, basedVault, 1, alice, 0);
+        _chip(basedNouns, basedVault, 2, bob, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(fot)), _one(uint8(100)));
+        _setSplit(address(basedNouns), 2, bob, _one(address(nvda)), _one(uint8(100)));
+
+        uint256 id = _openAndAccumulate(_ids(1, 2));
+
+        // THE CALL THAT USED TO REVERT.
+        rounds.settleStock(id, address(fot));
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id); // and this could never be reached at all
+
+        // Nobody was credited for the stock the ledger would not book.
+        assertEq(claims.acquired(id, address(fot)), 0, "nothing booked");
+        assertEq(claims.totalOwed(address(fot)), 0, "and nothing owed");
+
+        // The tokens are at the LEDGER, unbooked. They are excess by definition, because
+        // `totalOwed` never rose, so the existing multisig rescue reaches them and cannot
+        // touch anybody's credits on the way.
+        uint256 atLedger = fot.balanceOf(address(claims));
+        assertGt(atLedger, 0, "the tokens really did arrive");
+        assertEq(claims.excess(address(fot)), atLedger, "all of it is recoverable");
+
+        vm.prank(multisig);
+        claims.recoverExcess(address(fot), multisig, atLedger);
+
+        // The ledger is drained of the unbooked tokens. The multisig receives 1% less than
+        // it asked for, because a token that taxes transfers taxes its own rescue too —
+        // worth pinning rather than rounding past, since it is the honest outcome of
+        // recovering a hostile asset and the site should not promise otherwise.
+        assertEq(fot.balanceOf(address(claims)), 0, "nothing unbooked left at the ledger");
+        assertEq(fot.balanceOf(multisig), atLedger - (atLedger / 100), "recovered, minus its own 1% tax");
+
+        // Bob's healthy stock is completely unaffected, which is the whole point.
+        _openClaimWindow();
+        vm.prank(bob);
+        assertGt(claims.claim(id, address(nvda)), 0, "healthy stock still pays out");
+        assertEq(nvda.balanceOf(address(claims)), claims.totalOwed(address(nvda)), "still solvent");
+    }
+
+    /// @notice And the round's quote-token accounting stays honest through it: the money was
+    ///         genuinely spent, so it is reported as spent, not silently returned.
+    function test_aRefusedBookingStillReleasesTheCommittedBudget() public {
+        (FeeOnTransferToken fot,) = _registerFeeOnTransferStock();
+
+        _fundPot(1_000e6);
+        _chip(basedNouns, basedVault, 1, alice, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(fot)), _one(uint8(100)));
+
+        uint256 id = _openAndAccumulate(_ids(1));
+        rounds.settleStock(id, address(fot));
+        rounds.finalizeRound(id);
+
+        assertEq(rounds.committedQuote(), 0, "nothing left committed");
+        assertGt(rounds.getRound(id).spent, 0, "the quote token was genuinely spent");
+        assertEq(uint8(rounds.getRound(id).state), uint8(RoundState.Finalized));
+    }
+
+    /// @dev A stock that taxes transfers: the engine's balance falls by the full amount, the
+    ///      ledger receives less, and the two disagree. 100 bps is enough to trigger it.
+    function _registerFeeOnTransferStock() internal returns (FeeOnTransferToken fot, MockAggregatorV3 feed) {
+        fot = new FeeOnTransferToken("Taxed Stock", "TAXc", STOCK_DEC, 100);
+        feed = new MockAggregatorV3(8, int256(200 * 1e8), "Coinbase TAX");
+
+        address pool = address(uint160(3000));
+        uniFactory.setPool(address(fot), address(usdc), FEE, pool);
+
+        vm.startPrank(multisig);
+        registry.addStock(
+            StockRegistry.AddStockParams({
+                token: address(fot),
+                feed: address(feed),
+                venue: Venue.UniswapV3,
+                pool: pool,
+                fee: FEE,
+                tickSpacing: 0,
+                minLiquidityUsd: 0,
+                tokenDecimals: STOCK_DEC
+            })
+        );
+        registry.setEnabled(address(fot), true);
+        vm.stopPrank();
+
+        router.setRate(address(usdc), address(fot), 1e8, 200 * 1e6);
+        fot.mint(address(router), 1_000_000e8);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                 AN UNPRICEABLE ROUND SAYS SO                         */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice EXT-R-I-1. A dead feed at finalize must not silently shrink `totalPaidUsd`.
+    ///
+    /// @dev The round still finalizes and the credit is untouched — refusing to finalize over
+    ///      a reporting number would be the wrong trade. But the omission is now announced,
+    ///      so the site can show the round as partially priced instead of quietly reporting
+    ///      a smaller number than the holders actually received.
+    function test_anUnpriceableStockIsAnnouncedRatherThanSilentlyDropped() public {
+        _fundPot(2_000e6);
+        _chip(basedNouns, basedVault, 1, alice, 0);
+        _chip(basedNouns, basedVault, 2, bob, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(nvda)), _one(uint8(100)));
+        _setSplit(address(basedNouns), 2, bob, _one(address(googl)), _one(uint8(100)));
+
+        uint256 id = _openAndAccumulate(_ids(1, 2));
+        rounds.settleStock(id, address(nvda));
+        rounds.settleStock(id, address(googl));
+
+        uint256 nvdaAcquired = claims.acquired(id, address(nvda));
+
+        // NVDA's feed dies between settlement and finalize.
+        nvdaFeed.setRevertOnRead(true);
+
+        vm.expectEmit(true, true, false, true, address(rounds));
+        emit ChipRounds.RoundValueUnpriced(id, address(nvda), nvdaAcquired);
+        rounds.finalizeRound(id);
+
+        // GOOGL still priced; NVDA omitted from the USD figure but NOT from the credits.
+        assertGt(rounds.totalPaidUsd(), 0, "the priceable half still counted");
+        assertEq(claims.acquired(id, address(nvda)), nvdaAcquired, "credit unaffected");
+
+        _openClaimWindow();
+        vm.prank(alice);
+        assertEq(claims.claim(id, address(nvda)), nvdaAcquired, "and fully claimable");
     }
 }

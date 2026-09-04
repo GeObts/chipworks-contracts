@@ -57,18 +57,10 @@ contract FurnaceTest is Test {
             address(chip),
             address(lil),
             Furnace.Recipe({
-                exists: true,
-                paused: false,
-                outputCollection: address(based),
-                lilCost: BASED_LILS,
-                chipCost: BASED_CHIP
+                exists: true, paused: false, outputCollection: address(based), lilCost: BASED_LILS, chipCost: BASED_CHIP
             }),
             Furnace.Recipe({
-                exists: true,
-                paused: false,
-                outputCollection: address(dark),
-                lilCost: DARK_LILS,
-                chipCost: DARK_CHIP
+                exists: true, paused: false, outputCollection: address(dark), lilCost: DARK_LILS, chipCost: DARK_CHIP
             })
         );
 
@@ -92,10 +84,7 @@ contract FurnaceTest is Test {
     }
 
     /// @dev Give `to` `n` Lils starting at `startId`, plus CHIP, all approved.
-    function _fuel(address to, uint256 startId, uint256 n, uint256 chipAmount)
-        internal
-        returns (uint256[] memory ids)
-    {
+    function _fuel(address to, uint256 startId, uint256 n, uint256 chipAmount) internal returns (uint256[] memory ids) {
         ids = new uint256[](n);
         for (uint256 i; i < n; ++i) {
             ids[i] = startId + i;
@@ -440,18 +429,10 @@ contract FurnaceTest is Test {
             chipAddr,
             address(lil),
             Furnace.Recipe({
-                exists: true,
-                paused: false,
-                outputCollection: address(based),
-                lilCost: BASED_LILS,
-                chipCost: BASED_CHIP
+                exists: true, paused: false, outputCollection: address(based), lilCost: BASED_LILS, chipCost: BASED_CHIP
             }),
             Furnace.Recipe({
-                exists: true,
-                paused: false,
-                outputCollection: address(dark),
-                lilCost: DARK_LILS,
-                chipCost: DARK_CHIP
+                exists: true, paused: false, outputCollection: address(dark), lilCost: DARK_LILS, chipCost: DARK_CHIP
             })
         );
         uint256[] memory ids = new uint256[](2);

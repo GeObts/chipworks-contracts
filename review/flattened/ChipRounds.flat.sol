@@ -1229,9 +1229,7 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /// @dev Not a price check — a skip, and the slice carries to the next round. See
     ///      {setMaxFeedAge}.
     uint64 public maxFeedAge;
-    uint32 public boostBps;
     uint32 public holdbackBps;
-    address public hoodieCollection;
 
     mapping(address collection => uint32 bps) public collectionBaseBps;
     mapping(address stock => uint32 bps) internal _maxSlippageBpsOverride;
@@ -1265,6 +1263,12 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /// @dev Stock was bought but the ledger could not receive it. It sits in the engine,
     ///      credited to nobody, recoverable by the multisig. Loud on purpose.
     event StockStranded(uint256 indexed roundId, address indexed stock, uint256 amount);
+    /// @notice Stock reached the ledger but the ledger refused to book it. The tokens are at
+    ///         `ChipClaims`, owed to nobody, and recoverable there via `recoverExcess`.
+    event LedgerRefusedBooking(uint256 indexed roundId, address indexed stock, uint256 amount);
+    /// @notice A stock's feed could not be read at finalize, so `amount` of it is missing from
+    ///         this round's reported USD value. The credit itself is unaffected.
+    event RoundValueUnpriced(uint256 indexed roundId, address indexed stock, uint256 amount);
     event StockSkipped(uint256 indexed roundId, address indexed stock, uint256 wouldHaveSpent, bytes reason);
     event RoundFinalized(uint256 indexed roundId, uint256 spent, uint256 returned, uint256 valueUsd);
     event SplitSet(address indexed collection, uint256 indexed tokenId, address[3] stocks, uint8[3] pcts, uint256 fee);
@@ -1320,7 +1324,6 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         roundDuration = 24 hours;
         accumulationWindow = 2 hours;
         defaultMaxSlippageBps = 200; // 2%
-        boostBps = 11_000; // 1.10x
         splitChangeFeeChip = splitChangeFeeChip_;
     }
 
@@ -1363,13 +1366,6 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         slipstreamRouter = ISlipstreamSwapRouter(slip);
         emit AddressUpdated("uniswapRouter", uni);
         emit AddressUpdated("slipstreamRouter", slip);
-    }
-
-    function setHoodie(address collection, uint32 bps) external onlyOwner {
-        if (bps != 0 && bps < BPS) revert BadConfig();
-        hoodieCollection = collection;
-        boostBps = bps;
-        emit ConfigUpdated("boostBps", bps);
     }
 
     function setCollectionBaseBps(address collection, uint32 bps) external onlyOwner {
@@ -1560,7 +1556,7 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
             (bool active, uint32 tierBps, address owner) = activationSource.activation(collection, tokenId);
             if (!active || owner == address(0)) continue;
 
-            uint256 weight = _weight(collection, tierBps, owner);
+            uint256 weight = _weight(collection, tierBps);
             if (weight == 0) continue;
 
             counted[roundId][collection][tokenId] = true;
@@ -1571,24 +1567,23 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit WeightsContributed(roundId, collection, accepted, added);
     }
 
-    /// @dev weight = tier x collectionBase x boost, all in basis points.
-    function _weight(address collection, uint32 tierBps, address owner) internal view returns (uint256) {
+    /// @notice A Noun's weight: tier multiplier x collection base, in basis points.
+    ///
+    /// @dev THERE IS NO THIRD TERM, AND THERE USED TO BE.
+    ///
+    ///      A 1.10x "hoodie boost" — an external NFT collection whose holders scored extra —
+    ///      was carried over from the pre-Clutch v0.1 spec and removed before launch. That
+    ///      collection is not part of this project and is not on Base, so the term was
+    ///      configuration pointing at nothing, priced into nobody's expectations, and
+    ///      carrying a live sybil: the boost read ownership at contribution time while
+    ///      `counted` tracked Nouns rather than boost tokens, so one NFT passed between
+    ///      addresses inside the 2-hour accumulation window could boost unlimited Nouns.
+    ///
+    ///      Removed rather than fixed. See TRIAGE.md EXT-R-M-2.
+    function _weight(address collection, uint32 tierBps) internal view returns (uint256) {
         uint256 base = collectionBaseBps[collection];
         if (base == 0) return 0;
-        uint256 w = (uint256(tierBps) * base) / BPS;
-        if (_hasHoodie(owner)) w = (w * boostBps) / BPS;
-        return w;
-    }
-
-    /// @dev Read live rather than from a poked cache: always correct, one less stale-state
-    ///      bug class, no keeper dependency. Gas-capped so a broken hoodie contract cannot
-    ///      wedge a round. See ASSUMPTIONS C-6.
-    function _hasHoodie(address owner) internal view returns (bool) {
-        address h = hoodieCollection;
-        if (h == address(0) || boostBps <= BPS) return false;
-        (bool ok, bytes memory ret) = h.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC721.balanceOf, (owner)));
-        if (!ok || ret.length < 32) return false;
-        return abi.decode(ret, (uint256)) > 0;
+        return (uint256(tierBps) * base) / BPS;
     }
 
     /// @dev Books a Noun's weight across its chosen stocks. A Noun with no split, or whose
@@ -1701,22 +1696,64 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    /// @dev Hands purchased stock to the ledger and books exactly what arrived. Never
-    ///      reverts: a ledger that cannot receive this token strands it here, recoverable
-    ///      by the multisig, rather than wedging the round for every other holder.
+    /// @dev Hands purchased stock to the ledger and books exactly what arrived. NEVER
+    ///      REVERTS — and that promise has two halves, because the handover can fail in two
+    ///      independent places.
+    ///
+    ///      1. THE TRANSFER FAILS. A ledger the stock's issuer has policy-blocked cannot
+    ///         receive it. `ok` is false, nothing moved, the tokens stay in this contract and
+    ///         are reported by {StockStranded}. Recoverable through this contract's
+    ///         `recoverExcess`, which cannot reach committed budget.
+    ///
+    ///      2. THE TRANSFER SUCCEEDS AND THE LEDGER REFUSES TO BOOK IT. This is the one that
+    ///         used to wedge the round, and it is subtler: `recordAcquired` verifies against
+    ///         the LEDGER's own balance before believing us, so a stock that taxes transfers
+    ///         makes the two disagree — this contract's balance falls by the full amount
+    ///         while the ledger receives less — and the ledger reverts `Underfunded`. An
+    ///         unprotected call meant that revert propagated: `settleStock` reverted, so the
+    ///         stock could never be settled, `finalizeRound` requires every stock settled and
+    ///         could never succeed, `cancelRound` is blocked by the `Buying` state, and
+    ///         `committedQuote` stranded permanently. One misbehaving stock froze every
+    ///         holder in the round. Found by external review (TRIAGE EXT-R-M-1); reproduced
+    ///         by `test_aLedgerThatRefusesToBookDoesNotWedgeTheRound`.
+    ///
+    ///         Now caught. The tokens are at the LEDGER, unbooked, and reported by
+    ///         {LedgerRefusedBooking} rather than by {StockStranded} — a different address
+    ///         holds them, so a different event names them and a different rescue reaches
+    ///         them. Because `totalOwed` never rose, they are *excess* by the ledger's own
+    ///         definition, so `ChipClaims.recoverExcess` can take them and, by construction,
+    ///         cannot touch a single booked credit on the way.
+    ///
+    ///      NO REDELIVERY, DELIBERATELY. It would have to re-enter `recordAcquired` after the
+    ///      round finalized, which reverts `AlreadyFinalized` — and rightly, since the round's
+    ///      shares are fixed at finalize and re-opening them is a far larger hole than the one
+    ///      it would close. Recovery plus manual distribution is the honest path, and it is a
+    ///      multisig action against tokens nobody is owed.
     function _deliver(uint256 roundId, address stock, uint256 amount) internal returns (uint256 delivered) {
         if (amount == 0) return 0;
 
         uint256 before = _balanceOf(stock, address(this));
         (bool ok,) = stock.call(abi.encodeCall(IERC20.transfer, (address(claims), amount)));
+
+        uint256 sent;
         if (ok) {
             uint256 remaining = _balanceOf(stock, address(this));
-            delivered = before > remaining ? before - remaining : 0;
-            if (delivered > amount) delivered = amount;
+            sent = before > remaining ? before - remaining : 0;
+            if (sent > amount) sent = amount;
         }
 
-        if (delivered != 0) claims.recordAcquired(roundId, stock, delivered);
-        if (delivered < amount) emit StockStranded(roundId, stock, amount - delivered);
+        if (sent != 0) {
+            try claims.recordAcquired(roundId, stock, sent) {
+                delivered = sent;
+            } catch {
+                // The tokens left this contract and the ledger would not book them. Say so,
+                // with the amount and where it is, and let the round finish.
+                emit LedgerRefusedBooking(roundId, stock, sent);
+            }
+        }
+
+        // Only what never left THIS contract is stranded here.
+        if (sent < amount) emit StockStranded(roundId, stock, amount - sent);
     }
 
     /// @dev Moves the POL share of a purchase to the treasury and reports how much ACTUALLY
@@ -1906,7 +1943,17 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /// @dev Marks the round at Chainlink prices. Never reverts on a bad feed: a stock whose
     ///      feed is down contributes zero to the headline counter rather than blocking the
     ///      whole round from finalizing.
-    function _roundValueUsd(uint256 roundId, address[] memory stocks) internal view returns (uint256 valueUsd) {
+    /// @dev NOT `view`, so the unpriceable case can say so. A stock whose feed reverts at
+    ///      finalize is simply omitted from the round's USD figure — the tokens are bought and
+    ///      credited either way, and refusing to finalize over a reporting number would be
+    ///      the wrong trade. But an omission that leaves no trace is a lie by rounding:
+    ///      `totalPaidUsd` under-reports, and neither the site nor anyone reading the chain
+    ///      can tell "this round paid less" from "this round could not be priced".
+    ///
+    ///      {RoundValueUnpriced} names each stock it happened to, so the site can show the
+    ///      round as partially priced and re-derive it later from a working feed. Raised by
+    ///      external review as I-1.
+    function _roundValueUsd(uint256 roundId, address[] memory stocks) internal returns (uint256 valueUsd) {
         for (uint256 i; i < stocks.length; ++i) {
             address stock = stocks[i];
             uint256 amount = IChipClaimsView(address(claims)).acquired(roundId, stock);
@@ -1918,7 +1965,9 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
             try registry.priceUsd(stock) returns (uint256 price1e18, uint256) {
                 uint8 dec = registry.getStock(stock).tokenDecimals;
                 valueUsd += (amount * price1e18) / (10 ** dec);
-            } catch {}
+            } catch {
+                emit RoundValueUnpriced(roundId, stock, amount);
+            }
         }
     }
 

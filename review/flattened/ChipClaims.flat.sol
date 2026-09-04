@@ -63,6 +63,16 @@ library Errors {
     error MissingPrecompile(address);
 }
 
+// src/interfaces/IChipRewardsClaimable.sol
+
+/// @notice The slice of ChipRewards the router needs.
+interface IChipRewardsClaimable {
+    function claimFor(address owner, uint256 roundId, address stock) external returns (uint256 amount);
+    function claimable(uint256 roundId, address stock, address owner) external view returns (uint256);
+    function isClaimOpen() external view returns (bool);
+    function nextWindowOpensAt() external view returns (uint64);
+}
+
 // lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol
 
 // OpenZeppelin Contracts (last updated v5.1.0) (utils/introspection/IERC165.sol)
@@ -918,7 +928,7 @@ library SafeERC20 {
 ///
 ///          claimable = acquired[round][stock] * weightOf[round][stock][you]
 ///                                             / totalWeight[round][stock]
-contract ChipClaims is Ownable2Step, ReentrancyGuard {
+contract ChipClaims is IChipRewardsClaimable, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Minimum full claim windows a round must offer before it can expire.
@@ -955,6 +965,19 @@ contract ChipClaims is Ownable2Step, ReentrancyGuard {
 
     /// @notice Where expired credits and auto-compounded claims are sent.
     address public polTreasury;
+
+    /// @notice Notice period on a retarget of `rounds` or `polTreasury`. Same 48h shape as
+    ///         every other economic parameter in this repo.
+    uint64 public constant CONFIG_TIMELOCK = 48 hours;
+
+    struct PendingAddress {
+        bool queued;
+        uint64 executableAt;
+        address target;
+    }
+
+    PendingAddress internal _pendingRounds;
+    PendingAddress internal _pendingPol;
 
     /* --------------------------- tunables ----------------------------- */
 
@@ -998,12 +1021,18 @@ contract ChipClaims is Ownable2Step, ReentrancyGuard {
     event AutoCompoundSet(address indexed owner, bool enabled);
     event ExcessRecovered(address indexed token, address indexed to, uint256 amount);
     event RoundsUpdated(address indexed previous, address indexed current);
+    event RoundsQueued(address indexed target, uint64 executableAt);
+    event PolTreasuryQueued(address indexed target, uint64 executableAt);
+    event RetargetCancelled();
     event PolTreasuryUpdated(address indexed previous, address indexed current);
 
     /* ----------------------------- errors ----------------------------- */
 
     error ZeroAddress();
     error NotRounds(address caller);
+    error AlreadyWired();
+    error NothingQueued();
+    error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
     error RoundNotFinalized(uint256 roundId);
     error AlreadyFinalized(uint256 roundId);
     error AlreadyClaimed(uint256 roundId, address stock, address owner);
@@ -1348,16 +1377,92 @@ contract ChipClaims is Ownable2Step, ReentrancyGuard {
     /* ------------------------------------------------------------------ */
 
     /// @notice Point at the round engine. Multisig only.
+    /// @notice Wire the engine. Allowed ONCE, immediately, while `rounds` is unset.
+    /// @dev The first wiring is not timelocked because at deploy there is nothing to protect
+    ///      and a 48-hour gap would only leave a half-wired ledger exposed for longer. Every
+    ///      later change goes through {queueRounds} / {executeRounds}.
     function setRounds(address v) external onlyOwner {
         if (v == address(0)) revert ZeroAddress();
+        if (rounds != address(0)) revert AlreadyWired();
         emit RoundsUpdated(rounds, v);
         rounds = v;
     }
 
+    /// @notice Queue a change of engine. Multisig only, 48h notice.
+    ///
+    /// @dev TIMELOCKED BECAUSE `rounds` IS THE MOST POWERFUL ADDRESS THIS LEDGER KNOWS.
+    ///      Whatever sits here may write weights, and weight is the numerator of every claim:
+    ///      `claimable = acquired * weightOf / totalWeight`. A hostile engine cannot conjure
+    ///      stock — `recordAcquired` verifies against this contract's own balance — and it
+    ///      cannot touch a finalized round, because both write paths refuse one. But against
+    ///      a round that is still open it could mint itself weight and dilute the holders who
+    ///      earned it.
+    ///
+    ///      48 hours is longer than a round lives, so any round a retarget could have
+    ///      attacked has finalized and become claimable before the change binds. Raised by
+    ///      external review as EXT-C-H-1; see `test/ChipClaimsGovernance.t.sol`.
+    function queueRounds(address v) external onlyOwner {
+        if (v == address(0)) revert ZeroAddress();
+        _pendingRounds =
+            PendingAddress({queued: true, executableAt: uint64(block.timestamp) + CONFIG_TIMELOCK, target: v});
+        emit RoundsQueued(v, uint64(block.timestamp) + CONFIG_TIMELOCK);
+    }
+
+    function executeRounds() external onlyOwner {
+        PendingAddress memory p = _pendingRounds;
+        if (!p.queued) revert NothingQueued();
+        if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
+        emit RoundsUpdated(rounds, p.target);
+        rounds = p.target;
+        delete _pendingRounds;
+    }
+
+    function cancelRounds() external onlyOwner {
+        if (!_pendingRounds.queued) revert NothingQueued();
+        delete _pendingRounds;
+        emit RetargetCancelled();
+    }
+
+    function pendingRounds() external view returns (PendingAddress memory) {
+        return _pendingRounds;
+    }
+
+    /// @notice Wire the POL treasury. Allowed ONCE, immediately, while it is unset.
     function setPolTreasury(address v) external onlyOwner {
         if (v == address(0)) revert ZeroAddress();
+        if (polTreasury != address(0)) revert AlreadyWired();
         emit PolTreasuryUpdated(polTreasury, v);
         polTreasury = v;
+    }
+
+    /// @notice Queue a change of POL treasury. Multisig only, 48h notice.
+    /// @dev Timelocked for the same reason as {queueRounds}, one step removed: `sweepExpired`
+    ///      sends forfeited credits here, so retargeting it diverts real value. Forfeited
+    ///      credits are already lost to their holder (C-19), which makes this lower stakes
+    ///      than the engine — but "lower stakes" is not "no stakes", and the pattern is free.
+    function queuePolTreasury(address v) external onlyOwner {
+        if (v == address(0)) revert ZeroAddress();
+        _pendingPol = PendingAddress({queued: true, executableAt: uint64(block.timestamp) + CONFIG_TIMELOCK, target: v});
+        emit PolTreasuryQueued(v, uint64(block.timestamp) + CONFIG_TIMELOCK);
+    }
+
+    function executePolTreasury() external onlyOwner {
+        PendingAddress memory p = _pendingPol;
+        if (!p.queued) revert NothingQueued();
+        if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
+        emit PolTreasuryUpdated(polTreasury, p.target);
+        polTreasury = p.target;
+        delete _pendingPol;
+    }
+
+    function cancelPolTreasury() external onlyOwner {
+        if (!_pendingPol.queued) revert NothingQueued();
+        delete _pendingPol;
+        emit RetargetCancelled();
+    }
+
+    function pendingPolTreasury() external view returns (PendingAddress memory) {
+        return _pendingPol;
     }
 
     /// @notice Set the claim cadence and how long each window stays open. Multisig only.

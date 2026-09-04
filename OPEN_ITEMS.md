@@ -435,3 +435,28 @@ chip lapse keeps their loan and simply stops earning. Re-checking would turn a l
 into a liquidation trigger — a wildly disproportionate penalty, and one that would hand the
 trigger to whoever controls the activation vault. `test_theGateIsBorrowTimeOnlyAndCannotTriggerALiquidation`
 pins that.
+
+---
+
+## 17. NEW: fixed 2% slippage is a cap-raise precondition
+
+External review (TRIAGE EXT-R-L-1). `defaultMaxSlippageBps` is 2%, flat, per stock, and the
+buy is a single `exactInputSingle` on a public mempool. At launch-cap budgets that is fine —
+a $1,000 round split across four stocks is a ~$250 slice, and 2% of $250 is $5, below the gas
+cost of sandwiching it.
+
+**It does not stay fine as budgets grow.** The 2% is a standing, publicly-readable invitation:
+anyone can compute the exact slice a round will spend, and 2% of a large round is worth
+taking. This is systematic extraction, not a one-off exploit, and it scales linearly with the
+cap while the defence does not move at all.
+
+**Accepted with a plan, no code change now.** Fixing it properly means dynamic slippage
+derived from measured pool depth, or private-order routing, or splitting a buy across blocks
+— all of which are real work on the most security-sensitive path in the repo, and none of
+which should land in the same tag as an external review's other fixes.
+
+**Recorded as a precondition rather than a wish:** the round cap does not go above **$10,000**
+until one of those is in place. That is a number to argue with, but it should be argued with
+explicitly rather than drifted past — which is exactly what `REVIEW_PACKAGE.md` §6 asks
+reviewers to flag, and this is the first cap that is doing security work it was not designed
+for.

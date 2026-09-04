@@ -15,7 +15,7 @@ import {MockCustodian} from "../mocks/MockCustodian.sol";
 ///      implementation is behind {IActivationSource}.
 ///
 ///      The assertions below are deliberately the same claims the Clutch-backed suite makes
-///      — tier times collection base, hoodie boost, three collections not colliding, a sold
+///      — tier times collection base, three collections not colliding, a sold
 ///      Noun earning nothing, a full round crediting pro rata, a credit following the
 ///      address and not the Noun — so a divergence shows up as a failure here rather than as
 ///      a difference nobody notices.
@@ -111,13 +111,14 @@ contract ChipActivationParityTest is ChipRewardsBase {
         assertEq(rounds.getRound(id).totalWeight, 5_000 + 10_000, "0.5x + 1.0x");
     }
 
-    function test_parity_hoodieBoostApplies() public {
+    /// @notice Weight carries no owner-dependent term on the new vault either.
+    function test_parity_weightHasNoOwnerDependentTerm() public {
         _chipNative(address(basedNouns), 1, alice, 0);
-        hoodies.mint(alice, 1);
+        _chipNative(address(basedNouns), 2, bob, 0);
 
         _fundPot(1_000e6);
-        uint256 id = _openAndAccumulate(_ids(1));
-        assertEq(rounds.getRound(id).totalWeight, 11_000, "1.0x x 1.10");
+        uint256 id = _openAndAccumulate(_ids(1, 2));
+        assertEq(rounds.getRound(id).totalWeight, 20_000, "two 1.0x Nouns, no boost");
     }
 
     /// @notice The property Clutch demonstrably fails in production. Here it is structural.

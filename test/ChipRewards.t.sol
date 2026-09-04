@@ -87,17 +87,23 @@ contract ChipRewardsTest is ChipRewardsBase {
         assertEq(claims.weightOf(id, address(usdc), bob), 33_300);
     }
 
-    function test_weight_hoodieBoostApplies() public {
+    /// @notice Weight is tier x collectionBase and NOTHING ELSE.
+    ///
+    /// @dev Replaces `test_weight_hoodieBoostApplies`. The 1.10x boost for holders of an
+    ///      external NFT was removed before launch — see `ChipRounds._weight`. This asserts
+    ///      the absence: two identical Nouns held by different addresses score identically,
+    ///      and no property of the OWNER can move a weight.
+    function test_weight_isTierTimesCollectionBaseAndNothingElse() public {
         _fundPot(1_000e6);
         _chip(basedNouns, basedVault, 1, alice, 0);
         _chip(basedNouns, basedVault, 2, bob, 0);
-        hoodies.mint(bob, 1); // bob has a hoodie
 
         uint256 id = rounds.openRound();
         rounds.contributeWeights(id, address(basedNouns), _ids(1, 2));
 
         assertEq(claims.weightOf(id, address(usdc), alice), 10_000);
-        assertEq(claims.weightOf(id, address(usdc), bob), 11_000, "1.10x boost");
+        assertEq(claims.weightOf(id, address(usdc), bob), 10_000, "no owner-dependent term");
+        assertEq(rounds.getRound(id).totalWeight, 20_000);
     }
 
     /// @notice ASSUMPTIONS A-8: a sold Noun must stop earning immediately, even though the

@@ -585,8 +585,8 @@ Each is intentional and documented in `ASSUMPTIONS.md` §3 (C-1 … C-17):
   by retargeting, and tested. Chosen over a self-destruct force-send.
 - **No masterchef accumulator.** It cannot express per-round 90-day expiry, and we must
   iterate Nouns anyway because the Clutch vault cannot enumerate them.
-- **Hoodie boost read live, not poked.** Correct by construction; a borrowed hoodie still
-  boosts that round, which caching would not fix either.
+- ~~Hoodie boost read live, not poked.~~ **The boost is removed entirely.** Weight is
+  `tier x collectionBase`; no term depends on any property of the owner. See TRIAGE EXT-R-M-2.
 - **`claimFor` is permissionless.** Proceeds always go to the owner, so a stranger calling
   it can only help.
 - **`settleStock` and `claim` are one call per stock.** Failure isolation is structural.
@@ -635,7 +635,7 @@ confirming and both have tests in `test/ThreeCollections.t.sol`:
   `(collection, tokenId)`, so the same token id in three collections is three Nouns.
 
 Lil is also the first base below 1.0, so the fractional weight arithmetic is exercised
-directly (tiers, hoodie boost, and payout ratios at 0.5x).
+directly (tiers and payout ratios at 0.5x).
 
 Verified on a Base fork in `test/fork/LilNouns.t.sol`: real ERC-721, 4,420 supply, EIP-1967
 proxy, **not Enumerable**. Not-Enumerable is fine for the contracts, which never enumerate,

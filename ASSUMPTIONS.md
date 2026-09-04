@@ -465,8 +465,22 @@ refused with `AmountTooSmall` rather than swapped without price protection. Foun
 
 `sweepEth` survives as the escape hatch if the route itself breaks.
 
-### C-6 · The hoodie boost is read live, not poked
-Spec section 4 has `poke(id)` to refresh a cached boost. This reads the hoodie balance live
+### C-6 · The hoodie boost is REMOVED — **no longer a design decision, a deleted feature**
+**Removed before launch, 2026-09-04.** The 1.10x boost for holders of an external NFT
+collection was carried over from the pre-Clutch v0.1 spec. That collection is not part of
+this project and is not deployed on Base, so the term was configuration pointing at nothing.
+It also carried a live sybil, found by external review: the boost read ownership at
+contribution time while the `counted` guard tracked Nouns rather than boost tokens, so one
+NFT passed between addresses inside the 2-hour accumulation window could boost unlimited
+Nouns. Removed at the source rather than fixed — see TRIAGE.md EXT-R-M-2.
+
+**A Noun's weight is now `tier x collectionBase`, and nothing else.** No term in the weight
+formula depends on any property of the owner, which is a simpler and stronger statement than
+the boost was ever worth.
+
+*The original note is kept below for the record.*
+
+~~Spec section 4 has `poke(id)` to refresh a cached boost. This reads the hoodie balance live~~
 at contribution time instead: always correct, no stale-cache bug class, no keeper
 dependency, and one fewer function. Cost is one gas-capped `balanceOf` per Noun per round.
 **Residual risk either way:** a borrowed or briefly-held hoodie boosts that round. Caching

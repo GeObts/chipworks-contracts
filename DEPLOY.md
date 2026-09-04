@@ -444,8 +444,8 @@ Then, from the multisig:
 
 | Call | Recommended value |
 |---|---|
-| `setRounds(chipRounds)` | after step 5b — the only contract allowed to write credits |
-| `setPolTreasury(polTreasury)` | after step 6 |
+| `setRounds(chipRounds)` | after step 5b — the only contract allowed to write credits. **One-shot**: allowed once while unset, then only via `queueRounds` + 48h + `executeRounds` |
+| `setPolTreasury(polTreasury)` | after step 6. **One-shot**, same as above (`queuePolTreasury`) |
 | `setClaimSchedule(604800, 172800)` | claims open every 7 days, for 48h |
 | `setCreditExpiry(2592000)` | 30 days, then unclaimed credits sweep to POL |
 
@@ -478,7 +478,6 @@ Then configure, all from the multisig:
 | `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02; Slipstream router |
 | `setPolTreasury(polTreasury)` | after step 6 — receives the holdback |
 | `setChip(chipToken, 0x…dead)` | after the $CHIP launch |
-| `setHoodie(hoodieCollection, 11000)` | 1.10x boost |
 | `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |
 | `setDefaultMaxSlippageBps(200)` | 2% around the Chainlink mark |
 | `setMaxFeedAge(432000)` | **120 hours.** Skip a stock whose feed has frozen; its slice carries |

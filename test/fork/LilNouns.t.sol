@@ -54,6 +54,6 @@ contract LilNounsForkTest is Test {
     function test_theTwoCallsChipworksMakesBothWork() public view {
         address owner = IERC721(LIL).ownerOf(1);
         assertTrue(owner != address(0), "ownerOf works: used by the adapter's A-8 check");
-        assertGt(IERC721(LIL).balanceOf(owner), 0, "balanceOf works: used by the hoodie boost");
+        assertGt(IERC721(LIL).balanceOf(owner), 0, "balanceOf works: used by the site to list holdings");
     }
 }

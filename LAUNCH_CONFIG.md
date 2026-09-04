@@ -241,7 +241,7 @@ setClaimSchedule(604800, 172800) ; setCreditExpiry(2592000)
 setRoundParams(86400, 7200, 100e6, 1_000e6)   # LAUNCH CAPS
 setCollectionBaseBps(LIL, 5000) / (BASED, 10000) / (DARK, 20000)
 setHoldbackBps(1500) ; setDefaultMaxSlippageBps(200) ; setMaxFeedAge(432000)
-setRouters(...) ; setChip(CHIP, 0xdead) ; setHoodie(HOODIE, 11000)
+setRouters(...) ; setChip(CHIP, 0xdead)
 ```
 
 > **⚠️ WIRING CHECK — `claims.setRounds(rounds)`**

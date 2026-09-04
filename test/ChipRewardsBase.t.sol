@@ -60,7 +60,6 @@ abstract contract ChipRewardsBase is Test {
     MockNoun internal basedNouns;
     MockNoun internal darkNouns;
     MockNoun internal lilNouns;
-    MockNoun internal hoodies;
     MockSoftStakingVault internal basedVault;
     MockSoftStakingVault internal darkVault;
     MockSoftStakingVault internal lilVault;
@@ -103,7 +102,6 @@ abstract contract ChipRewardsBase is Test {
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");
         lilNouns = new MockNoun(unicode"⌐◨-◨ Lil Based Nouns!", "LIL");
-        hoodies = new MockNoun("OnChain Hoodies", "HOOD");
         basedVault = new MockSoftStakingVault(IERC721(address(basedNouns)));
         darkVault = new MockSoftStakingVault(IERC721(address(darkNouns)));
         lilVault = new MockSoftStakingVault(IERC721(address(lilNouns)));
@@ -152,7 +150,6 @@ abstract contract ChipRewardsBase is Test {
         rounds.setRouters(address(router), address(router));
         rounds.setPolTreasury(polTreasury);
         rounds.setChip(address(chip), address(0xdead));
-        rounds.setHoodie(address(hoodies), 11_000);
         vm.stopPrank();
     }
 

@@ -67,6 +67,213 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 1, against `launch-candidate-1`
+
+Two reports: `ChipClaims.sol` and `ChipRounds.sol`. **The `ChipClaims` report artifact has
+not been received yet** — findings C-H-1, C-M-1 and C-M-2 below are triaged from the summary
+relayed to us, and **L-1 through L-4 and the informationals cannot be triaged without the
+document.** They are listed as PENDING rather than silently omitted.
+
+| ID | Finding | Their severity | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| EXT-C-H-1 | Owner retarget + `claimFor` drains unclaimed credits | High | **Low / High** | **PARTIAL** | **FIXED** — 48h timelock on retarget; `claimFor` half disputed |
+| EXT-C-M-1 | Permissionless dust sweep griefs claimants at the window boundary | Medium | n/a | **DISPUTED** | Not reproducible — states are disjoint |
+| EXT-C-M-2 | A credit can land after its round's expiry is computed | Medium | n/a | **DISPUTED** | Not reproducible — both write paths refuse |
+| EXT-C-L-1…L-4, informationals | — | Low / Info | — | **PENDING** | **Artifact not received** |
+| EXT-R-M-1 | Unhandled revert in ledger handoff wedges rounds permanently | Medium | **High / High** | **VALID** | **FIXED** — try/catch + recovery path |
+| EXT-R-M-2 | Hoodie boost sybil via flash-transfer in the accumulation window | Medium | — | **VALID** | **RESOLVED BY FEATURE REMOVAL** |
+| EXT-R-L-1 | Fixed 2% slippage is systematic MEV extraction at scale | Low | **Low / Medium** | **VALID** | **ACCEPTED with a plan** — OPEN_ITEMS 17 |
+| EXT-R-I-1 | Oracle failure silently under-reports `totalPaidUsd` | Info | Info | **VALID** | **FIXED** — one event |
+
+**Their three verified invariants are recorded as external confirmation:** commitment
+solvency, weight bounds, and abandonment safety — invariants 2 and 10 and the `cancelRound`
+path in `REVIEW_PACKAGE.md` §4. Noted because a log that only records disagreements loses the
+part where someone checked our work and agreed.
+
+---
+
+#### EXT-R-M-2 — Hoodie boost sybil: RESOLVED BY FEATURE REMOVAL
+
+**Not present in `launch-candidate-3`.** The boost was deleted rather than fixed.
+
+The finding is correct: `_hasHoodie` read live ownership at contribution time while the
+`counted` guard tracked *Nouns*, not boost tokens, so one NFT passed between addresses inside
+the 2-hour accumulation window could boost unlimited Nouns.
+
+**We did not weigh the fix options, because the feature should not have existed.** It came
+from the pre-Clutch v0.1 spec, pointed at a collection that is not part of this project and is
+not on Base, and was configuration pointing at nothing. Weighing a `hoodieId`-per-round
+mapping against a documented accept was the wrong question.
+
+Removed from `ChipRounds` entirely: `_hasHoodie`, `boostBps`, `hoodieCollection`, `setHoodie`
+and the boost term. **A Noun's weight is now `tier x collectionBase` and nothing else — no
+term depends on any property of the owner**, which is a stronger statement than the boost was
+worth, and it deletes a whole class of question about owner-dependent scoring.
+
+Tests updated rather than dropped: `test_weight_isTierTimesCollectionBaseAndNothingElse`,
+`test_theHalfBaseAppliesUniformlyToEveryHolder` and
+`test_parity_weightHasNoOwnerDependentTerm` now assert the *absence*.
+`test_gasBombHoodieDegradesToNoBoost` went with its subject — it was the only place weight
+scoring called an address the protocol did not choose, and the equivalent hostile surface is
+covered by `test_aGasBombCollectionCannotWedgeAread`.
+
+ChipRounds shrank 20,834 → 20,377 bytes.
+
+---
+
+#### EXT-R-M-1 — Unhandled revert in the ledger handoff
+
+| | |
+|---|---|
+| **Contract** | `src/ChipRounds.sol` — `_deliver` |
+| **Severity (ours)** | **High capped, High uncapped** — a permanent wedge is not bounded by round size |
+| **Verdict** | **VALID, and genuinely new** |
+| **Disposition** | **FIXED** in `launch-candidate-3` |
+| **Test** | `test_aLedgerThatRefusesToBookDoesNotWedgeTheRound`, `test_aRefusedBookingStillReleasesTheCommittedBudget` |
+
+**Genuinely new, and we checked before agreeing.** The existing
+`test_aBlockedLedgerStrandsOneStockWithoutWedgingTheRound` covers the *transfer* failing —
+`ok == false`, nothing moves, no ledger call is made. It does not cover the transfer
+**succeeding** while the booking reverts. The earlier fuzzer-found wedges were all in the buy
+path, not the handoff.
+
+Reproduced first, exactly as described:
+`Underfunded(stock, held 490050000, needed 495000000)`. A fee-on-transfer stock makes the
+engine's balance fall by the full amount while the ledger receives 1% less, and
+`recordAcquired` verifies against the ledger's own balance. The revert propagated:
+`settleStock` reverted, so the stock could never be settled, `finalizeRound` requires every
+stock settled, `cancelRound` is blocked by the `Buying` state, and `committedQuote` stranded
+permanently. **One misbehaving stock froze every holder in the round.**
+
+**Fixed, and the recovery designed rather than just announced** — their recommendation stops
+at emitting an event. The booking call is wrapped in `try/catch`, the round completes, and the
+tokens are reported by a new `LedgerRefusedBooking` event.
+
+**Where they end up matters, and it is not where the recommendation assumed.** The tokens are
+at the *ledger*, not stranded in the engine, so `StockStranded` would have named the wrong
+address and sent the multisig to the wrong rescue. Because `totalOwed` never rose, they are
+**excess by the ledger's own definition** — `ChipClaims.recoverExcess` already reaches them
+and by construction cannot touch a booked credit, since it subtracts `totalOwed` and re-checks
+solvency after transferring. **The recovery path already existed; the fix was making it
+reachable.** The test walks the whole rescue and pins that a taxed token taxes its own rescue
+too.
+
+**No redelivery, deliberately.** It would have to re-enter `recordAcquired` after the round
+finalized, which reverts `AlreadyFinalized` — and rightly, since a round's shares are fixed at
+finalize and re-opening them is a much larger hole than the one it would close.
+
+---
+
+#### EXT-C-H-1 — Owner retarget combined with `claimFor`
+
+| | |
+|---|---|
+| **Contract** | `src/ChipClaims.sol` — `setRounds`, `setPolTreasury` |
+| **Severity (ours)** | **Low capped, High uncapped** — needs the multisig, but reaches holder credits |
+| **Verdict** | **PARTIAL — the conclusion is right, the mechanism traced is not** |
+| **Disposition** | **FIXED** (timelock) / **DISPUTED** (router allowlist) |
+| **Test** | `test/ChipClaimsGovernance.t.sol`, 10 tests |
+
+**The half that is wrong: `claimFor` is not a lever.** `claimFor(owner, roundId, stock)` pays
+the credit belonging to `owner` **to** `owner`. No argument redirects a payout; a stranger
+calling it can only help (ASSUMPTIONS C-16). And the retarget they traced is the
+**FeeSplitter's**, which moves the ops share of inflows — protocol revenue upstream of any
+credit, in a different contract, with no path into `ChipClaims` at all. That half reads like
+the flattened file without deploy context. Pinned by
+`test_claimForCannotRedirectAPayoutToTheCaller` and
+`test_recoverExcessCannotReachABookedCredit`.
+
+**The half that is right, by a different route than described.** `setRounds` was immediate,
+and whatever sits in `rounds` may write weights — weight being the numerator of every claim.
+Retarget it to a hostile contract **while a round is still open** and that contract can mint
+itself weight against stock the round has already bought, diluting the holders who earned it.
+It cannot conjure stock (`recordAcquired` verifies against the ledger's balance) and it cannot
+touch a finalized round (both write paths refuse one), but the live-round window was real —
+and we would not have found it from their description alone, which is worth saying plainly.
+
+**Fixed with the repo's existing 48h pattern**, which is what they asked for and the right
+shape: `queueRounds` / `executeRounds` / `cancelRounds`, and the same for `polTreasury`. 48
+hours is longer than a round lives, so any round a retarget could attack has finalized and
+become claimable before the change binds.
+
+**The first wiring stays immediate**, once, while the address is unset — a 48-hour gap at
+deploy would only leave a half-wired ledger exposed for longer, and there is nothing to protect
+yet. `AlreadyWired` enforces the one-shot; every later change is timelocked.
+
+**Disputed: `claimFor` restricted to registered routers.** It does not address the actual path
+— weight fabrication, not claiming — and it would break a property we rely on: `claimFor` is
+permissionless so a keeper can claim on behalf of holders during the last window before expiry,
+turning a forfeit risk into an operational cost (OPEN_ITEMS 8). It would add a governance
+surface to the one function that currently has none, to defend against an attack it does not
+defend against.
+
+---
+
+#### EXT-C-M-1 — Dust sweep griefing at the window boundary
+
+**DISPUTED. Not reproducible; the two states are provably disjoint.**
+
+`claim` requires `block.timestamp <= expiresAt`; `sweepExpired` requires
+`block.timestamp > expiresAt`. **There is no block in which both are legal**, so there is no
+boundary to race at. `test_claimAndSweepAreStrictlyDisjointAtTheBoundary` pins both sides: at
+exactly `expiresAt` the sweep reverts `NotExpiredYet`, and one second later the claim reverts
+`CreditsExpired`. This is invariant 13 and it was already asserted; the finding appears to
+assume an overlap the code does not have.
+
+On the "dust amounts" half: `sweepExpired(roundId, stock, maxHolders)` batches over a cursor at
+the **caller's** gas cost, marks each holder once, and changes nobody's amount. Once the last
+holder is processed it reverts `AlreadySwept` rather than silently no-opping, so a griefer
+cannot even burn gas pretending to make progress.
+`test_dustSizedSweepBatchesCannotGriefAnyone` sweeps three holders one at a time from a griefer
+address and asserts every token reached POL exactly once.
+
+**What would change our mind:** a sequence where a holder who could have claimed ends up swept,
+or where repeated batching changes any holder's amount. We could not construct one.
+
+---
+
+#### EXT-C-M-2 — A credit landing after the expiry timestamp is computed
+
+**DISPUTED. Both write paths refuse a finalized round.**
+
+`freezeSchedule` sets `expiresAt` inside `finalizeRound`, and `finalizeRound` requires every
+stock already settled — so every `recordAcquired` has happened before the schedule exists.
+Both `creditWeight` and `recordAcquired` then guard `finalizedAt != 0` and revert
+`AlreadyFinalized`, so nothing can land afterwards even from the real engine.
+`test_noCreditCanLandAfterTheScheduleIsFrozen` asserts both, pranked as `rounds` itself.
+
+Assessed against **invariant 11** as asked (the ledger is solvent for what it owes, the engine
+for what it committed): the invariant holds, because a credit that cannot be written cannot
+make the ledger owe more than it holds. The stateful invariant run exercises finalize ordering
+across 128,000 calls and has never produced a counterexample.
+
+**What would change our mind:** a path that calls `freezeSchedule` before the last
+`recordAcquired`, or any second route into the credit maps. We looked for both.
+
+---
+
+#### EXT-R-L-1 — Fixed 2% slippage
+
+**VALID, accepted with a plan.** No code change. Recorded in **OPEN_ITEMS 17** as a
+**cap-raise precondition**: the round cap does not go above $10,000 until dynamic slippage or
+private routing is in place. Below launch caps the arithmetic is against the attacker — 2% of
+a ~$250 slice is $5 — but it scales linearly with the cap while the defence does not move at
+all. This is the first cap doing security work it was not designed for, which is exactly what
+`REVIEW_PACKAGE.md` §6 asks reviewers to surface.
+
+---
+
+#### EXT-R-I-1 — Oracle failure silently under-reports `totalPaidUsd`
+
+**VALID, FIXED.** It was one event. `_roundValueUsd` had a bare `catch {}` that dropped a
+stock's value from the round's USD figure with no trace, so nobody could tell "this round paid
+less" from "this round could not be priced". It is no longer `view` and emits
+`RoundValueUnpriced(roundId, stock, amount)` per unpriceable stock. The round still finalizes
+and credits are untouched — refusing to finalize over a reporting number would be the wrong
+trade. Test: `test_anUnpriceableStockIsAnnouncedRatherThanSilentlyDropped`.
+
+---
+
 ### Static analysis — Slither 0.11.6, run against `launch-candidate-1`
 
 ```bash
@@ -118,9 +325,9 @@ writing it down, not the ratio.
 | **Source** | Slither `reentrancy-no-eth`, self-review |
 | **Contract** | `src/furnace/Furnace.sol:259` |
 | **Severity (claimed)** | Medium |
-| **Severity (ours)** | **Low uncapped, Low capped** — but valid, and the fix is free |
-| **Verdict** | **VALID** |
-| **Disposition** | **DEFERRED to the first fix batch** — see below |
+| **Severity (ours)** | **Informational** — downgraded from Low on closer reading, see below |
+| **Verdict** | **VALID as an inconsistency, NOT exploitable** |
+| **Disposition** | **FIXED** in `launch-candidate-3` |
 
 `depositStock` calls `IERC721(collection).transferFrom(...)` in a loop and pushes to
 `_stock[collection]` after each transfer. Every other NFT-moving function in the Furnace —
@@ -138,12 +345,19 @@ argument that ages badly, the guard costs nothing, and every sibling function al
 An inconsistency like this is also a bad signal to a reviewer: it invites the question of
 what else was missed.
 
-**Deferred, not ignored.** `launch-candidate-1` is frozen while external review runs (see
-the fix rule). This lands in the first fix batch with:
+**DOWNGRADED ON CLOSER READING, AND AN EXPLICIT EXCEPTION TO THE FIX RULE.**
 
-- `test_depositStockIsGuardedAgainstReentrancy` — a hostile ERC-721 whose `transferFrom`
-  re-enters `depositStock`, asserted to revert. **Written against the current tag first, to
-  confirm it fails**, per the rule.
+Writing the failing test showed there is no path to fail. A callback from a hostile collection
+arrives with `msg.sender == collection`, and `depositStock` is `onlyOwner` — so re-entry is
+already rejected before the guard would ever be consulted. The multisig cannot be induced to
+re-enter by a token it is depositing.
+
+So this is a **consistency omission, not a vulnerability**, and no test can fail on the old
+code because the old code was not exploitable. The rule says no fix ships without such a test;
+this is a deliberate, recorded exception rather than a quiet one. The guard is added anyway
+because the inconsistency was an omission rather than a decision, it costs nothing, and every
+sibling function has it — leaving one function different invites a reviewer to ask what else
+was missed, which is exactly the question that cost us the time to answer here.
 
 ---
 
@@ -244,7 +458,7 @@ verification reads instead, which is where a config hazard belongs.
 | **Contract** | `src/ChipClaims.sol:38` |
 | **Severity (ours)** | **Informational** |
 | **Verdict** | **ACCEPTED** — a real if cosmetic improvement |
-| **Disposition** | **DEFERRED to the first fix batch** |
+| **Disposition** | **FIXED** in `launch-candidate-3` |
 
 `ChipClaims` implements every function of `IChipRewardsClaimable` — `claimFor`, `claimable`,
 `isClaimOpen`, `nextWindowOpensAt` — and `ClaimRouter` calls it through that interface, but
@@ -253,17 +467,12 @@ the two agree, which is a small but real gap: a signature drift between the ledg
 router's expectation would compile cleanly and fail at runtime as a silently-failed leg.
 
 Declaring the inheritance costs nothing and makes the compiler enforce what the router
-already assumes. Deferred to the first fix batch only because the tag is frozen; it needs no
-new test beyond the existing router suite, which would fail to compile if the signatures
-diverged after the change.
+already assumes. `ChipClaims` now declares `IChipRewardsClaimable`, and it compiled without a
+single signature change — which is the useful result: the two were already in agreement, and
+now they cannot silently drift apart. No new test: the compiler is the test, and it now runs
+on every build.
 
 ---
-
-### External review findings
-
-*None yet — review in progress against `launch-candidate-1`.*
-
-Entries will be added here as they arrive, in the format above, including any we dispute.
 
 ---
 
@@ -273,7 +482,8 @@ Entries will be added here as they arrive, in the format above, including any we
 |---|---|---|
 | `launch-candidate-1` | The frozen contract state under review | **Current. Frozen.** |
 | `review-1` | Identical `src/`, plus the review package and this file | Documentation only — `git diff launch-candidate-1 review-1 -- src/` is empty |
-| `launch-candidate-2` | SLI-001 (Furnace guard), SLI-005 (interface declaration), plus whatever external review returns | Not cut |
+| `launch-candidate-2` | Skipped — batch 1 arrived before it was cut, so its contents folded into -3 | Never cut |
+| `launch-candidate-3` | EXT-R-M-1, EXT-R-M-2 (removal), EXT-R-I-1, EXT-C-H-1, **plus** SLI-001 and SLI-005 | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read
