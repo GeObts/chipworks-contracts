@@ -161,13 +161,98 @@ contract FeeSplitterTest is Test {
         assertEq(address(greedyPot).balance, 8 ether, "full gas forwarded, not 2300");
     }
 
-    function test_distributeETH_revertsWhenRecipientRejects() public {
+    /// @notice SEC-FEE-001. A recipient that refuses ETH is ESCROWED, not allowed to revert
+    ///         the batch — so the other two legs are paid in full and on time.
+    ///
+    /// @dev This replaces `test_distributeETH_revertsWhenRecipientRejects`, which asserted the
+    ///      old behaviour: the whole distribution reverted and every recipient waited on the
+    ///      broken one. Nothing was lost then either, but everything was stuck.
+    function test_aRejectingRecipientIsEscrowedAndTheOthersArePaid() public {
         RejectingReceiver badOps = new RejectingReceiver();
         FeeSplitter s = new FeeSplitter(multisig, pot, address(badOps), OPS_BPS, MAX_OPS_BPS);
         vm.deal(address(s), 10 ether);
-        vm.expectRevert(Errors.FailedCall.selector);
+
+        s.distributeETH(); // must NOT revert
+
+        assertEq(pot.balance, 8 ether, "the pot was paid in full");
+        assertEq(address(badOps).balance, 0, "ops could not accept");
+        assertEq(s.owedEth(address(badOps)), 2 ether, "and is owed it instead");
+        assertEq(s.totalOwedEth(), 2 ether);
+        assertEq(address(s).balance, 2 ether, "exactly the escrow is held");
+    }
+
+    /// @notice Escrowed ETH is never re-split, however many times distribute is called.
+    function test_escrowedEthIsHeldBackFromEverySubsequentSplit() public {
+        RejectingReceiver badOps = new RejectingReceiver();
+        FeeSplitter s = new FeeSplitter(multisig, pot, address(badOps), OPS_BPS, MAX_OPS_BPS);
+
+        vm.deal(address(s), 10 ether);
         s.distributeETH();
-        assertEq(address(s).balance, 10 ether, "funds stay put, nothing lost");
+        assertEq(s.owedEth(address(badOps)), 2 ether);
+        assertEq(s.distributableEth(), 0, "nothing left to split");
+
+        // A fresh 10 ETH arrives. Only the new money is split.
+        vm.deal(address(s), address(s).balance + 10 ether);
+        assertEq(s.distributableEth(), 10 ether, "the escrow is not double-counted");
+        s.distributeETH();
+
+        assertEq(pot.balance, 16 ether, "the pot got both rounds in full");
+        assertEq(s.owedEth(address(badOps)), 4 ether, "escrow accumulated, not re-split");
+        assertEq(address(s).balance, 4 ether);
+    }
+
+    /// @notice And the escrow is claimable once the recipient can accept again.
+    function test_escrowIsWithdrawableAndPermissionless() public {
+        RejectingReceiver badOps = new RejectingReceiver();
+        FeeSplitter s = new FeeSplitter(multisig, pot, address(badOps), OPS_BPS, MAX_OPS_BPS);
+        vm.deal(address(s), 10 ether);
+        s.distributeETH();
+
+        // The recipient starts accepting ETH.
+        badOps.setAccepting(true);
+
+        // Anyone may push it, and it goes to the RECIPIENT, never to the caller.
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        uint256 paid = s.withdrawEth(address(badOps));
+
+        assertEq(paid, 2 ether);
+        assertEq(address(badOps).balance, 2 ether, "paid the recipient");
+        assertEq(stranger.balance, 0, "not the caller");
+        assertEq(s.owedEth(address(badOps)), 0);
+        assertEq(s.totalOwedEth(), 0);
+        assertEq(address(s).balance, 0);
+    }
+
+    function test_withdrawingNothingReverts() public {
+        vm.expectRevert(abi.encodeWithSelector(FeeSplitter.NothingOwed.selector, ops));
+        splitter.withdrawEth(ops);
+    }
+
+    /// @notice A withdrawal that still cannot land reverts and leaves the escrow intact —
+    ///         it is never consumed by a payment that did not arrive.
+    function test_aFailedWithdrawalLeavesTheEscrowIntact() public {
+        RejectingReceiver badOps = new RejectingReceiver();
+        FeeSplitter s = new FeeSplitter(multisig, pot, address(badOps), OPS_BPS, MAX_OPS_BPS);
+        vm.deal(address(s), 10 ether);
+        s.distributeETH();
+
+        vm.expectRevert();
+        s.withdrawEth(address(badOps)); // still rejecting
+
+        assertEq(s.owedEth(address(badOps)), 2 ether, "still owed");
+        assertEq(s.totalOwedEth(), 2 ether);
+        assertEq(address(s).balance, 2 ether);
+    }
+
+    /// @notice SEC-FEE-004. The batch entry points are permissionless, so the array is capped.
+    function test_anOversizedBatchIsRefused() public {
+        IERC20[] memory many = new IERC20[](33);
+        vm.expectRevert(abi.encodeWithSelector(FeeSplitter.BatchTooLarge.selector, uint256(33), uint256(32)));
+        splitter.distributeTokens(many);
+
+        vm.expectRevert(abi.encodeWithSelector(FeeSplitter.BatchTooLarge.selector, uint256(33), uint256(32)));
+        splitter.distributeAll(many);
     }
 
     function test_distributeETH_reentrancyIsBlocked() public {

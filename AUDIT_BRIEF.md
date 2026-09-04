@@ -66,7 +66,7 @@ headroom at 3,742 bytes and is the one to watch.
 | `anvil/Anvil.sol` | 291 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
 | `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn Lils + $CHIP to forge a Noun. **Outside the money path** |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
-| `FeeSplitter.sol` | 138 | transiently | Three-way split of every inflow: Pot / ops / POL |
+| `FeeSplitter.sol` | 178 | transiently, **plus ETH escrow** | Three-way split of every inflow: Pot / ops / POL |
 | `Pot.sol` | 103 | **yes, round budget** | Holds round budget, converts inflows to USDC |
 | `ClaimRouter.sol` | 84 | **never** | Batches many Chipworks claims into one transaction |
 | `adapters/ClutchVaultAdapter.sol` | 76 | no | **RETIRED, not deployed.** The old Clutch seam, kept as an alternative implementation |
@@ -129,6 +129,8 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
    when a leg is broken; a failed leg leaves the credit fully claimable.
 7. **Every conversion is Chainlink-bounded, capped per call, and measured by balance delta.**
 8. **Value is conserved in every split.** `pot + ops + pol == amount`, dust always to the Pot.
+   A leg that cannot be paid in ETH is **escrowed**, not dropped and not reverted: the sum
+   still reconciles, with `totalOwedEth` holding the difference until it is withdrawn.
 9. **A sold Noun stops earning immediately**, whether or not Clutch has been kicked.
 10. **A padded or duplicated token-id list cannot inflate anyone's share.**
 11. **The ledger is solvent for what it owes, and the engine is solvent for what it has

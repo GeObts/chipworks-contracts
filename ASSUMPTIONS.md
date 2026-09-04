@@ -606,6 +606,21 @@ Three properties make this safe rather than merely restrictive:
 Cost of the design, recorded honestly: a holder gets three or four chances rather than 30
 open days. See OPEN_ITEMS item 8.
 
+### C-20 · Only standard ERC-20s are routed as fee assets — documented, not enforced
+The FeeSplitter moves whatever token it is handed. Restricting that to an allowlist was
+considered after external review (TRIAGE SEC-FEE-002) and **deliberately not done**: an
+allowlist adds a governance surface, and a way to freeze a fee stream by forgetting to add a
+token, to defend against a class the reentrancy guards already cover.
+
+What protects the splitter instead: every downstream entry point a token hook could re-enter
+is `nonReentrant`, the splitter holds no cross-leg accounting state a re-entrant call could
+read inconsistently, and the Pot is paid last from the measured remaining balance so a token
+that takes a cut in transit cannot revert its own split.
+
+**The operational rule stands even though it is not enforced:** route WETH, USDC, AERO and
+$CHIP. A rebasing or callback-heavy token should not be pointed at this contract without
+reading it first.
+
 ### C-19 · An expired credit is forfeited, not compounded
 The 30-day sweep moves everything unclaimed to POLTreasury and writes **no ledger entry** for
 the holder. There never was compound-share crediting on this path — the ledger is only

@@ -484,3 +484,24 @@ Note the asymmetry worth watching: the keeper's tighter `minOut` only helps when
 the one calling. Anyone else can still call `convert()` with no floor beyond Chainlink's, so
 this reduces the protocol's exposure when things are running normally and does nothing when
 they are not. That is an argument for the real fix, not against the cheap one.
+
+---
+
+## 19. NEW: confirm whether $CHIP is fee-on-transfer
+
+`LAUNCH_CONFIG` §2 sets `transfer_fee_recipient → FeeSplitter` on the Bankr launch. We read
+that as *where accrued fees are sent*, not as a per-transfer tax on $CHIP itself, and
+`quoteonlyfees = TRUE` — "fees accrue in WETH only" — points the same way.
+
+**If that reading is wrong, $CHIP is a fee-on-transfer token and it flows through several
+contracts that move it**: the FeeSplitter, ChipActivation's burn, the Furnace's burn, and the
+NounLoans pool.
+
+Every one of those already measures rather than assumes — `_burnChip` checks the delivered
+balance at `0xdead`, `NounLoans` measures on both deposit and repay, and the splitter now pays
+the Pot from the remaining balance (SEC-FEE-003). So the answer does not change whether
+anything is *safe*; it changes whether users are quietly losing a percentage on every
+activation and every loan, and whether the cost tables in §4 need to account for it.
+
+**Ask Bankr directly.** It is one question and it affects a number in the runbook rather than
+a line of code.

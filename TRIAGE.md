@@ -67,6 +67,139 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 3: FeeSplitter.sol
+
+Against `launch-candidate-4`. All four accepted.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| SEC-FEE-001 | A reverting recipient locks ETH in the splitter | High | **Medium / Medium** | **VALID** | **FIXED** — escrow fallback |
+| SEC-FEE-003 | Fee-on-transfer accounting would underflow | Low | Info / Low | **VALID** | **FIXED** — the Pot is the residual claimant |
+| SEC-FEE-002 | Reentrancy via token hooks into an intermediate state | Medium | Info / Info | **DISPUTED** | Already mitigated; documented |
+| SEC-FEE-004 | Unbounded token array | Low | Low / Low | **VALID** | **FIXED** — `MAX_BATCH = 32` |
+
+---
+
+#### SEC-FEE-001 — THE ETH-PATH DECISION: it stays, and it is not hypothetical
+
+**The ETH path stays. It carries a live, primary revenue stream.**
+
+The suggestion to drop it rests on `quoteonlyfees = TRUE` making creator fees arrive as WETH.
+That is true and it is only one source. `grep` for who actually sends native ETH here gives
+one answer, and it is decisive:
+
+- **`Anvil._settle` forwards native ETH**: `feeSplitter.call{value: price}("")`. Every Noun
+  sold through the Box or a snipe sends ETH to this contract **in the same transaction as the
+  sale**, and the Anvil *reverts the sale* if the forward fails. That is not a legacy path; it
+  is the shop, built two candidates ago.
+- **Secondary royalties** on Base marketplaces pay native ETH.
+- Creator fees arrive as WETH, POL income as ERC-20 (AERO). Those use the token path.
+
+So both paths are load-bearing and neither is vestigial. **Simplifying to WETH-only would
+mean either breaking the Anvil or adding a wrap step to the hottest path in the shop** — worse
+on both counts than fixing the splitter.
+
+Note the interaction, because it makes `receive()` more load-bearing than it looks: the Anvil
+reverts a sale whose fee forward fails, so `receive()` staying empty and cheap is what keeps
+the shop working. That has always been the design (pull, not push) and this change does not
+touch it.
+
+**The fix.** Each ETH leg is now paid with a bounded stipend and, on failure, credited to
+`owedEth[recipient]` instead of reverting the batch. A paused Pot, an ops wallet that becomes
+a contract without a payable fallback, or a POL treasury mid-upgrade costs that recipient a
+delay and costs everybody else nothing. `withdrawEth(recipient)` is permissionless and always
+pays the recipient, never the caller — the same rule as `ChipClaims.claimFor`, so a keeper can
+clear a stuck balance without anybody handing over a key.
+
+**Two details that are easy to get wrong and are pinned by tests:**
+
+- **Escrowed ETH is held back from every subsequent split.** `distributeETH` uses
+  `distributableEth()` — balance minus `totalOwedEth` — not `address(this).balance`.
+  Re-splitting escrow would pay it twice and leave the escrow unbacked
+  (`test_escrowedEthIsHeldBackFromEverySubsequentSplit`).
+- **A failed withdrawal leaves the escrow intact.** The bookkeeping is written before the
+  send, so a send that still fails reverts the whole call and rolls it back. The escrow is
+  never consumed by a payment that did not land.
+
+**The gas stipend is sized, not guessed.** 150,000. Too low and the escrow becomes the normal
+path rather than a safety net — the 2300-gas `transfer()` stipend is famously too small for a
+Safe or any recipient writing a slot, and this contract has always deliberately forwarded more.
+Too high, or unbounded, and a hostile recipient burns 63/64 of the remaining gas under EIP-150
+and starves the legs after it — the exact wedge the escrow exists to prevent. 150k clears a
+recipient doing real work on receipt (the existing `GreedyReceiver`, which writes five cold
+slots, needs ~110k and is still paid directly) while bounding three legs to under half a
+million.
+
+**Behaviour change worth flagging to reviewers:** `distributeETH` no longer reverts when a
+recipient rejects. Four existing tests asserted the old revert and have been rewritten to
+assert the escrow instead — they are listed in the commit rather than deleted quietly.
+
+---
+
+#### SEC-FEE-003 — fee-on-transfer accounting
+
+**VALID. FIXED by reordering, which is cheaper than measuring.**
+
+The old sequence paid the Pot first from a precomputed share, then ops, then POL. With a token
+that takes a cut in transit the balance is short by the third transfer and `safeTransfer`
+reverts — freezing that token's fees in the splitter permanently.
+
+**The Pot is now paid LAST, from the measured remaining balance.** That cannot overdraw by
+construction, and it preserves the existing promise exactly: with a well-behaved token ops and
+POL take their exact floors and the Pot receives its share plus every wei of rounding dust
+(`test_thePotStillTakesTheDustOnAWellBehavedToken`). The Pot is simply the residual claimant in
+both directions — it gains the dust and absorbs any transit shortfall, which is the honest
+place to put it, since holders are who the fee was collected for.
+
+This matches `ChipRounds._deliver` and `ChipClaims.recordAcquired`, which already measure
+rather than assume, so the discipline is now consistent across every contract that moves a
+foreign token.
+
+**One thing worth confirming rather than assuming.** LAUNCH_CONFIG sets
+`transfer_fee_recipient → FeeSplitter` on $CHIP. We read that as *where accrued fees are sent*,
+not as a per-transfer tax on $CHIP itself — `quoteonlyfees = TRUE` means fees accrue in WETH,
+which points the same way. **If Bankr's `transfer_fee_recipient` does imply a transfer tax on
+$CHIP, then $CHIP is a fee-on-transfer token flowing through this splitter and this stops being
+hypothetical.** The fix above makes it safe either way, but the semantics are worth a direct
+answer from Bankr, and it is recorded in OPEN_ITEMS 19.
+
+---
+
+#### SEC-FEE-002 — reentrancy via token hooks
+
+**DISPUTED as a live risk; the mitigation was already in place. Documented rather than changed.**
+
+The concern is that a hook mid-distribution re-enters Pot or ChipRounds while the splitter is
+part-way through. Checked every downstream entry point a hook could reach:
+
+| Entry point | Guard |
+|---|---|
+| `Pot.convert()` / `convert(token)` / the `callerMinOut` overloads | `nonReentrant` |
+| `Pot.pullBudget` | `onlyRewards` |
+| `POLTreasury.convert` / `forwardIncome` | `nonReentrant` |
+| `ChipRounds.openRound` / `contributeWeights` / `settleStock` / `finalizeRound` | `nonReentrant` |
+| `ChipClaims.claim` / `claimFor` / `sweepExpired` | `nonReentrant` |
+
+**There is no unguarded downstream entry point**, and the splitter holds no accounting state
+between legs that a re-entrant call could read inconsistently — it computes the split from a
+balance snapshot and transfers. The "intermediate state" the finding worries about does not
+exist here in a form anything can observe.
+
+Restricting fee-routed assets to standard ERC-20s is documented in ASSUMPTIONS C-20 rather than
+enforced in code: an allowlist would add a governance surface and a way to freeze a fee stream
+by forgetting to add a token, to defend against a class the guards already cover.
+
+---
+
+#### SEC-FEE-004 — unbounded token array
+
+**VALID, trivial, FIXED.** `MAX_BATCH = 32` on `distributeTokens` and `distributeAll`. The
+batch entry points are permissionless, so an unbounded array is a way for a caller to build a
+transaction that cannot fit in a block and then call it a protocol bug. The keeper pages;
+nothing here needs a hundred tokens at once.
+
+---
+
 ### External review — Bankr, batch 2: Pot.sol / ConversionRoutes.sol
 
 Against `launch-candidate-3`. **All six accepted in some form**; two of them with the harmful
@@ -625,7 +758,8 @@ on every build.
 | `review-1` | Identical `src/`, plus the review package and this file | Documentation only — `git diff launch-candidate-1 review-1 -- src/` is empty |
 | `launch-candidate-2` | Skipped — batch 1 arrived before it was cut, so its contents folded into -3 | Never cut |
 | `launch-candidate-3` | EXT-R-M-1, EXT-R-M-2 (removal), EXT-R-I-1, EXT-C-H-1, **plus** SLI-001 and SLI-005 | Superseded |
-| `launch-candidate-4` | SEC-POT-001 … 006 (all six) | **Current** |
+| `launch-candidate-4` | SEC-POT-001 … 006 (all six) | Superseded |
+| `launch-candidate-5` | SEC-FEE-001 … 004 | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read

@@ -263,7 +263,14 @@ contract FeeSplitterPolTest is Test {
 
     /// @notice A POL treasury that rejects ETH wedges the flush, exactly as a bad ops
     ///         address does. Recoverable the same way: retarget and flush again.
-    function test_rejectingPolTreasuryIsRecoverable() public {
+    /// @notice SEC-FEE-001 on the THIRD leg: a POL treasury that cannot accept ETH escrows
+    ///         its own share and leaves the pot and ops entirely alone.
+    ///
+    /// @dev Rewritten. The old version asserted the whole flush reverted, so a POL treasury
+    ///      mid-upgrade froze holder rewards too — which is the exact shape the escrow
+    ///      removes. The POL leg is opt-in and the least important of the three; it should
+    ///      never have been able to hold the other two up.
+    function test_aRejectingPolTreasuryEscrowsOnlyItsOwnShare() public {
         RejectingReceiver badPol = new RejectingReceiver();
         vm.startPrank(multisig);
         splitter.setPolTreasury(address(badPol));
@@ -271,14 +278,18 @@ contract FeeSplitterPolTest is Test {
         vm.stopPrank();
 
         vm.deal(address(splitter), 10 ether);
-        vm.expectRevert(Errors.FailedCall.selector);
-        splitter.distributeETH();
+        splitter.distributeETH(); // must not revert
 
-        vm.prank(multisig);
-        splitter.setPolTreasury(polTreasury);
-        splitter.distributeETH();
-        assertEq(polTreasury.balance, 1 ether, "nothing lost while wedged");
-        assertEq(pot.balance, 7 ether);
+        assertEq(pot.balance, 7 ether, "holders paid on time");
+        assertEq(ops.balance, 2 ether, "ops paid on time");
+        assertEq(splitter.owedEth(address(badPol)), 1 ether, "only POL waits");
+        assertEq(address(splitter).balance, 1 ether);
+
+        // Recoverable either way: fix the treasury and claim, or retarget for the future.
+        badPol.setAccepting(true);
+        splitter.withdrawEth(address(badPol));
+        assertEq(address(badPol).balance, 1 ether);
+        assertEq(address(splitter).balance, 0);
     }
 
     /// @notice A frozen token blocks only its own flush, POL leg included.

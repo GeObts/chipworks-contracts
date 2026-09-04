@@ -12,10 +12,18 @@ contract GreedyReceiver {
     }
 }
 
-/// @notice Rejects all ETH.
+/// @notice Rejects ETH until told otherwise.
+/// @dev Toggleable so a test can escrow a payment and then show it becoming claimable once
+///      the recipient is fixed — which is the whole point of the escrow.
 contract RejectingReceiver {
+    bool public accepting;
+
+    function setAccepting(bool v) external {
+        accepting = v;
+    }
+
     receive() external payable {
-        revert("no eth");
+        if (!accepting) revert("no eth");
     }
 }
 

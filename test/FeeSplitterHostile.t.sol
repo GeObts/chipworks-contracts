@@ -8,6 +8,7 @@ import {Errors} from "@openzeppelin/contracts/utils/Errors.sol";
 import {FeeSplitter} from "../src/FeeSplitter.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {BlacklistToken, PausableToken, LyingToken} from "./mocks/HostileTokens.sol";
+import {FeeOnTransferToken} from "./mocks/HostileTokens.sol";
 import {RejectingReceiver} from "./mocks/MockReceivers.sol";
 
 /// @notice Gaps found by diffing this suite against the BasedPacks FeeSplitter tests,
@@ -37,22 +38,41 @@ contract FeeSplitterHostileTest is Test {
     ///         never wedge their splitter. Ours reverts instead. That is a deliberate
     ///         trade — no self-destruct trick, no silently burnt ETH — but it is only
     ///         acceptable if the wedge is RECOVERABLE. Prove that it is.
-    function test_rejectingRecipientIsRecoverableByRetargeting() public {
+    /// @notice Retargeting still recovers a bad recipient — but it is no longer the ONLY
+    ///         recovery, and the flush it follows no longer reverts.
+    ///
+    /// @dev Rewritten for SEC-FEE-001. The old version asserted that `distributeETH` reverted
+    ///      while ops was broken, and that retargeting was what unstuck it. Now the flush
+    ///      succeeds immediately, the pot is paid on time, and the broken leg is escrowed.
+    ///      Retargeting changes where FUTURE shares go; it deliberately does NOT move ETH
+    ///      already escrowed to the old address, because that ETH was allocated to whoever
+    ///      was ops at the time and reassigning it would be a governance power over money
+    ///      already earmarked. The old address claims it with `withdrawEth`.
+    function test_retargetingRedirectsFutureSharesAndEscrowKeepsThePast() public {
         RejectingReceiver badOps = new RejectingReceiver();
         FeeSplitter s = new FeeSplitter(multisig, pot, address(badOps), OPS_BPS, MAX_OPS_BPS);
         vm.deal(address(s), 10 ether);
 
-        vm.expectRevert(Errors.FailedCall.selector);
-        s.distributeETH();
+        s.distributeETH(); // no revert: the pot is paid, ops is escrowed
+        assertEq(pot.balance, 8 ether, "the pot never waited");
+        assertEq(s.owedEth(address(badOps)), 2 ether);
 
         address goodOps = makeAddr("goodOps");
         vm.prank(multisig);
         s.setOps(goodOps);
 
+        vm.deal(address(s), address(s).balance + 10 ether);
         s.distributeETH();
-        assertEq(pot.balance, 8 ether);
-        assertEq(goodOps.balance, 2 ether, "nothing lost while wedged");
-        assertEq(address(s).balance, 0);
+
+        assertEq(pot.balance, 16 ether);
+        assertEq(goodOps.balance, 2 ether, "the new ops gets the new tranche");
+        assertEq(s.owedEth(address(badOps)), 2 ether, "the old escrow is untouched by a retarget");
+
+        // And the old address can still claim what it was allocated.
+        badOps.setAccepting(true);
+        s.withdrawEth(address(badOps));
+        assertEq(address(badOps).balance, 2 ether);
+        assertEq(address(s).balance, 0, "nothing stranded either way");
     }
 
     /// @notice BasedPacks: flush, retarget, flush again. Ours must do the same on BOTH
@@ -189,5 +209,44 @@ contract FeeSplitterHostileTest is Test {
 
         assertEq(liar.balanceOf(pot), 0, "nothing actually moved");
         assertEq(liar.balanceOf(address(splitter)), 1_000 ether, "funds still here, recoverable");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*        SEC-FEE-003 — A TOKEN THAT TAKES A CUT IN TRANSIT             */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice A fee-on-transfer token must not be able to revert its own split.
+    ///
+    /// @dev The old ordering paid the pot first from a precomputed share, so by the third
+    ///      transfer the balance was short and `safeTransfer` reverted — freezing that
+    ///      token's fees in the splitter permanently. The pot is now paid LAST from the
+    ///      measured remaining balance, which cannot overdraw by construction.
+    ///
+    ///      No fee token Chipworks routes today behaves this way. This is the same
+    ///      "measure, never assume" discipline `ChipRounds._deliver` already applies.
+    function test_aFeeOnTransferTokenSplitsWithoutReverting() public {
+        FeeOnTransferToken fot = new FeeOnTransferToken("Taxed", "TAX", 18, 100); // 1%
+        fot.mint(address(splitter), 1_000 ether);
+
+        splitter.distributeToken(fot); // must not revert
+
+        // Ops took its exact share (less the token's own tax in transit).
+        assertGt(fot.balanceOf(ops), 0, "ops was paid");
+        assertGt(fot.balanceOf(pot), 0, "and so was the pot");
+        assertEq(fot.balanceOf(address(splitter)), 0, "nothing frozen in the splitter");
+    }
+
+    /// @notice And the pot is the residual claimant: with a well-behaved token it still gets
+    ///         its exact share plus every wei of rounding dust.
+    function test_thePotStillTakesTheDustOnAWellBehavedToken() public {
+        MockERC20 odd = new MockERC20("Odd", "ODD", 18);
+        odd.mint(address(splitter), 10_001); // deliberately indivisible by the bps split
+
+        (uint256 potAmount, uint256 opsAmount,) = splitter.previewSplit(10_001);
+        splitter.distributeToken(odd);
+
+        assertEq(odd.balanceOf(ops), opsAmount);
+        assertEq(odd.balanceOf(pot), potAmount, "dust still lands on holders");
+        assertEq(odd.balanceOf(ops) + odd.balanceOf(pot), 10_001, "value conserved");
     }
 }
