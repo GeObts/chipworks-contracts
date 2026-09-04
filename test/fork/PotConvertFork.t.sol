@@ -16,12 +16,14 @@ contract PotConvertForkTest is Test {
     address internal multisig = makeAddr("multisig");
     address internal stranger = makeAddr("stranger");
 
+    address internal constant UNIV3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
+
     function setUp() public {
         vm.createSelectFork(vm.envString("BASE_RPC_URL"));
-        pot = new Pot(multisig, USDC);
+        pot = new Pot(multisig, USDC, UNIV3_FACTORY);
         vm.prank(multisig);
         // 0.05% tier, 1% slippage bound, 5 ETH per call, 1h feed staleness.
-        pot.setConversionConfig(WETH, ETH_USD_FEED, SWAP_ROUTER_02, 500, 100, 5 ether, 1 hours);
+        pot.setConversionConfig(WETH, ETH_USD_FEED, SWAP_ROUTER_02, 500, 100, 5 ether, 0, 1 hours);
     }
 
     function test_routerAndFeedAreWhatWeThink() public view {
@@ -88,7 +90,7 @@ contract PotConvertForkTest is Test {
     ///         the bound. Without it a whale-sized pot would fail or bleed.
     function test_uncappedLargeSwapIsWorseThanCappedOnes() public {
         vm.prank(multisig);
-        pot.setConversionConfig(WETH, ETH_USD_FEED, SWAP_ROUTER_02, 500, 100, 1000 ether, 1 hours);
+        pot.setConversionConfig(WETH, ETH_USD_FEED, SWAP_ROUTER_02, 500, 100, 1000 ether, 0, 1 hours);
 
         vm.deal(address(pot), 500 ether);
         uint256 minOutBig = pot.conversionMinOut(500 ether);

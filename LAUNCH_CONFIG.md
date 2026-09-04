@@ -207,12 +207,18 @@ stockCount() == 13 ; enabledTokens().length == 0
 setEnabled(CRCLc, true)  -> reverts PoolNotSet     # no market yet
 ```
 
-**3. Pot** — `(MULTISIG, USDC)`, then `setConversionConfig` and `setRoute(AERO)`.
+**3. Pot** — `(MULTISIG, USDC, UNIV3_FACTORY)`, then `setConversionConfig`, `setRoute(AERO)`
+and `setSequencerFeed`. The factory argument makes a Slipstream router unconfigurable
+(SEC-POT-001); the sequencer feed is `0xBCF85224fc0756B9Fa45aA7892530B47e10b6433` with a 1h
+grace (SEC-POT-003, ASSUMPTIONS A-19).
 ```
 pullBudget(1)  from anyone  -> reverts NotRewards  # nobody can pull yet
+setRewards(<an EOA>)        -> reverts NotAContract # SEC-POT-006
+setRoute(.., <slipstream router>, ..) -> reverts RouterNotUniswapV3   # SEC-POT-001
+sequencerUptimeFeed()       -> 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433
 ```
 
-**6. POLTreasury** — `(MULTISIG, USDC, POSITION_MANAGER, FeeSplitter)`
+**6. POLTreasury** — `(MULTISIG, USDC, POSITION_MANAGER, FeeSplitter, UNIV3_FACTORY)`
 ```
 isProtected(USDC) && isProtected(AERO) == true
 ```

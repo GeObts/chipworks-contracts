@@ -87,10 +87,13 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     error UnknownPosition(uint256 tokenId);
     error NothingToRecover(address token);
 
-    constructor(address multisig, address quoteToken_, address positionManager_, address feeSplitter_)
-        Ownable(multisig)
-        ConversionRoutes(quoteToken_)
-    {
+    constructor(
+        address multisig,
+        address quoteToken_,
+        address positionManager_,
+        address feeSplitter_,
+        address uniswapV3Factory_
+    ) Ownable(multisig) ConversionRoutes(quoteToken_, uniswapV3Factory_) {
         if (
             multisig == address(0) || quoteToken_ == address(0) || positionManager_ == address(0)
                 || feeSplitter_ == address(0)
@@ -152,7 +155,7 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     ///      pair, which is the same gap the Pot had. Same Chainlink-bounded, capped shape.
     function convert(address token) external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
         if (!_routes[token].enabled) revert NoRoute(token);
-        return _convert(token);
+        return _convert(token, 0);
     }
 
     /// @notice Set the wrapped-native token so native ETH can be converted. Multisig only.
@@ -168,9 +171,10 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
         uint24 fee,
         uint32 maxSlippageBps,
         uint128 maxPerCall,
+        uint128 minPerCall,
         uint64 maxFeedAge
     ) external onlyOwner {
-        _setRoute(token, feed, router, fee, maxSlippageBps, maxPerCall, maxFeedAge);
+        _setRoute(token, feed, router, fee, maxSlippageBps, maxPerCall, minPerCall, maxFeedAge);
     }
 
     /// @notice Stop converting a token. Multisig only.

@@ -65,7 +65,7 @@ contract CodeSizeTest is Test {
         // Constructor arguments are irrelevant to runtime size; these only need to be valid.
         address registry = address(new StockRegistry(multisig, _erc20(), _factory(), _factory()));
         address claims = address(new ChipClaims(multisig, registry));
-        address pot = address(new Pot(multisig, _erc20()));
+        address pot = address(new Pot(multisig, _erc20(), _factory()));
         address adapter = address(new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]));
 
         _check("StockRegistry", registry);
@@ -79,7 +79,7 @@ contract CodeSizeTest is Test {
             address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]))
         );
         _check("FeeSplitter", address(new FeeSplitter(multisig, multisig, multisig, 2_000, 2_000)));
-        _check("POLTreasury", address(new POLTreasury(multisig, _erc20(), _nft(), multisig)));
+        _check("POLTreasury", address(new POLTreasury(multisig, _erc20(), _nft(), multisig, _factory())));
         _check("ClaimRouter", address(new ClaimRouter(multisig, claims, 1_000_000)));
 
         NounLoans.Terms memory loanTerms;

@@ -19,6 +19,9 @@ contract PotConvertTest is Test {
     MockAggregatorV3 internal ethFeed;
     MockSwapRouter internal router;
 
+    /// @dev ConversionRoutes only accepts a router of this factory (SEC-POT-001).
+    address internal uniV3Factory = makeAddr("uniV3Factory");
+
     address internal multisig = makeAddr("multisig");
     address internal keeper = makeAddr("keeper");
     address internal stranger = makeAddr("stranger");
@@ -32,10 +35,11 @@ contract PotConvertTest is Test {
         weth = new MockWETH();
         ethFeed = new MockAggregatorV3(8, int256(ETH_USD * 1e8), "ETH / USD");
         router = new MockSwapRouter();
+        router.setFactory(uniV3Factory);
 
-        pot = new Pot(multisig, address(usdc));
+        pot = new Pot(multisig, address(usdc), uniV3Factory);
         vm.prank(multisig);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, CAP, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, CAP, 0, 1 hours);
 
         // Router pays 2,400 USDC per WETH: out = in * 2400e6 / 1e18
         router.setRate(address(weth), address(usdc), ETH_USD * 1e6, 1e18);
@@ -101,7 +105,7 @@ contract PotConvertTest is Test {
 
     function test_convert_capIsConfigurable() public {
         vm.prank(multisig);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, 1 ether, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, 1 ether, 0, 1 hours);
         vm.deal(address(pot), 50 ether);
         (uint256 ethIn,) = pot.convert();
         assertEq(ethIn, 1 ether);
@@ -143,7 +147,7 @@ contract PotConvertTest is Test {
         pot.convert();
 
         vm.prank(multisig);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 500, CAP, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 500, CAP, 0, 1 hours);
         (, uint256 out) = pot.convert();
         assertEq(out, 2_300e6, "passes with a 5% bound");
     }
@@ -174,7 +178,7 @@ contract PotConvertTest is Test {
 
     function test_convert_staleCheckCanBeDisabled() public {
         vm.prank(multisig);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, CAP, 0);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, CAP, 0, 0);
         vm.deal(address(pot), 1 ether);
         vm.warp(block.timestamp + 30 days);
         (, uint256 out) = pot.convert();
@@ -205,7 +209,7 @@ contract PotConvertTest is Test {
     }
 
     function test_convert_revertsWhenUnconfigured() public {
-        Pot fresh = new Pot(multisig, address(usdc));
+        Pot fresh = new Pot(multisig, address(usdc), uniV3Factory);
         vm.deal(address(fresh), 1 ether);
         vm.expectRevert(Pot.ConversionNotConfigured.selector);
         fresh.convert();
@@ -214,23 +218,23 @@ contract PotConvertTest is Test {
     function test_setConversionConfig_onlyMultisig() public {
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, CAP, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, CAP, 0, 1 hours);
     }
 
     function test_setConversionConfig_rejectsNonsense() public {
         vm.startPrank(multisig);
 
         vm.expectRevert(ConversionRoutes.RouteZeroAddress.selector);
-        pot.setConversionConfig(address(0), address(ethFeed), address(router), 500, 100, CAP, 1 hours);
+        pot.setConversionConfig(address(0), address(ethFeed), address(router), 500, 100, CAP, 0, 1 hours);
 
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 0, 100, CAP, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 0, 100, CAP, 0, 1 hours);
 
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 10_000, CAP, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 10_000, CAP, 0, 1 hours);
 
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, 0, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, 0, 0, 1 hours);
 
         vm.stopPrank();
     }

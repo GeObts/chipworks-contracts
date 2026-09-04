@@ -926,6 +926,26 @@ library SafeERC20 {
 ///         refused, while capped conversions landed comfortably inside it.
 ///      3. Measured by balance delta, never by the router's return value, so a token that
 ///         lies about transferring cannot inflate what we think we received.
+/// @dev UNISWAP V3 CALLDATA, AND ONLY UNISWAP V3 CALLDATA.
+///
+///      This contract encodes exactly one swap shape: `IUniswapV3SwapRouter`'s 7-field
+///      `exactInputSingle`. It does NOT encode Aerodrome Slipstream's 8-field variant
+///      (tickSpacing + deadline), and it never has — there is no dead branch here, and
+///      `ISlipstreamSwapRouter` is not imported.
+///
+///      **That is a design decision, not an omission.** ASSUMPTIONS A-16 established that the
+///      liquidity Chipworks converts against is on Uniswap v3, not Slipstream. Both live
+///      routes — WETH and AERO — trade in Uniswap v3 pools. Aerodrome appears in this
+///      protocol only in `POLTreasury`, and only for LP positions and gauge staking through
+///      the Slipstream position manager, never for a swap. `ChipRounds` does encode the
+///      Slipstream shape, because stock BUYS may route through either venue; that is a
+///      different contract with a different job.
+///
+///      External review (TRIAGE SEC-POT-001) noted that pointing a route at a Slipstream
+///      router would revert on the ABI mismatch. Correct — so {_setRoute} now refuses any
+///      router whose `factory()` is not the Uniswap v3 factory, which a Slipstream router's
+///      never is. The misconfiguration is rejected at configuration time rather than
+///      discovered at conversion time.
 abstract contract ConversionRoutes {
     using SafeERC20 for IERC20;
 
@@ -943,6 +963,19 @@ abstract contract ConversionRoutes {
     /// @notice Wrapped native token. Native ETH is wrapped into this on the way through.
     address public weth;
 
+    /// @notice The Uniswap v3 factory every routed router must belong to.
+    /// @dev Immutable and constructor-set rather than a wiring call, deliberately: an
+    ///      optional guard that silently does nothing when forgotten is the anti-pattern this
+    ///      repo already documents once (the `setCustodian` trap in LAUNCH_CONFIG). This one
+    ///      cannot be forgotten.
+    address public immutable uniswapV3Factory;
+
+    /// @notice Chainlink L2 sequencer uptime feed. Zero disables the check.
+    address public sequencerUptimeFeed;
+
+    /// @notice How long after the sequencer comes back before prices are trusted again.
+    uint64 public sequencerGracePeriod;
+
     struct Route {
         bool enabled;
         address feed; // Chainlink <token>/USD aggregator
@@ -950,6 +983,7 @@ abstract contract ConversionRoutes {
         uint24 fee; // pool fee tier
         uint32 maxSlippageBps; // how far below the Chainlink mark execution may land
         uint128 maxPerCall; // largest amount one convert() may push through the pool
+        uint128 minPerCall; // smallest amount worth converting. 0 disables the floor
         uint64 maxFeedAge; // reject a feed older than this. 0 disables the check
         uint8 tokenDecimals; // cached
         uint8 feedDecimals; // cached
@@ -969,6 +1003,7 @@ abstract contract ConversionRoutes {
         uint64 maxFeedAge
     );
     event RouteDisabled(address indexed token);
+    event SequencerFeedUpdated(address indexed feed, uint64 gracePeriod);
     event WethUpdated(address indexed previousWeth, address indexed newWeth);
 
     error RouteZeroAddress();
@@ -985,10 +1020,24 @@ abstract contract ConversionRoutes {
     ///      Dust simply waits until enough accumulates to be priced.
     error AmountTooSmall(uint256 amountIn);
 
-    constructor(address quoteToken_) {
-        if (quoteToken_ == address(0)) revert RouteZeroAddress();
+    /// @notice The router is not a Uniswap v3 router of the expected factory. SEC-POT-001.
+    error RouterNotUniswapV3(address router);
+    /// @notice The feed is pinned at its aggregator's floor or ceiling, so the price is a
+    ///         circuit-breaker artefact rather than a market price. SEC-POT-005.
+    error FeedAtBand(int256 answer);
+    /// @notice The L2 sequencer is down, or has not been back long enough to trust. SEC-POT-003.
+    error SequencerDown();
+    error SequencerGracePeriod(uint256 backAt, uint64 graceEndsAt);
+    /// @notice Below the route's `minPerCall` floor. SEC-POT-004.
+    error BelowMinPerCall(uint256 amountIn, uint128 minPerCall);
+    /// @notice A caller-supplied `minOut` the Chainlink floor could not be raised to meet.
+    error NotAContract(address target);
+
+    constructor(address quoteToken_, address uniswapV3Factory_) {
+        if (quoteToken_ == address(0) || uniswapV3Factory_ == address(0)) revert RouteZeroAddress();
         quoteToken = quoteToken_;
         quoteDecimals = IDecimals(quoteToken_).decimals();
+        uniswapV3Factory = uniswapV3Factory_;
     }
 
     /* ------------------------------------------------------------------ */
@@ -1028,11 +1077,14 @@ abstract contract ConversionRoutes {
         Route storage r = _routes[token];
         if (!r.enabled) revert NoRoute(token);
 
+        _requireSequencerUp();
+
         (, int256 answer,, uint256 updatedAt,) = IAggregatorV3(r.feed).latestRoundData();
         if (answer <= 0) revert BadFeedAnswer();
         if (r.maxFeedAge != 0 && block.timestamp > updatedAt + r.maxFeedAge) {
             revert StaleFeed(updatedAt, r.maxFeedAge);
         }
+        _requireInBand(r.feed, answer);
 
         // amount (tokenDecimals) x USD per token -> quote units, then the slippage haircut.
         uint256 gross =
@@ -1044,14 +1096,24 @@ abstract contract ConversionRoutes {
     /*                            INTERNALS                                 */
     /* ------------------------------------------------------------------ */
 
-    function _convert(address token) internal returns (uint256 amountIn, uint256 quoteOut) {
+    /// @param callerMinOut A floor the caller insists on, on top of the Chainlink one. Zero
+    ///        means "no opinion". SEC-POT-002: `convert` is permissionless so anyone can push
+    ///        it along, but that also means it executes against whatever the pool says at the
+    ///        moment it lands, bounded only by a 2% Chainlink haircut. A keeper holding a real
+    ///        quote can pass a tighter number and refuse a worse fill. The floor can only ever
+    ///        be raised — a caller cannot widen the Chainlink bound, only tighten it.
+    function _convert(address token, uint256 callerMinOut) internal returns (uint256 amountIn, uint256 quoteOut) {
         Route storage r = _routes[token];
 
         amountIn = nextConversionAmount(token);
         if (amountIn == 0) revert NothingToConvert();
+        // SEC-POT-004: a dust-sized conversion pays a full swap's gas and moves the pool for
+        // nothing. Below the floor it simply waits for more to accumulate.
+        if (r.minPerCall != 0 && amountIn < r.minPerCall) revert BelowMinPerCall(amountIn, r.minPerCall);
 
         uint256 minOut = minOutFor(token, amountIn);
         if (minOut == 0) revert AmountTooSmall(amountIn);
+        if (callerMinOut > minOut) minOut = callerMinOut;
 
         // Wrap only the shortfall: WETH already held is used as-is.
         if (token == weth) {
@@ -1083,6 +1145,66 @@ abstract contract ConversionRoutes {
         emit Converted(token, amountIn, quoteOut, minOut, msg.sender);
     }
 
+    /// @dev SEC-POT-003. On an L2 a Chainlink feed keeps returning its last answer while the
+    ///      sequencer is down, so "fresh enough" is not the same as "true". Chipworks
+    ///      converts against that price, so a stale-but-recent mark is exactly the input an
+    ///      arbitrageur wants us to trade on when the chain comes back.
+    ///
+    ///      Standard Base hygiene: `answer == 0` means up, anything else means down, and a
+    ///      grace period after it returns stops us trading on the first, thinnest blocks.
+    ///      Zero feed disables the check, so this is inert until configured and every
+    ///      existing test is unaffected.
+    function _requireSequencerUp() internal view {
+        address feed = sequencerUptimeFeed;
+        if (feed == address(0)) return;
+
+        (, int256 up, uint256 startedAt,,) = IAggregatorV3(feed).latestRoundData();
+        if (up != 0) revert SequencerDown();
+
+        uint64 grace = sequencerGracePeriod;
+        if (grace != 0 && block.timestamp < startedAt + grace) {
+            revert SequencerGracePeriod(startedAt, uint64(startedAt) + grace);
+        }
+    }
+
+    /// @dev SEC-POT-005. A Chainlink aggregator clamps its answer to `minAnswer`/`maxAnswer`.
+    ///      In a crash the feed reports the FLOOR, not the market — which here would inflate
+    ///      the expected output and make every conversion of that token revert `UnderMinOut`
+    ///      for as long as the price stayed pinned. Reverting is the safe direction, but
+    ///      reverting with a misleading reason is not: this fails as {FeedAtBand} so an
+    ///      operator can tell "the pool moved" from "the oracle is at its circuit breaker".
+    ///
+    ///      The band lives on the AGGREGATOR behind the proxy, and not every feed exposes it.
+    ///      Both hops are gas-capped staticcalls and a feed that does not answer simply skips
+    ///      the check — this must never be the reason a healthy conversion fails.
+    ///
+    ///      Recovery if a token does get pinned: `disableRoute(token)` then
+    ///      `sweepNonQuote(token, ...)`. Both already existed; see TRIAGE SEC-POT-005.
+    function _requireInBand(address feed, int256 answer) internal view {
+        (bool okAgg, bytes memory aggRet) = feed.staticcall{gas: PROBE_GAS}(abi.encodeWithSignature("aggregator()"));
+        if (!okAgg || aggRet.length < 32) return;
+        address agg = abi.decode(aggRet, (address));
+        if (agg == address(0)) return;
+
+        (bool okMin, bytes memory minRet) = agg.staticcall{gas: PROBE_GAS}(abi.encodeWithSignature("minAnswer()"));
+        if (okMin && minRet.length >= 32) {
+            int256 minAnswer = abi.decode(minRet, (int256));
+            if (answer <= minAnswer) revert FeedAtBand(answer);
+        }
+
+        (bool okMax, bytes memory maxRet) = agg.staticcall{gas: PROBE_GAS}(abi.encodeWithSignature("maxAnswer()"));
+        if (okMax && maxRet.length >= 32) {
+            int256 maxAnswer = abi.decode(maxRet, (int256));
+            if (answer >= maxAnswer) revert FeedAtBand(answer);
+        }
+    }
+
+    function _setSequencerFeed(address feed, uint64 gracePeriod) internal {
+        sequencerUptimeFeed = feed;
+        sequencerGracePeriod = gracePeriod;
+        emit SequencerFeedUpdated(feed, gracePeriod);
+    }
+
     function _setWeth(address weth_) internal {
         if (weth_ == address(0)) revert RouteZeroAddress();
         emit WethUpdated(weth, weth_);
@@ -1096,6 +1218,7 @@ abstract contract ConversionRoutes {
         uint24 fee,
         uint32 maxSlippageBps,
         uint128 maxPerCall,
+        uint128 minPerCall,
         uint64 maxFeedAge
     ) internal {
         if (token == address(0) || feed == address(0) || router == address(0)) {
@@ -1103,6 +1226,12 @@ abstract contract ConversionRoutes {
         }
         if (token == quoteToken) revert CannotRouteQuoteToken();
         if (fee == 0 || maxSlippageBps >= BPS || maxPerCall == 0) revert RouteBadConfig();
+        if (minPerCall > maxPerCall) revert RouteBadConfig();
+
+        // SEC-POT-001. This contract can only encode Uniswap v3 calldata, so it accepts only
+        // a Uniswap v3 router. A Slipstream router reports the Slipstream factory and is
+        // rejected here rather than reverting on an ABI mismatch at conversion time.
+        _requireUniswapV3Router(router);
 
         uint8 tokenDecimals = _probeDecimals(token);
         uint8 feedDecimals = IAggregatorV3(feed).decimals();
@@ -1117,6 +1246,7 @@ abstract contract ConversionRoutes {
             fee: fee,
             maxSlippageBps: maxSlippageBps,
             maxPerCall: maxPerCall,
+            minPerCall: minPerCall,
             maxFeedAge: maxFeedAge,
             tokenDecimals: tokenDecimals,
             feedDecimals: feedDecimals
@@ -1128,6 +1258,18 @@ abstract contract ConversionRoutes {
     function _disableRoute(address token) internal {
         _routes[token].enabled = false;
         emit RouteDisabled(token);
+    }
+
+    /// @dev Rejects anything that is not a Uniswap v3 router of our factory. The factory is
+    ///      the discriminator that actually holds: Aerodrome Slipstream is a separate
+    ///      protocol with a separate factory, so its router can never report ours. Not
+    ///      gas-capped and not tolerant of failure — this is configuration time, and a router
+    ///      that cannot answer `factory()` is one we should not be pointing money at.
+    function _requireUniswapV3Router(address router) internal view {
+        if (router.code.length == 0) revert NotAContract(router);
+        (bool ok, bytes memory ret) = router.staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok || ret.length < 32) revert RouterNotUniswapV3(router);
+        if (abi.decode(ret, (address)) != uniswapV3Factory) revert RouterNotUniswapV3(router);
     }
 
     /// @dev Gas-capped, per ASSUMPTIONS.md A-17. A token whose decimals cannot be read is
@@ -1189,7 +1331,10 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
     error NothingToSweep();
     error ConversionNotConfigured();
 
-    constructor(address multisig, address quoteToken_) Ownable(multisig) ConversionRoutes(quoteToken_) {
+    constructor(address multisig, address quoteToken_, address uniswapV3Factory_)
+        Ownable(multisig)
+        ConversionRoutes(quoteToken_, uniswapV3Factory_)
+    {
         if (multisig == address(0)) revert ZeroAddress();
     }
 
@@ -1227,15 +1372,34 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
     /// @notice Turn accumulated ETH (and any WETH) into round currency. Permissionless.
     function convert() external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
         if (weth == address(0) || !_routes[weth].enabled) revert ConversionNotConfigured();
-        return _convert(weth);
+        return _convert(weth, 0);
     }
 
     /// @notice Turn an accumulated income token into round currency. Permissionless.
     /// @dev This is how recycled POL income becomes budget a round can actually spend.
     ///      Same Chainlink-bounded, capped, permissionless shape as the ETH path.
+    /// @notice Convert ETH/WETH, insisting on at least `callerMinOut` quote tokens.
+    /// @dev SEC-POT-002. `convert` stays permissionless — anyone should be able to push the
+    ///      protocol along — but a keeper holding a real quote can refuse a bad fill instead
+    ///      of accepting anything inside the 2% Chainlink haircut. The floor is
+    ///      `max(chainlinkFloor, callerMinOut)`: a caller can only ever TIGHTEN it, never
+    ///      widen it, so this adds no way to convert on worse terms than before.
+    function convert(uint256 callerMinOut) external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
+        return _convert(weth, callerMinOut);
+    }
+
+    /// @notice Convert `token`, insisting on at least `callerMinOut` quote tokens.
+    function convert(address token, uint256 callerMinOut)
+        external
+        nonReentrant
+        returns (uint256 amountIn, uint256 quoteOut)
+    {
+        return _convert(token, callerMinOut);
+    }
+
     function convert(address token) external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
         if (!_routes[token].enabled) revert NoRoute(token);
-        return _convert(token);
+        return _convert(token, 0);
     }
 
     /* ------------------------------------------------------------------ */
@@ -1243,8 +1407,16 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
     /* ------------------------------------------------------------------ */
 
     /// @notice Point at the ChipRewards contract. Multisig only.
+    /// @notice Point the Pot at the engine allowed to pull round budgets.
+    /// @dev SEC-POT-006. Zero-checked already; now also required to be a CONTRACT. Setting
+    ///      this to an EOA by fat-finger would hand budget-pull rights to a key rather than
+    ///      to reviewed code, and nothing downstream would notice until a round opened.
+    ///      A codesize check does not prove it is the RIGHT contract — the post-deploy read
+    ///      in LAUNCH_CONFIG does that — but it rules out the whole class of address typo
+    ///      that lands on an EOA.
     function setRewards(address newRewards) external onlyOwner {
         if (newRewards == address(0)) revert ZeroAddress();
+        if (newRewards.code.length == 0) revert NotAContract(newRewards);
         emit RewardsUpdated(rewards, newRewards);
         rewards = newRewards;
     }
@@ -1258,10 +1430,20 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
         uint24 conversionFee_,
         uint32 maxSlippageBps_,
         uint128 maxConvertPerCall_,
+        uint128 minConvertPerCall_,
         uint64 maxFeedAge_
     ) external onlyOwner {
         _setWeth(weth_);
-        _setRoute(weth_, ethUsdFeed_, swapRouter_, conversionFee_, maxSlippageBps_, maxConvertPerCall_, maxFeedAge_);
+        _setRoute(
+            weth_,
+            ethUsdFeed_,
+            swapRouter_,
+            conversionFee_,
+            maxSlippageBps_,
+            maxConvertPerCall_,
+            minConvertPerCall_,
+            maxFeedAge_
+        );
     }
 
     /// @notice Register or update the conversion route for one token. Multisig only.
@@ -1272,12 +1454,19 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
         uint24 fee,
         uint32 maxSlippageBps,
         uint128 maxPerCall,
+        uint128 minPerCall,
         uint64 maxFeedAge
     ) external onlyOwner {
-        _setRoute(token, feed, router, fee, maxSlippageBps, maxPerCall, maxFeedAge);
+        _setRoute(token, feed, router, fee, maxSlippageBps, maxPerCall, minPerCall, maxFeedAge);
     }
 
     /// @notice Stop converting a token. Its balance stays put and can still be swept.
+    /// @notice Configure the Chainlink L2 sequencer uptime feed. Zero disables the check.
+    /// @dev SEC-POT-003. Base's feed, plus a grace period after the sequencer returns.
+    function setSequencerFeed(address feed, uint64 gracePeriod) external onlyOwner {
+        _setSequencerFeed(feed, gracePeriod);
+    }
+
     function disableRoute(address token) external onlyOwner {
         _disableRoute(token);
     }

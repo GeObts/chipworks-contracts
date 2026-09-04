@@ -272,6 +272,22 @@ B20 token**."* `balanceOf` returns raw units and is untouched by corporate actio
 `scaledBalanceOf` is the multiplier-adjusted view. One B20 token is still NOT permanently one
 share — that part stands — but the token count a holder owns does not move under them.
 
+### A-19 · Base L2 sequencer uptime feed — **verified on chain 2026-09-04**
+`0xBCF85224fc0756B9Fa45aA7892530B47e10b6433`. `description()` returns
+"L2 Sequencer Uptime Status Feed"; `latestRoundData()` reports `answer == 0` (up) with a
+`startedAt` of 1782491507.
+
+**Why it matters here.** On an L2 a Chainlink price feed keeps returning its last answer while
+the sequencer is down — so a feed can be *fresh* and *wrong at the same time*, which is
+precisely the input `ConversionRoutes` prices conversions against. `answer == 0` means up;
+anything else means down. A grace period after it returns stops us trading on the first, thin
+blocks. Raised by external review as SEC-POT-003 and wired in LAUNCH_CONFIG at 1 hour.
+
+Reproduce:
+```bash
+cast call 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433 "description()(string)" -r $BASE_RPC_URL
+```
+
 ### A-14 · Equity feeds have NO heartbeat outside market hours — **design input**
 Straight from Chainlink's docs: *"When underlying equity markets are closed (weekends,
 holidays, thin overnight windows), the feed holds the last close even though the contract

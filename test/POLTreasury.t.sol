@@ -17,6 +17,9 @@ import {ConversionRoutes} from "../src/base/ConversionRoutes.sol";
 
 contract POLTreasuryTest is Test {
     POLTreasury internal pol;
+
+    /// @dev ConversionRoutes only accepts a router of this factory (SEC-POT-001).
+    address internal uniV3Factory = makeAddr("uniV3Factory");
     MockPositionManager internal npm;
     MockERC20 internal usdc;
     MockERC20 internal nvda;
@@ -37,7 +40,7 @@ contract POLTreasuryTest is Test {
         aero = new MockERC20("Aerodrome", "AERO", 18);
         npm = new MockPositionManager();
 
-        pol = new POLTreasury(multisig, address(usdc), address(npm), splitter);
+        pol = new POLTreasury(multisig, address(usdc), address(npm), splitter, uniV3Factory);
 
         vm.startPrank(multisig);
         pol.setManager(manager);
@@ -473,12 +476,13 @@ contract POLTreasuryTest is Test {
         MockWETH weth = new MockWETH();
         MockAggregatorV3 ethFeed = new MockAggregatorV3(8, 2_400e8, "ETH / USD");
         MockSwapRouter swapRouter = new MockSwapRouter();
+        swapRouter.setFactory(uniV3Factory);
         swapRouter.setRate(address(weth), address(usdc), 2_400e6, 1e18);
         usdc.mint(address(swapRouter), 1_000_000e6);
 
         vm.startPrank(multisig);
         pol.setWeth(address(weth));
-        pol.setRoute(address(weth), address(ethFeed), address(swapRouter), 500, 100, 100 ether, 1 hours);
+        pol.setRoute(address(weth), address(ethFeed), address(swapRouter), 500, 100, 100 ether, 0, 1 hours);
         vm.stopPrank();
 
         // The splitter's POL leg arrives as ETH.
@@ -496,11 +500,12 @@ contract POLTreasuryTest is Test {
     function test_convertsAeroIncomeItKeeps() public {
         MockAggregatorV3 aeroFeed = new MockAggregatorV3(8, 0.5e8, "AERO / USD");
         MockSwapRouter swapRouter = new MockSwapRouter();
+        swapRouter.setFactory(uniV3Factory);
         swapRouter.setRate(address(aero), address(usdc), 0.5e6, 1e18);
         usdc.mint(address(swapRouter), 1_000_000e6);
 
         vm.prank(multisig);
-        pol.setRoute(address(aero), address(aeroFeed), address(swapRouter), 500, 200, 100_000 ether, 1 hours);
+        pol.setRoute(address(aero), address(aeroFeed), address(swapRouter), 500, 200, 100_000 ether, 0, 1 hours);
 
         aero.mint(address(pol), 1_000 ether);
         (, uint256 out) = pol.convert(address(aero));
@@ -515,7 +520,7 @@ contract POLTreasuryTest is Test {
     function test_routeConfigOnlyMultisig() public {
         vm.startPrank(manager); // even the optimizer cannot set routes
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, manager));
-        pol.setRoute(address(aero), address(0x1), address(0x2), 500, 100, 1 ether, 1 hours);
+        pol.setRoute(address(aero), address(0x1), address(0x2), 500, 100, 1 ether, 0, 1 hours);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, manager));
         pol.setWeth(address(0x1));
         vm.stopPrank();
@@ -525,6 +530,6 @@ contract POLTreasuryTest is Test {
     function test_cannotRouteTheQuoteToken() public {
         vm.prank(multisig);
         vm.expectRevert(ConversionRoutes.CannotRouteQuoteToken.selector);
-        pol.setRoute(address(usdc), address(0x1), address(0x2), 500, 100, 1 ether, 1 hours);
+        pol.setRoute(address(usdc), address(0x1), address(0x2), 500, 100, 1 ether, 0, 1 hours);
     }
 }

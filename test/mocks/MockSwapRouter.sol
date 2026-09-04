@@ -17,6 +17,15 @@ contract MockSwapRouter {
     bool public failNext;
     bool public failAlways;
 
+    /// @notice The Uniswap v3 factory this router claims to belong to.
+    /// @dev ConversionRoutes refuses any router whose `factory()` is not the expected one
+    ///      (SEC-POT-001), so a test double has to answer it.
+    address public factory;
+
+    function setFactory(address f) external {
+        factory = f;
+    }
+
     error TooLittleReceived();
     error RouterDown();
 

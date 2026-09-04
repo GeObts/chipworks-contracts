@@ -67,6 +67,147 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 2: Pot.sol / ConversionRoutes.sol
+
+Against `launch-candidate-3`. **All six accepted in some form**; two of them with the harmful
+half of the claim disputed, because the escapes they asked us to add already existed.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| SEC-POT-001 | Slipstream router would revert on ABI mismatch and lock fees | High | **Info / Low** | **PARTIAL** | **FIXED** — router must be a Uniswap v3 router. "Locks fees" disputed |
+| SEC-POT-005 | Chainlink min/maxAnswer pins price, locking a token | Medium | **Low / Medium** | **PARTIAL** | **FIXED** — band check. Escape already existed |
+| SEC-POT-003 | No L2 sequencer uptime check | Medium | **Low / Medium** | **VALID** | **FIXED** |
+| SEC-POT-002 | Permissionless convert is MEV-exposed | Medium | **Info / Medium** | **VALID** | **FIXED** (caller minOut) + OPEN_ITEMS 18 |
+| SEC-POT-004 | Dust conversions grief the pool | Low | Low / Low | **VALID** | **FIXED** — per-route `minPerCall` |
+| SEC-POT-006 | Single-step engine wiring | Info | Info | **VALID** | **FIXED** — codesize check |
+
+---
+
+#### SEC-POT-001 — THE ROUTING DECISION: Pot does NOT touch Aerodrome
+
+**Answering the question directly, because it was asked directly.**
+
+**Chipworks converts through Uniswap v3 only. No Pot route touches Aerodrome, and none is
+intended to.** The evidence, in order of how strongly it settles the question:
+
+1. **`ConversionRoutes` never mentions Slipstream.** It imports `IUniswapV3SwapRouter` and
+   nothing else. **There is no dead branch to remove** — the finding's phrasing implies a
+   dormant code path, and there isn't one, only a single hardcoded shape.
+2. **ASSUMPTIONS A-16 is the decision**, titled "The liquidity is NOT on Aerodrome Slipstream
+   — BLOCKER, verified". Both live routes, WETH and AERO, trade in Uniswap v3 pools; the
+   AERO/USDC pool named in DEPLOY is the Uniswap one.
+3. **Aerodrome appears exactly once in the protocol, and not for swapping**: `POLTreasury`
+   uses the Slipstream position manager and gauges for LP positions. Its *conversion* path
+   inherits this same Uniswap-only contract.
+4. **`ChipRounds` does encode the Slipstream shape** — stock BUYS may route through either
+   venue. Different contract, different job.
+
+**So we did not remove `ISlipstreamSwapRouter`, and could not have.** The user's instruction
+said to remove the interface if Pot is Uniswap-only; doing that would break `ChipRounds`,
+which genuinely uses it for Slipstream stock buys. Removing it would have deleted a working
+feature to tidy an unrelated contract. Flagged rather than done.
+
+**What we did instead is stronger than removal.** `_setRoute` now requires
+`router.factory() == uniswapV3Factory`, an immutable set at construction. A Slipstream router
+belongs to the Slipstream factory and can never report ours, so the misconfiguration is
+**rejected at configuration time** rather than discovered at conversion time. The factory is a
+constructor argument, not a wiring call, deliberately: an optional guard that silently does
+nothing when forgotten is the anti-pattern this repo already documents once.
+
+**Disputed: "would lock those fees."** It would not, and two independent escapes already
+existed before this review. `Pot.disableRoute(token)` turns a bad route off;
+`Pot.sweepNonQuote(token, to)` rescues the token outright. A misconfigured route was always a
+loud, immediately-visible, fully-recoverable mistake — `convert` reverts, nothing accrues
+silently, and one transaction fixes it. Severity is Informational-to-Low, not High.
+`test_aSlipstreamRouterIsRejectedWhenTheRouteIsSet` and `test_aUniswapV3RouterIsAccepted` pin
+both directions, and the fork suite passes with the **real** Base SwapRouter02, which is the
+end-to-end proof the guard does not simply refuse everything.
+
+---
+
+#### SEC-POT-005 — Chainlink min/maxAnswer band
+
+**VALID and cheap, exactly as described. FIXED.**
+
+An aggregator clamps its answer to `minAnswer`/`maxAnswer`. In a crash the feed reports the
+FLOOR rather than the market, which here inflates the expected output and makes every
+conversion of that token revert for as long as the price stays pinned.
+
+`minOutFor` now reads the band from the aggregator behind the proxy and refuses a pinned
+price by name. Both hops are gas-capped staticcalls and a feed that does not expose a band
+simply skips the check — this must never be the reason a healthy conversion fails
+(`test_aFeedWithoutABandIsUnaffected`).
+
+**The value here is the error, not the refusal.** Before, a pinned feed failed as
+`UnderMinOut` — indistinguishable from "the pool moved". Now it fails as `FeedAtBand`, so an
+operator can tell an oracle circuit breaker from ordinary slippage and knows to reach for
+`disableRoute` rather than widening tolerances into a crash.
+
+**Disputed: "permanently locking it."** The admin route-disable escape the finding asks us to
+add **already existed** — `Pot.disableRoute` has been there since the route table was built,
+and `sweepNonQuote` rescues the token. `test_aTokenWithAStuckFeedCanBeDisabledAndRescued`
+walks the whole recovery.
+
+---
+
+#### SEC-POT-003 — L2 sequencer uptime feed
+
+**VALID, FIXED, and agreed it should not be deferred.**
+
+On an L2 a Chainlink feed keeps returning its last answer while the sequencer is down, so
+"fresh enough" is not the same as "true" — and the first blocks after it returns are exactly
+when someone wants us trading on a stale mark.
+
+`minOutFor` now checks the uptime feed before pricing: `answer != 0` means down, and a
+configurable grace period after it returns stops us trading on the thin blocks. Zero feed
+disables the check, so it is inert until configured.
+
+**Base's feed is `0xBCF85224fc0756B9Fa45aA7892530B47e10b6433`**, verified live on chain for
+this review: `description()` returns "L2 Sequencer Uptime Status Feed" and it currently reads
+0 (up). Recorded in ASSUMPTIONS A-19 and wired in LAUNCH_CONFIG with a 1-hour grace.
+
+---
+
+#### SEC-POT-002 — permissionless convert and MEV
+
+**VALID. The cheap half is done; the hard half is gated to scale, as suggested.**
+
+`convert` stays permissionless — anyone being able to push the protocol along is a property
+worth keeping — but it now takes an optional caller-supplied floor:
+`minOut = max(chainlinkFloor, callerMinOut)`. A keeper holding a real quote can refuse a bad
+fill instead of accepting anything inside the 2% haircut, and **a caller can only ever tighten
+the bound, never widen it** (`test_aCallerCannotWidenTheChainlinkBound`).
+
+The hard half — dynamic slippage from measured depth, or private routing — is recorded in
+**OPEN_ITEMS 18** as a cap-raise precondition alongside the identical concern for stock buys
+(OPEN_ITEMS 17). Both are the same problem in two places and should be solved once.
+
+---
+
+#### SEC-POT-004 — dust griefing
+
+**VALID, trivial, FIXED.** `minOut == 0` was already refused, which covers the unbounded-swap
+case, but not the merely-uneconomic one: a dust conversion pays a full swap's gas and moves
+the pool for nothing. Each route now carries a `minPerCall` floor; below it the token simply
+waits for more to accumulate. Nothing is stuck, only delayed
+(`test_aConversionBelowTheFloorIsRefused`).
+
+---
+
+#### SEC-POT-006 — single-step engine wiring
+
+**VALID, informational, FIXED.** `setRewards` was zero-checked; it now also requires a
+contract. Pointing budget-pull rights at an EOA by fat-finger would hand them to a key rather
+than to reviewed code, and nothing downstream would notice until a round opened. A codesize
+check does not prove it is the *right* contract — the post-deploy read in LAUNCH_CONFIG does
+that — but it rules out the whole class of typo that lands on an EOA.
+
+We did not make it two-step. `Pot.rewards` is set once at deploy and effectively never again,
+and a two-step handshake would add a partially-wired state to a contract whose failure mode is
+already "reverts loudly until wired". The codesize check is the proportionate half.
+
+---
+
 ### External review — Bankr, batch 1, against `launch-candidate-1`
 
 Two reports: `ChipClaims.sol` and `ChipRounds.sol`. **The `ChipClaims` report artifact has
@@ -483,7 +624,8 @@ on every build.
 | `launch-candidate-1` | The frozen contract state under review | **Current. Frozen.** |
 | `review-1` | Identical `src/`, plus the review package and this file | Documentation only — `git diff launch-candidate-1 review-1 -- src/` is empty |
 | `launch-candidate-2` | Skipped — batch 1 arrived before it was cut, so its contents folded into -3 | Never cut |
-| `launch-candidate-3` | EXT-R-M-1, EXT-R-M-2 (removal), EXT-R-I-1, EXT-C-H-1, **plus** SLI-001 and SLI-005 | **Current** |
+| `launch-candidate-3` | EXT-R-M-1, EXT-R-M-2 (removal), EXT-R-I-1, EXT-C-H-1, **plus** SLI-001 and SLI-005 | Superseded |
+| `launch-candidate-4` | SEC-POT-001 … 006 (all six) | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read

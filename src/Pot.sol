@@ -51,7 +51,10 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
     error NothingToSweep();
     error ConversionNotConfigured();
 
-    constructor(address multisig, address quoteToken_) Ownable(multisig) ConversionRoutes(quoteToken_) {
+    constructor(address multisig, address quoteToken_, address uniswapV3Factory_)
+        Ownable(multisig)
+        ConversionRoutes(quoteToken_, uniswapV3Factory_)
+    {
         if (multisig == address(0)) revert ZeroAddress();
     }
 
@@ -89,15 +92,34 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
     /// @notice Turn accumulated ETH (and any WETH) into round currency. Permissionless.
     function convert() external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
         if (weth == address(0) || !_routes[weth].enabled) revert ConversionNotConfigured();
-        return _convert(weth);
+        return _convert(weth, 0);
     }
 
     /// @notice Turn an accumulated income token into round currency. Permissionless.
     /// @dev This is how recycled POL income becomes budget a round can actually spend.
     ///      Same Chainlink-bounded, capped, permissionless shape as the ETH path.
+    /// @notice Convert ETH/WETH, insisting on at least `callerMinOut` quote tokens.
+    /// @dev SEC-POT-002. `convert` stays permissionless — anyone should be able to push the
+    ///      protocol along — but a keeper holding a real quote can refuse a bad fill instead
+    ///      of accepting anything inside the 2% Chainlink haircut. The floor is
+    ///      `max(chainlinkFloor, callerMinOut)`: a caller can only ever TIGHTEN it, never
+    ///      widen it, so this adds no way to convert on worse terms than before.
+    function convert(uint256 callerMinOut) external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
+        return _convert(weth, callerMinOut);
+    }
+
+    /// @notice Convert `token`, insisting on at least `callerMinOut` quote tokens.
+    function convert(address token, uint256 callerMinOut)
+        external
+        nonReentrant
+        returns (uint256 amountIn, uint256 quoteOut)
+    {
+        return _convert(token, callerMinOut);
+    }
+
     function convert(address token) external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
         if (!_routes[token].enabled) revert NoRoute(token);
-        return _convert(token);
+        return _convert(token, 0);
     }
 
     /* ------------------------------------------------------------------ */
@@ -105,8 +127,16 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
     /* ------------------------------------------------------------------ */
 
     /// @notice Point at the ChipRewards contract. Multisig only.
+    /// @notice Point the Pot at the engine allowed to pull round budgets.
+    /// @dev SEC-POT-006. Zero-checked already; now also required to be a CONTRACT. Setting
+    ///      this to an EOA by fat-finger would hand budget-pull rights to a key rather than
+    ///      to reviewed code, and nothing downstream would notice until a round opened.
+    ///      A codesize check does not prove it is the RIGHT contract — the post-deploy read
+    ///      in LAUNCH_CONFIG does that — but it rules out the whole class of address typo
+    ///      that lands on an EOA.
     function setRewards(address newRewards) external onlyOwner {
         if (newRewards == address(0)) revert ZeroAddress();
+        if (newRewards.code.length == 0) revert NotAContract(newRewards);
         emit RewardsUpdated(rewards, newRewards);
         rewards = newRewards;
     }
@@ -120,10 +150,20 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
         uint24 conversionFee_,
         uint32 maxSlippageBps_,
         uint128 maxConvertPerCall_,
+        uint128 minConvertPerCall_,
         uint64 maxFeedAge_
     ) external onlyOwner {
         _setWeth(weth_);
-        _setRoute(weth_, ethUsdFeed_, swapRouter_, conversionFee_, maxSlippageBps_, maxConvertPerCall_, maxFeedAge_);
+        _setRoute(
+            weth_,
+            ethUsdFeed_,
+            swapRouter_,
+            conversionFee_,
+            maxSlippageBps_,
+            maxConvertPerCall_,
+            minConvertPerCall_,
+            maxFeedAge_
+        );
     }
 
     /// @notice Register or update the conversion route for one token. Multisig only.
@@ -134,12 +174,19 @@ contract Pot is Ownable2Step, ReentrancyGuard, ConversionRoutes {
         uint24 fee,
         uint32 maxSlippageBps,
         uint128 maxPerCall,
+        uint128 minPerCall,
         uint64 maxFeedAge
     ) external onlyOwner {
-        _setRoute(token, feed, router, fee, maxSlippageBps, maxPerCall, maxFeedAge);
+        _setRoute(token, feed, router, fee, maxSlippageBps, maxPerCall, minPerCall, maxFeedAge);
     }
 
     /// @notice Stop converting a token. Its balance stays put and can still be swept.
+    /// @notice Configure the Chainlink L2 sequencer uptime feed. Zero disables the check.
+    /// @dev SEC-POT-003. Base's feed, plus a grace period after the sequencer returns.
+    function setSequencerFeed(address feed, uint64 gracePeriod) external onlyOwner {
+        _setSequencerFeed(feed, gracePeriod);
+    }
+
     function disableRoute(address token) external onlyOwner {
         _disableRoute(token);
     }

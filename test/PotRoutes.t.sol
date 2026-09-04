@@ -24,6 +24,9 @@ contract PotRoutesTest is Test {
     MockAggregatorV3 internal aeroFeed;
     MockSwapRouter internal router;
 
+    /// @dev ConversionRoutes only accepts a router of this factory (SEC-POT-001).
+    address internal uniV3Factory = makeAddr("uniV3Factory");
+
     address internal multisig = makeAddr("multisig");
     address internal stranger = makeAddr("stranger");
 
@@ -37,12 +40,13 @@ contract PotRoutesTest is Test {
         ethFeed = new MockAggregatorV3(8, int256(ETH_USD * 1e8), "ETH / USD");
         aeroFeed = new MockAggregatorV3(8, 0.5e8, "AERO / USD"); // $0.50
         router = new MockSwapRouter();
+        router.setFactory(uniV3Factory);
 
-        pot = new Pot(multisig, address(usdc));
+        pot = new Pot(multisig, address(usdc), uniV3Factory);
 
         vm.startPrank(multisig);
-        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, 5 ether, 1 hours);
-        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 200, 10_000 ether, 1 hours);
+        pot.setConversionConfig(address(weth), address(ethFeed), address(router), 500, 100, 5 ether, 0, 1 hours);
+        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 200, 10_000 ether, 0, 1 hours);
         vm.stopPrank();
 
         router.setRate(address(weth), address(usdc), ETH_USD * 1e6, 1e18);
@@ -85,7 +89,7 @@ contract PotRoutesTest is Test {
         MockERC20 sixDec = new MockERC20("Six", "SIX", 6);
         MockAggregatorV3 sixFeed = new MockAggregatorV3(8, 2e8, "SIX / USD"); // $2
         vm.prank(multisig);
-        pot.setRoute(address(sixDec), address(sixFeed), address(router), 500, 100, 1_000_000e6, 1 hours);
+        pot.setRoute(address(sixDec), address(sixFeed), address(router), 500, 100, 1_000_000e6, 0, 1 hours);
         router.setRate(address(sixDec), address(usdc), 2e6, 1e6);
 
         sixDec.mint(address(pot), 100e6); // 100 tokens
@@ -156,28 +160,28 @@ contract PotRoutesTest is Test {
     function test_cannotRouteTheQuoteToken() public {
         vm.prank(multisig);
         vm.expectRevert(ConversionRoutes.CannotRouteQuoteToken.selector);
-        pot.setRoute(address(usdc), address(aeroFeed), address(router), 500, 100, 1_000e6, 1 hours);
+        pot.setRoute(address(usdc), address(aeroFeed), address(router), 500, 100, 1_000e6, 0, 1 hours);
     }
 
     function test_setRoute_onlyMultisig() public {
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
-        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 100, 1 ether, 1 hours);
+        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 100, 1 ether, 0, 1 hours);
     }
 
     function test_setRoute_rejectsNonsense() public {
         vm.startPrank(multisig);
         vm.expectRevert(ConversionRoutes.RouteZeroAddress.selector);
-        pot.setRoute(address(aero), address(0), address(router), 500, 100, 1 ether, 1 hours);
+        pot.setRoute(address(aero), address(0), address(router), 500, 100, 1 ether, 0, 1 hours);
 
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setRoute(address(aero), address(aeroFeed), address(router), 0, 100, 1 ether, 1 hours);
+        pot.setRoute(address(aero), address(aeroFeed), address(router), 0, 100, 1 ether, 0, 1 hours);
 
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 10_000, 1 ether, 1 hours);
+        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 10_000, 1 ether, 0, 1 hours);
 
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 100, 0, 1 hours);
+        pot.setRoute(address(aero), address(aeroFeed), address(router), 500, 100, 0, 0, 1 hours);
         vm.stopPrank();
     }
 
@@ -187,7 +191,7 @@ contract PotRoutesTest is Test {
         address notAToken = makeAddr("notAToken");
         vm.prank(multisig);
         vm.expectRevert(ConversionRoutes.RouteBadConfig.selector);
-        pot.setRoute(notAToken, address(aeroFeed), address(router), 500, 100, 1 ether, 1 hours);
+        pot.setRoute(notAToken, address(aeroFeed), address(router), 500, 100, 1 ether, 0, 1 hours);
     }
 
     function test_disableRoute_stopsConversionButNotSweeping() public {
@@ -206,7 +210,7 @@ contract PotRoutesTest is Test {
     function test_routeCanBeUpdatedInPlace() public {
         MockAggregatorV3 newFeed = new MockAggregatorV3(8, 1e8, "AERO / USD v2"); // $1
         vm.prank(multisig);
-        pot.setRoute(address(aero), address(newFeed), address(router), 500, 100, 10_000 ether, 1 hours);
+        pot.setRoute(address(aero), address(newFeed), address(router), 500, 100, 10_000 ether, 0, 1 hours);
 
         assertEq(pot.minOutFor(address(aero), 1_000 ether), 990e6, "priced off the new feed");
         assertEq(pot.routedTokens().length, 2, "not double-listed");
@@ -228,7 +232,7 @@ contract PotRoutesTest is Test {
         BlacklistToken frozen = new BlacklistToken("Frozen", "FRZ", 18);
         MockAggregatorV3 frozenFeed = new MockAggregatorV3(8, 1e8, "FRZ / USD");
         vm.prank(multisig);
-        pot.setRoute(address(frozen), address(frozenFeed), address(router), 500, 100, 10_000 ether, 1 hours);
+        pot.setRoute(address(frozen), address(frozenFeed), address(router), 500, 100, 10_000 ether, 0, 1 hours);
         router.setRate(address(frozen), address(usdc), 1e6, 1e18);
 
         frozen.mint(address(pot), 100 ether);

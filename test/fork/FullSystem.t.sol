@@ -84,13 +84,13 @@ contract FullSystemForkTest is Test {
         vm.createSelectFork(vm.envString("BASE_RPC_URL"));
 
         splitter = new FeeSplitter(multisig, multisig, ops, 2_000, 2_000); // pot set below
-        pot = new Pot(multisig, USDC);
+        pot = new Pot(multisig, USDC, UNIV3_FACTORY);
         registry = new StockRegistry(multisig, USDC, UNIV3_FACTORY, SLIPSTREAM_FACTORY);
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
         rounds =
             new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), 5_000 ether);
-        polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter));
+        polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter), UNIV3_FACTORY);
         router = new ClaimRouter(multisig, address(claims), 1_000_000);
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
@@ -104,7 +104,7 @@ contract FullSystemForkTest is Test {
         pot.setRewards(address(rounds));
         claims.setRounds(address(rounds));
         claims.setPolTreasury(address(polTreasury));
-        pot.setConversionConfig(WETH, ETH_USD_FEED, UNIV3_ROUTER, 500, 100, 5 ether, 1 hours);
+        pot.setConversionConfig(WETH, ETH_USD_FEED, UNIV3_ROUTER, 500, 100, 5 ether, 0, 1 hours);
 
         // WETH stands in for a B20 stock: real feed, real pool, real swap.
         registry.addStock(
@@ -135,7 +135,7 @@ contract FullSystemForkTest is Test {
 
         // Item 1: AERO has its own conversion route, so recycled POL income becomes
         // budget a round can actually spend.
-        pot.setRoute(AERO, AERO_USD_FEED, UNIV3_ROUTER, 500, 300, 50_000 ether, 24 hours);
+        pot.setRoute(AERO, AERO_USD_FEED, UNIV3_ROUTER, 500, 300, 50_000 ether, 0, 24 hours);
 
         // Item 2: a slice of every inflow goes to POL, so it can pair its stock holdback
         // without depending on expired credits.
@@ -144,7 +144,7 @@ contract FullSystemForkTest is Test {
 
         // POL realises its own slice into pairable USDC.
         polTreasury.setWeth(WETH);
-        polTreasury.setRoute(WETH, ETH_USD_FEED, UNIV3_ROUTER, 500, 100, 50 ether, 1 hours);
+        polTreasury.setRoute(WETH, ETH_USD_FEED, UNIV3_ROUTER, 500, 100, 50 ether, 0, 1 hours);
 
         polTreasury.setRewards(address(claims));
         polTreasury.setManager(keeper);

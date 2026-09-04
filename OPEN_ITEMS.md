@@ -460,3 +460,27 @@ until one of those is in place. That is a number to argue with, but it should be
 explicitly rather than drifted past — which is exactly what `REVIEW_PACKAGE.md` §6 asks
 reviewers to flag, and this is the first cap that is doing security work it was not designed
 for.
+
+---
+
+## 18. NEW: permissionless `convert` is MEV-exposed at scale
+
+External review batch 2 (TRIAGE SEC-POT-002). `Pot.convert` is permissionless and executes
+against whatever the pool says when it lands, bounded only by the Chainlink haircut. At
+launch caps that is worth $10–20 a call and the gas makes it uneconomic to chase; uncapped it
+is systematic slippage capture, and it scales with volume while the defence does not move.
+
+**Half fixed now:** `convert(token, callerMinOut)` lets a keeper holding a real quote insist
+on a tighter floor. The floor is `max(chainlinkFloor, callerMinOut)`, so a caller can only
+tighten it. That converts "whoever calls it accepts whatever the pool gives" into "the keeper
+can refuse a bad fill", without giving up permissionlessness.
+
+**Half deferred, and it is the same problem as OPEN_ITEMS 17.** Dynamic slippage from measured
+pool depth, or private routing, is the real answer — and it is needed in two places, the
+conversion path here and the stock-buy path in `ChipRounds`. **They should be solved once, not
+twice**, and that work is the shared precondition for lifting the round cap above $10,000.
+
+Note the asymmetry worth watching: the keeper's tighter `minOut` only helps when a keeper is
+the one calling. Anyone else can still call `convert()` with no floor beyond Chainlink's, so
+this reduces the protocol's exposure when things are running normally and does nothing when
+they are not. That is an argument for the real fix, not against the cheap one.

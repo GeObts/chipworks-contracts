@@ -311,9 +311,16 @@ Needs: `MULTISIG`, USDC. Deploy before ChipRewards.
 |---|---|
 | `multisig` | `MULTISIG` |
 | `quoteToken_` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| `uniswapV3Factory_` | `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` |
 
-After ChipRewards exists, call `setRewards(chipRewards)` from the multisig. Then go back to
-step 1 and call `FeeSplitter.setPot(pot)`.
+**The factory argument is a security control, not plumbing.** `ConversionRoutes` encodes
+Uniswap v3 calldata and nothing else, so `setRoute` refuses any router that does not report
+this factory — an Aerodrome Slipstream router is rejected at configuration time rather than
+reverting at conversion time. Raised by external review as SEC-POT-001.
+
+After ChipRewards exists, call `setRewards(chipRewards)` from the multisig. **It must be a
+contract**: `setRewards` refuses an EOA (SEC-POT-006). Then go back to step 1 and call
+`FeeSplitter.setPot(pot)`.
 
 Then configure the ETH conversion, multisig only:
 
@@ -325,7 +332,13 @@ setConversionConfig(
   conversionFee     = 500,        // 0.05% tier
   maxSlippageBps    = 100,        // 1% below the Chainlink mark
   maxConvertPerCall = 5 ether,    // cap per call
+  minConvertPerCall = 0.01 ether, // below this, wait for more to accumulate (SEC-POT-004)
   maxFeedAge        = 3600        // 1h staleness limit
+)
+
+setSequencerFeed(
+  0xBCF85224fc0756B9Fa45aA7892530B47e10b6433,  // Base L2 uptime feed, verified: A-19
+  3600                                          // 1h grace after it comes back
 )
 ```
 
@@ -350,6 +363,7 @@ setRoute(
   fee            = 500,
   maxSlippageBps = 300,        // AERO/USDC on Uniswap is thinner than WETH: ~$66k
   maxPerCall     = 50000e18,
+  minPerCall     = 100e18,     // dust floor
   maxFeedAge     = 86400
 )
 ```
@@ -541,6 +555,7 @@ Needs: `MULTISIG`, USDC, the Slipstream position manager, and the FeeSplitter fr
 | `multisig` | `MULTISIG` |
 | `quoteToken_` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | `positionManager_` | `0x827922686190790b37229fd06084350E74485b72` (verified: Slipstream `mint` with tickSpacing + sqrtPriceX96) |
+| `uniswapV3Factory_` | `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` — POL converts through Uniswap too |
 | `feeSplitter_` | FeeSplitter from step 1 |
 
 Then, from the multisig:

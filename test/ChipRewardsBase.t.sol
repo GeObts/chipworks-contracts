@@ -94,7 +94,7 @@ abstract contract ChipRewardsBase is Test {
         router = new MockSwapRouter();
 
         registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
-        pot = new Pot(multisig, address(usdc));
+        pot = new Pot(multisig, address(usdc), address(uniFactory));
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
         rounds = new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), SPLIT_FEE);

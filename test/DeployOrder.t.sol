@@ -111,7 +111,7 @@ contract DeployOrderTest is Test {
     /* ------------------------------------------------------------------ */
 
     function test_step3_thePotRefusesToFundAnUnwiredEngine() public {
-        Pot pot = new Pot(multisig, address(usdc));
+        Pot pot = new Pot(multisig, address(usdc), address(uniFactory));
         usdc.mint(address(pot), 10_000e6);
 
         // `rewards` is unset, so nobody is authorised to pull.
@@ -335,7 +335,7 @@ contract DeployOrderTest is Test {
         returns (ChipRounds rounds, ChipClaims claims, Pot pot, ChipActivation act)
     {
         StockRegistry registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
-        pot = new Pot(multisig, address(usdc));
+        pot = new Pot(multisig, address(usdc), address(uniFactory));
         act = new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
         rounds = new ChipRounds(multisig, address(registry), address(pot), address(act), address(claims), 5_000 ether);

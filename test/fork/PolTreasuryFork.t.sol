@@ -22,9 +22,11 @@ contract PolTreasuryForkTest is Test {
     address internal manager = makeAddr("bankrOptimizer");
     address internal splitter = makeAddr("feeSplitter");
 
+    address internal constant UNIV3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
+
     function setUp() public {
         vm.createSelectFork(vm.envString("BASE_RPC_URL"));
-        pol = new POLTreasury(multisig, USDC, NPM, splitter);
+        pol = new POLTreasury(multisig, USDC, NPM, splitter, UNIV3_FACTORY);
         vm.startPrank(multisig);
         pol.setManager(manager);
         pol.setPolAsset(NVDA, true);

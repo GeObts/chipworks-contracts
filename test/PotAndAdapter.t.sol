@@ -17,13 +17,16 @@ contract PotTest is Test {
     MockERC20 internal junk;
 
     address internal multisig = makeAddr("multisig");
-    address internal rewards = makeAddr("rewards");
+    /// @dev Must have code: `setRewards` now refuses an EOA (SEC-POT-006), because pointing
+    ///      budget-pull rights at a key rather than at reviewed code is a whole class of
+    ///      address typo worth ruling out.
+    address internal rewards = address(new RewardsStub());
     address internal randomer = makeAddr("randomer");
 
     function setUp() public {
         usdc = new MockERC20("USD Coin", "USDC", 6);
         junk = new MockERC20("Junk", "JUNK", 18);
-        pot = new Pot(multisig, address(usdc));
+        pot = new Pot(multisig, address(usdc), makeAddr("uniV3Factory"));
         vm.prank(multisig);
         pot.setRewards(rewards);
     }
@@ -237,3 +240,6 @@ contract ClutchVaultAdapterTest is Test {
         assertFalse(active, "tier worth nothing is treated as inactive");
     }
 }
+
+/// @notice Minimal stand-in for ChipRounds: it only has to have code and be pranked as.
+contract RewardsStub {}
