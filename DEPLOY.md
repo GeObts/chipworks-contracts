@@ -686,7 +686,7 @@ Needs: `MULTISIG`, `$CHIP`, `FeeSplitter` (step 1), a treasury for liquidated co
 | `chipToken_` | `CHIP` | What is lent and repaid. |
 | `feeSplitter_` | FeeSplitter from step 1 | Fees flow here, so a loan funds the next round. |
 | `treasury_` | `LOAN_TREASURY` | Where liquidated collateral goes. |
-| `terms_` | `{length: [30d, 90d, 180d], feeBps: [200, 500, 900], bountyBps: 200}` | Terms, fees, bounty. |
+| `terms_` | `{length: [7d, 14d, 30d, 90d, 180d], feeBps: [50, 100, 200, 500, 900], bountyBps: 200}` | Five terms, fees, bounty. |
 
 Term lengths must strictly increase and fees must not decrease across them; `feeBps` is
 capped at `MAX_FEE_BPS` (5000) and `bountyBps` at `MAX_BOUNTY_BPS` (1000). Those two ceilings
@@ -718,7 +718,12 @@ repays principal only. Nothing accrues, so nothing grows while a borrower is not
 
 **Daily operation** (all permissionless, anyone may run them):
 - `repay(loanId)` — **anyone** may repay; the Noun always returns to the borrower.
-- `liquidate(loanId)` — after maturity + 7 days grace, pays a bounty from the pool.
+- `liquidate(loanId)` — after maturity plus the loan's own grace, pays a bounty from the pool.
+
+**Grace is derived, not configured: `min(7 days, term / 2)`.** So a 7-day loan is seizable on
+day 10.5 rather than day 14, while everything from 30 days up keeps the same 7 days it always
+had. It is snapshotted at borrow, so re-configuring the ladder never moves a live loan's
+deadline. Read it with `graceFor(termIndex)` before borrowing, or `deadlineOf(loanId)` after.
 
 Post-deploy checks:
 - `owner()` is the multisig, `feeSplitter()` and `treasury()` are right

@@ -60,10 +60,11 @@ contract NounLoansTest is Test {
 
     /* -------------------------------- helpers -------------------------------- */
 
-    /// @dev 30 / 90 / 180 days at 2% / 5% / 9%, 2% liquidation bounty.
+    /// @dev 7 / 14 / 30 / 90 / 180 days at 0.5 / 1 / 2 / 5 / 9 %, 2% liquidation bounty.
+    ///      Short terms are the product; the per-day rate falls as the term lengthens.
     function _defaultTerms() internal pure returns (NounLoans.Terms memory t) {
-        t.length = [uint64(30 days), 90 days, 180 days];
-        t.feeBps = [uint32(200), 500, 900];
+        t.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
+        t.feeBps = [uint32(50), 100, 200, 500, 900];
         t.bountyBps = 200;
     }
 
@@ -121,18 +122,19 @@ contract NounLoansTest is Test {
         uint256 before = chip.balanceOf(alice);
         uint256 poolBefore = loans.poolBalance();
 
-        uint256 id = _borrow(alice, 1, 0, 1_000 ether); // 30d @ 2%
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether); // 7d @ 0.5%
 
         assertEq(based.ownerOf(1), address(loans), "collateral held");
-        assertEq(chip.balanceOf(alice) - before, 980 ether, "principal minus the fee");
-        assertEq(chip.balanceOf(splitter), 20 ether, "fee routed to the FeeSplitter");
+        assertEq(chip.balanceOf(alice) - before, 995 ether, "principal minus the fee");
+        assertEq(chip.balanceOf(splitter), 5 ether, "fee routed to the FeeSplitter");
         assertEq(loans.poolBalance(), poolBefore - 1_000 ether, "the whole principal left the pool");
 
         NounLoans.Loan memory l = loans.getLoan(id);
         assertEq(l.borrower, alice);
         assertEq(l.principal, 1_000 ether);
-        assertEq(l.feePaid, 20 ether);
-        assertEq(l.dueAt, uint64(block.timestamp) + 30 days);
+        assertEq(l.feePaid, 5 ether);
+        assertEq(l.dueAt, uint64(block.timestamp) + 7 days);
+        assertEq(l.gracePeriod, 3.5 days, "half the term, not a full week");
         assertFalse(l.closed);
         assertTrue(loans.isCollateral(address(based), 1));
     }
@@ -141,13 +143,13 @@ contract NounLoansTest is Test {
         _borrow(alice, 1, 0, 1_000 ether);
         _borrow(alice, 2, 1, 1_000 ether);
         _borrow(alice, 3, 2, 1_000 ether);
-        assertEq(chip.balanceOf(splitter), 20 ether + 50 ether + 90 ether);
+        assertEq(chip.balanceOf(splitter), 5 ether + 10 ether + 20 ether);
     }
 
     function test_quoteMatchesWhatBorrowDoes() public {
-        (uint256 fee, uint256 payout, uint64 dueAt) = loans.quote(1, 4_000 ether);
-        assertEq(fee, 200 ether);
-        assertEq(payout, 3_800 ether);
+        (uint256 fee, uint256 payout, uint64 dueAt,) = loans.quote(1, 4_000 ether);
+        assertEq(fee, 40 ether);
+        assertEq(payout, 3_960 ether);
 
         uint256 before = chip.balanceOf(alice);
         uint256 id = _borrow(alice, 1, 1, 4_000 ether);
@@ -156,7 +158,7 @@ contract NounLoansTest is Test {
     }
 
     function test_repaymentIsPrincipalOnly() public {
-        uint256 id = _borrow(alice, 1, 2, 1_000 ether); // 9% fee up front
+        uint256 id = _borrow(alice, 1, 2, 1_000 ether); // 30d, 2% fee up front
         uint256 before = chip.balanceOf(alice);
 
         vm.prank(alice);
@@ -174,7 +176,7 @@ contract NounLoansTest is Test {
         uint256 id = _borrow(alice, 1, 1, 2_000 ether);
         vm.prank(alice);
         loans.repay(id);
-        assertEq(before - chip.balanceOf(alice), 100 ether, "5% of 2,000, and nothing else");
+        assertEq(before - chip.balanceOf(alice), 20 ether, "1% of 2,000, and nothing else");
     }
 
     function test_theCapIsEnforcedPerCollection() public {
@@ -229,8 +231,8 @@ contract NounLoansTest is Test {
         _mintAndChip(alice, 1);
         vm.startPrank(alice);
         based.approve(address(loans), 1);
-        vm.expectRevert(abi.encodeWithSelector(NounLoans.BadTerm.selector, 3));
-        loans.borrow(address(based), 1, 3, 100 ether);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.BadTerm.selector, 5));
+        loans.borrow(address(based), 1, 5, 100 ether);
         vm.expectRevert(NounLoans.ZeroPrincipal.selector);
         loans.borrow(address(based), 1, 0, 0);
         vm.stopPrank();
@@ -332,7 +334,7 @@ contract NounLoansTest is Test {
 
     function test_repayWorksThroughTheGracePeriod() public {
         uint256 id = _borrow(alice, 1, 0, 1_000 ether);
-        vm.warp(block.timestamp + 30 days + 7 days); // exactly the deadline
+        vm.warp(loans.deadlineOf(id)); // exactly the deadline: 7d term + 3.5d grace
         vm.prank(alice);
         loans.repay(id);
         assertEq(based.ownerOf(1), alice);
@@ -498,7 +500,7 @@ contract NounLoansTest is Test {
 
     function test_termsRequireTheFullFortyEightHours() public {
         NounLoans.Terms memory t = _defaultTerms();
-        t.feeBps = [uint32(300), 600, 1_000];
+        t.feeBps = [uint32(80), 150, 300, 600, 1_000];
 
         vm.prank(multisig);
         loans.queueTerms(t);
@@ -511,8 +513,8 @@ contract NounLoansTest is Test {
         vm.warp(block.timestamp + 1);
         vm.prank(multisig);
         loans.executeTerms();
-        (uint256 fee,,) = loans.quote(0, 1_000 ether);
-        assertEq(fee, 30 ether);
+        (uint256 fee,,,) = loans.quote(0, 1_000 ether);
+        assertEq(fee, 8 ether);
     }
 
     /// @notice A live loan is a constant. Re-pricing never reaches it.
@@ -521,8 +523,8 @@ contract NounLoansTest is Test {
         uint64 dueBefore = loans.getLoan(id).dueAt;
 
         NounLoans.Terms memory t = _defaultTerms();
-        t.length = [uint64(1 days), 2 days, 3 days];
-        t.feeBps = [uint32(5_000), 5_000, 5_000];
+        t.length = [uint64(1 days), 2 days, 3 days, 4 days, 5 days];
+        t.feeBps = [uint32(5_000), 5_000, 5_000, 5_000, 5_000];
         vm.prank(multisig);
         loans.queueTerms(t);
         vm.warp(block.timestamp + 48 hours);
@@ -531,7 +533,7 @@ contract NounLoansTest is Test {
 
         NounLoans.Loan memory l = loans.getLoan(id);
         assertEq(l.principal, 1_000 ether, "unchanged");
-        assertEq(l.feePaid, 20 ether, "unchanged");
+        assertEq(l.feePaid, 5 ether, "unchanged");
         assertEq(l.dueAt, dueBefore, "unchanged");
 
         uint256 before = chip.balanceOf(alice);
@@ -542,7 +544,7 @@ contract NounLoansTest is Test {
 
     function test_termsCeilingsAreEnforced() public {
         NounLoans.Terms memory t = _defaultTerms();
-        t.feeBps = [uint32(200), 500, 5_001]; // over MAX_FEE_BPS
+        t.feeBps = [uint32(50), 100, 200, 500, 5_001]; // over MAX_FEE_BPS
         vm.prank(multisig);
         vm.expectRevert(NounLoans.BadConfig.selector);
         loans.queueTerms(t);
@@ -554,13 +556,13 @@ contract NounLoansTest is Test {
         loans.queueTerms(t);
 
         t = _defaultTerms();
-        t.length = [uint64(90 days), 30 days, 180 days]; // not increasing
+        t.length = [uint64(14 days), 7 days, 30 days, 90 days, 180 days]; // not increasing
         vm.prank(multisig);
         vm.expectRevert(NounLoans.BadConfig.selector);
         loans.queueTerms(t);
 
         t = _defaultTerms();
-        t.feeBps = [uint32(900), 500, 200]; // inverted fee curve
+        t.feeBps = [uint32(900), 500, 200, 100, 50]; // inverted fee curve
         vm.prank(multisig);
         vm.expectRevert(NounLoans.BadConfig.selector);
         loans.queueTerms(t);
@@ -759,11 +761,11 @@ contract NounLoansTest is Test {
     ///         pool ends a full cycle exactly where it started.
     function testFuzz_aFullCycleIsFeeOnlyAndPoolNeutral(uint256 principalSeed, uint8 termSeed) public {
         uint256 principal = bound(principalSeed, 1, CAP);
-        uint8 term = uint8(bound(termSeed, 0, 2));
+        uint8 term = uint8(bound(termSeed, 0, 4));
 
         uint256 poolStart = loans.poolBalance();
         uint256 aliceStart = chip.balanceOf(alice);
-        (uint256 fee,,) = loans.quote(term, principal);
+        (uint256 fee,,,) = loans.quote(term, principal);
 
         uint256 id = _borrow(alice, 1, term, principal);
         vm.prank(alice);
@@ -778,7 +780,7 @@ contract NounLoansTest is Test {
     /// @notice The pool's accounted balance is never more than the $CHIP it actually holds.
     function testFuzz_thePoolIsAlwaysFullyBacked(uint256 principalSeed, uint8 termSeed, bool liquidateIt) public {
         uint256 principal = bound(principalSeed, 1, CAP);
-        uint8 term = uint8(bound(termSeed, 0, 2));
+        uint8 term = uint8(bound(termSeed, 0, 4));
 
         uint256 id = _borrow(alice, 1, term, principal);
         assertLe(loans.poolBalance(), chip.balanceOf(address(loans)));
@@ -792,5 +794,154 @@ contract NounLoansTest is Test {
             loans.repay(id);
         }
         assertLe(loans.poolBalance(), chip.balanceOf(address(loans)), "never over-counted");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*        THE SHORT END — 7-DAY TERMS AND THE DERIVED GRACE             */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice A 7-day loan gets 3.5 days of grace, not another full week.
+    ///
+    /// @dev THE REASON THE GRACE IS DERIVED. A flat 7 days on a 7-day term is another 100%
+    ///      of the loan: the borrower gets a fortnight to repay a one-week loan and the
+    ///      liquidator waits twice as long as the product promises. `min(7 days, term / 2)`
+    ///      keeps it proportionate at the short end and identical from 30 days up.
+    function test_shortTerms_graceIsHalfTheTermAndCappedAtAWeek() public view {
+        assertEq(loans.graceFor(0), 3.5 days, "7d term");
+        assertEq(loans.graceFor(1), 7 days, "14d term, exactly at the cap");
+        assertEq(loans.graceFor(2), 7 days, "30d term, capped");
+        assertEq(loans.graceFor(3), 7 days, "90d term, unchanged from before");
+        assertEq(loans.graceFor(4), 7 days, "180d term, unchanged from before");
+    }
+
+    /// @notice The whole 7-day path: borrow, fee prepaid, repay inside the window.
+    function test_shortTerms_sevenDayLoanRoundTrip() public {
+        uint256 before = chip.balanceOf(alice);
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+
+        // Fee is prepaid out of the disbursement, so she receives 995 and owes 1,000.
+        assertEq(chip.balanceOf(alice) - before, 995 ether, "0.5% taken up front");
+        assertEq(loans.getLoan(id).dueAt, uint64(block.timestamp) + 7 days);
+        assertEq(loans.deadlineOf(id), uint64(block.timestamp) + 7 days + 3.5 days);
+
+        // Repay on day 6, comfortably inside the term.
+        vm.warp(block.timestamp + 6 days);
+        vm.prank(alice);
+        loans.repay(id);
+
+        assertEq(based.ownerOf(1), alice);
+        assertEq(before - chip.balanceOf(alice), 5 ether, "net cost is exactly the fee");
+    }
+
+    /// @notice Repay still works right up to the shortened deadline, and not a second past.
+    function test_shortTerms_theShortenedDeadlineIsExact() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        uint64 deadline = loans.deadlineOf(id);
+
+        vm.warp(deadline);
+        assertFalse(loans.isLiquidatable(id), "still the borrower's, exactly on the line");
+
+        vm.warp(deadline + 1);
+        assertTrue(loans.isLiquidatable(id), "and liquidatable one second later");
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(NounLoans.RepayWindowOver.selector, id, deadline));
+        loans.repay(id);
+    }
+
+    /// @notice FAST LIQUIDATION IS THE POINT. A 7-day loan is seizable on day 10.5, not 14.
+    function test_shortTerms_sevenDayLoanLiquidatesOnDayTenAndAHalf() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        uint256 opened = block.timestamp;
+
+        // Day 10: still the borrower's.
+        vm.warp(opened + 10 days);
+        assertFalse(loans.isLiquidatable(id));
+        vm.prank(liquidator);
+        vm.expectRevert();
+        loans.liquidate(id);
+
+        // Day 10.5 + 1s: gone.
+        vm.warp(opened + 10.5 days + 1);
+        assertTrue(loans.isLiquidatable(id));
+
+        vm.prank(liquidator);
+        uint256 bounty = loans.liquidate(id);
+
+        assertEq(bounty, 20 ether, "2% of principal, unchanged by the term");
+        assertEq(based.ownerOf(1), treasury);
+        assertEq(loans.beneficiaryOf(address(based), 1), address(0), "the chip dies with it");
+    }
+
+    /// @notice Under the OLD flat 7-day grace the same loan would still be safe on day 10.5.
+    ///         This is the behaviour change, stated as a number.
+    function test_shortTerms_theOldFlatGraceWouldStillBeRunning() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        uint256 opened = block.timestamp;
+
+        vm.warp(opened + 10.5 days + 1);
+        assertTrue(loans.isLiquidatable(id), "liquidatable now");
+
+        // 7 days term + the old flat 7 days grace would have been day 14.
+        assertLt(loans.deadlineOf(id), opened + 14 days, "3.5 days sooner than before");
+    }
+
+    /// @notice The fee curve rises with duration and the per-day rate falls, across all five.
+    /// @dev `_validateTerms` enforces non-decreasing fees and strictly increasing lengths, so
+    ///      the shape cannot be configured backwards. This pins the shipped numbers.
+    function test_shortTerms_feeRisesWithDurationAndPerDayRateFalls() public view {
+        uint256 principal = 10_000 ether;
+        uint256[5] memory fees;
+        uint64[5] memory lengths = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
+
+        for (uint8 i; i < 5; ++i) {
+            (uint256 fee,,,) = loans.quote(i, principal);
+            fees[i] = fee;
+            if (i != 0) assertGt(fees[i], fees[i - 1], "a longer term costs more in total");
+        }
+
+        // And the per-day rate falls, which is what makes the long end worth taking.
+        for (uint8 i = 1; i < 5; ++i) {
+            uint256 prevPerDay = (fees[i - 1] * 1 days) / lengths[i - 1];
+            uint256 perDay = (fees[i] * 1 days) / lengths[i];
+            assertLe(perDay, prevPerDay, "per-day rate never rises with duration");
+        }
+    }
+
+    /// @notice A live short loan keeps its own grace even if the ladder is reconfigured.
+    /// @dev The grace is snapshotted at borrow for the same reason principal, fee and due
+    ///      date are: a live loan is a constant.
+    function test_shortTerms_aTermsChangeCannotMoveALiveLoansGrace() public {
+        uint256 id = _borrow(alice, 1, 0, 1_000 ether);
+        uint64 deadline = loans.deadlineOf(id);
+        assertEq(loans.getLoan(id).gracePeriod, 3.5 days);
+
+        // Lengthen every term, which would raise the derived grace for NEW loans.
+        NounLoans.Terms memory t = _defaultTerms();
+        t.length = [uint64(60 days), 90 days, 120 days, 150 days, 180 days];
+        vm.prank(multisig);
+        loans.queueTerms(t);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        loans.executeTerms();
+
+        assertEq(loans.graceFor(0), 7 days, "new loans get the longer grace");
+        assertEq(loans.deadlineOf(id), deadline, "hers is untouched");
+        assertEq(loans.getLoan(id).gracePeriod, 3.5 days);
+    }
+
+    /// @notice A term short enough that the fee rounds to zero is a free loan, not a revert.
+    /// @dev Bounded by collateral: one loan per Noun, and every Noun must be chipped first.
+    function test_shortTerms_aDustPrincipalRoundsTheFeeToZeroWithoutReverting() public {
+        _mintAndChip(alice, 1);
+        vm.startPrank(alice);
+        based.approve(address(loans), 1);
+        uint256 id = loans.borrow(address(based), 1, 0, 100); // 100 wei at 0.5% -> 0
+        vm.stopPrank();
+
+        assertEq(loans.getLoan(id).feePaid, 0, "rounds to nothing");
+        vm.prank(alice);
+        loans.repay(id);
+        assertEq(based.ownerOf(1), alice);
     }
 }

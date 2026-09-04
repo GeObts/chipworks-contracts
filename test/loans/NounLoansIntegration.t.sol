@@ -36,8 +36,8 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         _price(address(darkNouns));
 
         NounLoans.Terms memory t;
-        t.length = [uint64(30 days), 90 days, 180 days];
-        t.feeBps = [uint32(200), 500, 900];
+        t.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
+        t.feeBps = [uint32(50), 100, 200, 500, 900];
         t.bountyBps = 200;
         loans = new NounLoans(multisig, address(chip), feeSplitterAddr, loanTreasury, address(activation), t);
 
@@ -100,7 +100,7 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         _deposit(alice, 1, 0, 1_000 ether);
 
         assertEq(basedNouns.ownerOf(1), address(loans), "the Noun really is locked away");
-        assertEq(chip.balanceOf(alice) - payoutBefore, 980 ether, "and she got the loan");
+        assertEq(chip.balanceOf(alice) - payoutBefore, 995 ether, "and she got the loan");
 
         _fundPot(1_000e6);
         uint256 id = _openAndAccumulate(_ids(1));
@@ -155,7 +155,7 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         _mintAndChip(alice, 1, 4); // 3.33x
         (bool activeBefore, uint32 bpsBefore, address ownerBefore) = activation.activation(address(basedNouns), 1);
 
-        uint256 loanId = _deposit(alice, 1, 2, 5_000 ether); // 180-day term
+        uint256 loanId = _deposit(alice, 1, 4, 5_000 ether); // the 180-day term
 
         (bool activeIn, uint32 bpsIn, address ownerIn) = activation.activation(address(basedNouns), 1);
         assertTrue(activeIn, "still chipped the instant it is deposited");

@@ -272,7 +272,15 @@ forge(1, ids) -> reverts RecipeIsPaused
 ```
 
 **9. NounLoans** — `(MULTISIG, CHIP, FeeSplitter, LOAN_TREASURY, **ChipActivation**, terms)`
-Terms: `{length: [30d, 90d, 180d], feeBps: [200, 500, 900], bountyBps: 200}`.
+Terms: `{length: [7d, 14d, 30d, 90d, 180d], feeBps: [50, 100, 200, 500, 900], bountyBps: 200}`.
+
+**Short terms are the product** — fast churn, fast liquidations — so the ladder starts at a
+week. The fee rises with duration while the per-day rate falls (7.1 bps/day at 7d down to 5.0
+at 180d), which is what makes the long end worth taking. `_validateTerms` enforces strictly
+increasing lengths and non-decreasing fees, so the shape cannot be configured backwards.
+
+Grace is **derived**, not configured: `min(7 days, term / 2)`. A 7-day loan gets 3.5 days, a
+14-day loan exactly 7, and everything above is capped at the same week it always had.
 ```
 setMaxPrincipal(each collection, ~60% of Anvil queue price in $CHIP)
 approve + depositPool(80% of the initial buy)
@@ -357,7 +365,8 @@ feed, not a weekend.
 - **The Anvil sell side.** Not built. `sellEnabled` is a constant `false` with no setter, so
   it ships after the audit in a deployment that implements it.
 - **`maxPrincipal` vs Anvil parity** is operational and unenforced — §5 and OPEN_ITEMS 11.
-- **NounLoans has no repayment after maturity + 7 days grace.** Deliberate; the site must
-  carry the dates loudly. OPEN_ITEMS 10.
+- **NounLoans has no repayment after maturity plus the loan's grace** — `min(7 days, term/2)`,
+  so 3.5 days on a 7-day loan. Deliberate; the site must carry the dates loudly, and the short
+  terms make that more urgent, not less. OPEN_ITEMS 10.
 - **Compound share redemption** has no path. Phase 2, and it should be answered before
   auto-compound is marketed. OPEN_ITEMS 7.

@@ -83,8 +83,8 @@ contract CodeSizeTest is Test {
         _check("ClaimRouter", address(new ClaimRouter(multisig, claims, 1_000_000)));
 
         NounLoans.Terms memory loanTerms;
-        loanTerms.length = [uint64(30 days), 90 days, 180 days];
-        loanTerms.feeBps = [uint32(200), 500, 900];
+        loanTerms.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
+        loanTerms.feeBps = [uint32(50), 100, 200, 500, 900];
         loanTerms.bountyBps = 200;
         address activation =
             address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]));

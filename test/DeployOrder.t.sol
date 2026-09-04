@@ -228,8 +228,8 @@ contract DeployOrderTest is Test {
     ///         loan the pool cannot fund.
     function test_step9_anUnfundedLoanVaultNeverTakesCollateral() public {
         NounLoans.Terms memory t;
-        t.length = [uint64(30 days), 90 days, 180 days];
-        t.feeBps = [uint32(200), 500, 900];
+        t.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
+        t.feeBps = [uint32(50), 100, 200, 500, 900];
         t.bountyBps = 200;
         ChipActivation act =
             new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
@@ -288,8 +288,8 @@ contract DeployOrderTest is Test {
         claims.setRounds(address(rounds));
 
         NounLoans.Terms memory t;
-        t.length = [uint64(30 days), 90 days, 180 days];
-        t.feeBps = [uint32(200), 500, 900];
+        t.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
+        t.feeBps = [uint32(50), 100, 200, 500, 900];
         t.bountyBps = 200;
         NounLoans loans = new NounLoans(multisig, address(chip), makeAddr("splitter"), treasury, address(act), t);
 

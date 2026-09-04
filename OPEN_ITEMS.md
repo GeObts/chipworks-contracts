@@ -277,8 +277,15 @@ round. Now measured and tolerated, with the shortfall stranded and reported.
 
 ## 10. NEW: NounLoans refuses repayment after the grace period
 
-`repay` reverts once `block.timestamp > dueAt + 7 days`, whether or not anyone has actually
-liquidated the loan. The deadline is the deadline.
+`repay` reverts once `block.timestamp > dueAt + gracePeriod`, whether or not anyone has
+actually liquidated the loan. The deadline is the deadline.
+
+**Sharper since the short terms landed.** Grace is now `min(7 days, term / 2)`, so a 7-day
+loan gives a borrower 3.5 days past maturity rather than a week. The rule has not changed but
+the window has, and on the shortest term a borrower who is away for a long weekend can miss it
+entirely. **The site must show the deadline, not just the maturity date**, and should warn
+ahead of it — that was a nice-to-have on a 30-day ladder and is close to mandatory on a
+7-day one.
 
 **The argument for it:** leaving repayment open until someone happens to liquidate makes the
 grace period unbounded in practice, and makes a borrower's outcome depend on how attentive

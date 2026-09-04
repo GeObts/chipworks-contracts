@@ -58,7 +58,7 @@ headroom at 3,742 bytes and is the one to watch.
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
 | `ChipRounds.sol` | 532 | transiently, in-flight budget | Rounds, weights, splits, buying, POL holdback |
-| `loans/NounLoans.sol` | 363 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
+| `loans/NounLoans.sol` | 378 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
 | `ChipClaims.sol` | 333 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
 | `activation/ChipActivation.sol` | 264 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
 | `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
@@ -368,7 +368,7 @@ the multisig-set activation source. The argument that this is not a new power: t
 contract already decides whose weight counts in every round, which is strictly more. Judge
 that argument.
 
-### 4.5b LENDING — `loans/NounLoans.sol` (363 LOC), NEW AND HOLDS ASSETS
+### 4.5b LENDING — `loans/NounLoans.sol` (378 LOC), NEW AND HOLDS ASSETS
 
 Borrow $CHIP against a Noun at a flat fee for a fixed term. It holds collateral NFTs and the
 lending pool, so it holds real value; but its accounting is deliberately simple — a flat fee
@@ -392,8 +392,12 @@ Attack, in order:
 - **Reentrancy across the seam.** `borrow` takes the NFT before paying out; `repay` measures
   the $CHIP delta before returning the NFT. Both are `nonReentrant`. Attack the ERC-721
   callbacks and a hostile $CHIP.
-- **The repay deadline.** Repayment is refused after maturity plus the 7-day grace, even if
+- **The repay deadline.** Repayment is refused after maturity plus the loan's grace, even if
   nobody has liquidated yet. That is a deliberate, and harsh, product rule — see OPEN_ITEMS.
+- **Grace is derived from the term**, `min(7 days, term / 2)`, and snapshotted at borrow. Five
+  terms now run from 7 to 180 days; a flat week of grace would have doubled the shortest loan.
+  Check the snapshot cannot be moved by a later terms change, and that the halving cannot
+  round to something surprising at the short end.
 - **The chip gate.** `borrow` requires the collateral to be actively chipped **to the
   borrower** at that moment, read from the activation source rather than from a flag of this
   contract's own — so there is only one notion of "chipped" and it cannot drift. Check the

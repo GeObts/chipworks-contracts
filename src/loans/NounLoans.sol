@@ -32,6 +32,10 @@ import {IActivationSource} from "../interfaces/IActivationSource.sol";
 ///      it truthful; ChipActivation does the rest. That split is deliberate — this contract
 ///      cannot mint weight, cannot reach a credit, and cannot pay itself a reward.
 ///
+///      SHORT TERMS BY DESIGN. 7 / 14 / 30 / 90 / 180 days, all configurable behind the 48h
+///      timelock. The short end is the product — fast churn and fast liquidations — which is
+///      also why the grace period is derived from the term rather than fixed: see {graceFor}.
+///
 ///      FIXED FEE, NOT INTEREST. The fee is a flat percentage of principal per term, taken
 ///      out of the disbursement: borrow 1,000 and receive 1,000 minus the fee. Repayment is
 ///      principal only, so the amount owed never moves and there is no accrual to compute,
@@ -55,11 +59,15 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
 
     uint256 public constant BPS = 10_000;
 
-    /// @notice Terms offered: 30 / 90 / 180 days by default, all configurable.
-    uint256 public constant TERM_COUNT = 3;
+    /// @notice Terms offered: 7 / 14 / 30 / 90 / 180 days by default, all configurable.
+    /// @dev The product wants SHORT terms — fast churn, fast liquidations — so the ladder
+    ///      starts at a week rather than a month.
+    uint256 public constant TERM_COUNT = 5;
 
-    /// @notice How long after maturity a borrower may still repay.
-    uint64 public constant GRACE_PERIOD = 7 days;
+    /// @notice Longest grace period after maturity, for any term.
+    /// @dev See {graceFor}. A loan's own grace is derived from its term and snapshotted at
+    ///      borrow, so this is a ceiling rather than the value itself.
+    uint64 public constant MAX_GRACE_PERIOD = 7 days;
 
     /// @notice Notice period on every economic parameter. Same shape as ChipActivation.
     uint64 public constant CONFIG_TIMELOCK = 48 hours;
@@ -77,6 +85,9 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         uint256 feePaid;
         uint64 startedAt;
         uint64 dueAt;
+        /// @dev Snapshotted at borrow, so a later terms change cannot move a live loan's
+        ///      deadline in either direction. See {graceFor}.
+        uint64 gracePeriod;
         uint8 termIndex;
         bool closed;
         bool liquidated;
@@ -267,7 +278,9 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
 
         uint256 fee = (principal * _terms.feeBps[termIndex]) / BPS;
         uint256 payout = principal - fee;
-        uint64 dueAt = uint64(block.timestamp) + _terms.length[termIndex];
+        uint64 termLength = _terms.length[termIndex];
+        uint64 dueAt = uint64(block.timestamp) + termLength;
+        uint64 grace = _graceFrom(termLength);
 
         // ---- effects ----
         loanId = _loans.length;
@@ -280,6 +293,7 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
                 feePaid: fee,
                 startedAt: uint64(block.timestamp),
                 dueAt: dueAt,
+                gracePeriod: grace,
                 termIndex: termIndex,
                 closed: false,
                 liquidated: false
@@ -307,15 +321,16 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
     ///      `ChipClaims.claimFor`. It also means a borrower can be bailed out by a friend
     ///      without handing over a key.
     ///
-    ///      The window closes at maturity plus the grace period. After that the loan is
-    ///      liquidatable and repayment is no longer accepted, even if nobody has liquidated
-    ///      it yet — the deadline is the deadline, and leaving it open would make the grace
-    ///      period unbounded in practice.
+    ///      The window closes at maturity plus the loan's own grace period — `min(7 days,
+    ///      term / 2)`, snapshotted at borrow, so on a 7-day loan it is 3.5 days rather than
+    ///      another full week. After that the loan is liquidatable and repayment is no longer
+    ///      accepted, even if nobody has liquidated it yet — the deadline is the deadline, and
+    ///      leaving it open would make the grace period unbounded in practice.
     function repay(uint256 loanId) external nonReentrant {
         Loan storage l = _loanAt(loanId);
         if (l.closed) revert LoanClosed(loanId);
 
-        uint64 deadline = l.dueAt + GRACE_PERIOD;
+        uint64 deadline = l.dueAt + l.gracePeriod;
         if (block.timestamp > deadline) revert RepayWindowOver(loanId, deadline);
 
         uint256 principal = l.principal;
@@ -353,7 +368,7 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         Loan storage l = _loanAt(loanId);
         if (l.closed) revert LoanClosed(loanId);
 
-        uint64 liquidatableAt = l.dueAt + GRACE_PERIOD;
+        uint64 liquidatableAt = l.dueAt + l.gracePeriod;
         if (block.timestamp <= liquidatableAt) revert NotYetLiquidatable(loanId, liquidatableAt);
 
         address borrower = l.borrower;
@@ -430,16 +445,43 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
         return _openLoanOf[collection][tokenId] != 0;
     }
 
+    /// @notice Grace period a loan on `termIndex` would get: `min(7 days, term / 2)`.
+    ///
+    /// @dev A FLAT SEVEN DAYS DOES NOT SURVIVE THE SHORT END. On the old 30/90/180 ladder a
+    ///      week of grace was a modest tail. On a 7-day loan it is another 100% of the term —
+    ///      the borrower gets a fortnight to repay a one-week loan, the liquidator waits
+    ///      twice as long as the product promises, and "fast churn" stops being true.
+    ///
+    ///      Halving the term instead keeps grace proportionate where it matters and identical
+    ///      where it already worked: 7d gives 3.5d, 14d gives 7d, and everything from 30d up
+    ///      is capped at the same 7 days it always had. Nothing on the long end changes.
+    ///
+    ///      DERIVED, NOT CONFIGURED, and that is the point. Five more settable numbers would
+    ///      be five more ways for the grace to drift out of step with the term it belongs to —
+    ///      a 7-day term with a 30-day grace is a configuration nobody would notice until a
+    ///      liquidator complained. This cannot be set wrong because it cannot be set.
+    function graceFor(uint8 termIndex) public view returns (uint64) {
+        if (termIndex >= TERM_COUNT) revert BadTerm(termIndex);
+        return _graceFrom(_terms.length[termIndex]);
+    }
+
+    function _graceFrom(uint64 termLength) internal pure returns (uint64) {
+        uint64 half = termLength / 2;
+        return half < MAX_GRACE_PERIOD ? half : MAX_GRACE_PERIOD;
+    }
+
     /// @notice What a loan would look like, before taking it.
     function quote(uint8 termIndex, uint256 principal)
         external
         view
-        returns (uint256 fee, uint256 payout, uint64 dueAt)
+        returns (uint256 fee, uint256 payout, uint64 dueAt, uint64 deadline)
     {
         if (termIndex >= TERM_COUNT) revert BadTerm(termIndex);
         fee = (principal * _terms.feeBps[termIndex]) / BPS;
         payout = principal - fee;
-        dueAt = uint64(block.timestamp) + _terms.length[termIndex];
+        uint64 length = _terms.length[termIndex];
+        dueAt = uint64(block.timestamp) + length;
+        deadline = dueAt + _graceFrom(length);
     }
 
     function terms() external view returns (Terms memory) {
@@ -452,12 +494,13 @@ contract NounLoans is IActivationCustodian, Ownable2Step, ReentrancyGuard, IERC7
 
     function isLiquidatable(uint256 loanId) external view returns (bool) {
         Loan storage l = _loanAt(loanId);
-        return !l.closed && block.timestamp > l.dueAt + GRACE_PERIOD;
+        return !l.closed && block.timestamp > l.dueAt + l.gracePeriod;
     }
 
     /// @notice When this loan stops being repayable and starts being liquidatable.
     function deadlineOf(uint256 loanId) external view returns (uint64) {
-        return _loanAt(loanId).dueAt + GRACE_PERIOD;
+        Loan storage l = _loanAt(loanId);
+        return l.dueAt + l.gracePeriod;
     }
 
     function _loanAt(uint256 loanId) internal view returns (Loan storage) {
