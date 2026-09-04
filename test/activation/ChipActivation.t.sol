@@ -821,4 +821,96 @@ contract ChipActivationTest is Test {
         assertEq(bps, 0);
         assertEq(owner, address(0));
     }
+
+    /* ------------------------------------------------------------------ */
+    /*        INTENDED TOKENOMICS, PINNED SO THEY CANNOT DRIFT              */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice SEC-ACT-002. Revival on repurchase is FREE, and that is intended.
+    ///
+    /// @dev A holder who sells and later buys the same Noun back gets their tier restored at
+    ///      no cost, even if the cost table has risen in between. Reviewed and kept — see
+    ///      TRIAGE SEC-ACT-002 for why the "top up the difference" compromise cannot be
+    ///      implemented without either deactivating continuous holders on a price rise or
+    ///      adding a transfer hook this design deliberately does not have.
+    ///
+    ///      The exploit it enables is bounded to absurdity: to dodge a price rise you must
+    ///      sell your own Noun on the open market and buy that exact token back, paying fees
+    ///      and taking the risk it does not come back. Nobody does that to save a chip
+    ///      top-up.
+    function test_intended_revivalOnRepurchaseIsFreeEvenAfterAPriceRise() public {
+        _mintAndActivate(alice, 1, 4); // top tier at the old price
+        uint256 spent = chip.balanceOf(DEAD);
+
+        vm.prank(alice);
+        based.transferFrom(alice, bob, 1);
+        assertFalse(act.isActive(address(based), 1));
+
+        // Costs triple while she does not hold it.
+        uint256[5] memory dearer = [uint256(300 ether), 750 ether, 1_800 ether, 3_600 ether, 12_000 ether];
+        vm.prank(multisig);
+        act.queueCosts(address(based), dearer);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        act.executeCosts(address(based));
+
+        vm.prank(bob);
+        based.transferFrom(bob, alice, 1);
+
+        (bool active, uint32 bps, address owner) = act.activation(address(based), 1);
+        assertTrue(active, "revived");
+        assertEq(bps, 33_300, "at the tier she paid for");
+        assertEq(owner, alice);
+        assertEq(chip.balanceOf(DEAD), spent, "and not a wei more was burned");
+    }
+
+    /// @notice But revival is bound to the ORIGINAL activator. A buyer never inherits it.
+    /// @dev This is what keeps the free revival a loyalty property rather than a transferable
+    ///      asset: the tier cannot be sold with the Noun.
+    function test_intended_revivalNeverTransfersToABuyer() public {
+        _mintAndActivate(alice, 1, 4);
+        vm.prank(alice);
+        based.transferFrom(alice, bob, 1);
+
+        assertFalse(act.isActive(address(based), 1), "bob inherits nothing");
+        vm.prank(bob);
+        based.transferFrom(bob, carol, 1);
+        assertFalse(act.isActive(address(based), 1), "nor does carol");
+    }
+
+    /// @notice SEC-ACT-003. Upgrading credits the CURRENT table's lower tier, not what was
+    ///         actually paid — so an early adopter upgrades more cheaply after a price rise.
+    ///
+    /// @dev Intended, and the alternative is worse: crediting what was actually paid would
+    ///      mean storing a per-activation cost and would PENALISE early adopters, charging
+    ///      them more to upgrade than someone who arrived later. Rewarding early activation
+    ///      is the point.
+    function test_intended_upgradingAfterAPriceRiseCreditsTheCurrentLowerTier() public {
+        _mintAndActivate(alice, 1, 0); // tier 0 at 100
+        based.mint(bob, 2);
+
+        uint256[5] memory dearer = [uint256(200 ether), 500 ether, 1_200 ether, 2_400 ether, 8_000 ether];
+        vm.prank(multisig);
+        act.queueCosts(address(based), dearer);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        act.executeCosts(address(based));
+
+        // Alice upgrades 0 -> 4: charged 8000 - 200 = 7800, crediting the NEW tier-0 price
+        // even though she only ever paid the OLD 100.
+        assertEq(act.upgradeCost(address(based), 1, 4), 7_800 ether);
+
+        // Bob, arriving now, pays the full 8000 for the same tier.
+        vm.prank(bob);
+        act.activate(address(based), 2, 4);
+
+        uint256 before = chip.balanceOf(DEAD);
+        vm.prank(alice);
+        act.upgrade(address(based), 1, 4);
+        assertEq(chip.balanceOf(DEAD) - before, 7_800 ether, "200 cheaper than arriving today");
+
+        (, uint32 aliceBps,) = act.activation(address(based), 1);
+        (, uint32 bobBps,) = act.activation(address(based), 2);
+        assertEq(aliceBps, bobBps, "same tier, different total cost");
+    }
 }

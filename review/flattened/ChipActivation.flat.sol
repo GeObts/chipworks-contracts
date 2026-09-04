@@ -1117,6 +1117,24 @@ library SafeERC20 {
 ///         operation. $CHIP is a standard ERC-20 from a Doppler/Bankr launch with no
 ///         `burn()`, so a transfer to `0xdead` is the burn.
 ///
+///      THREE PROPERTIES REVIEWED AND KEPT AS INTENDED (TRIAGE SEC-ACT-002/003/004):
+///
+///      - **Revival on repurchase is free.** A holder who sells and later buys the same Noun
+///        back has their tier restored at no cost, even if the table has risen. The "top up
+///        the difference" alternative cannot be built without either deactivating continuous
+///        holders on a price rise or adding a transfer hook this design deliberately avoids —
+///        and the exploit is bounded to selling your own Noun and buying that exact token
+///        back. Revival is bound to the original activator, so a tier can never be sold with
+///        the Noun.
+///      - **Upgrading credits the current table's lower tier**, not what was actually paid,
+///        so an early adopter upgrades more cheaply after a price rise. Deliberate: the
+///        alternative penalises early activation, which is the behaviour being rewarded.
+///      - **Registering a custodian is immediate.** Its blast radius is bounded to tokens
+///        physically held by that custodian, and it is not timelocked because
+///        `setCustodian` is already the single most forgettable call in the deploy runbook —
+///        splitting it into two transactions 48 hours apart would make the one step that
+///        fails silently harder to complete, not safer.
+///
 ///      COSTS AND WEIGHTS ARE CONFIGURATION, BEHIND A 48H TIMELOCK. Denominations are set at
 ///      token launch and nothing about them is hardcoded. Both the per-collection cost table
 ///      and the tier weight curve move only through queue -> 48h -> execute, each step

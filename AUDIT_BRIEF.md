@@ -594,6 +594,16 @@ Each is intentional and documented in `ASSUMPTIONS.md` §3 (C-1 … C-17):
 - **`settleStock` and `claim` are one call per stock.** Failure isolation is structural.
 - **Immutable ceilings** on the ops share (`maxOpsBps`), the POL share (2000), and the POL
   holdback (2500). A compromised multisig cannot exceed them.
+- **Free activation revival on repurchase.** Sell a chipped Noun and buy that same token back
+  and the tier returns at no cost. A loyalty property, bound to the original activator so it
+  can never be sold with the Noun. Reviewed as SEC-ACT-002 and kept.
+- **Early adopters upgrade more cheaply.** `upgrade` charges the difference between tiers in
+  the CURRENT table, so someone who activated before a price rise is credited the new lower
+  tier rather than what they actually paid. A deliberate incentive: crediting the amount
+  actually paid would charge early adopters MORE to upgrade than latecomers. SEC-ACT-003.
+- **Registering a custodian is immediate, de-registering more so.** Neither is timelocked.
+  Registration's blast radius is bounded to tokens the custodian physically holds;
+  de-registration is the emergency stop and delaying it would defeat it. SEC-ACT-004.
 
 ## 6. Known open items
 

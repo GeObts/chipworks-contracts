@@ -385,4 +385,116 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         assertApproxEqRel(bobOwed, aliceOwed * 333 / 100, 1e15, "3.33x, to the right borrower");
         assertEq(claims.claimable(id, address(nvda), address(loans)), 0, "and none to the vault");
     }
+
+    /* ------------------------------------------------------------------ */
+    /*     SEC-ACT-001 — WHEN A CUSTODIAN DE-REGISTRATION CAN COST A ROUND  */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice WEIGHT IS SNAPSHOTTED WHEN IT IS CONTRIBUTED, NOT READ AT SETTLE.
+    ///
+    /// @dev The finding assumed round scoring reads the activation source live at settlement,
+    ///      so a mid-round de-registration would retroactively strip a borrower. It does not:
+    ///      `ChipRounds` calls `activationSource.activation` in exactly one place,
+    ///      `contributeWeights`, and writes the result into the ledger. `settleStock` and
+    ///      `finalizeRound` never touch the activation source at all.
+    ///
+    ///      So once a borrower's weight is booked, pulling the custodian cannot reach it —
+    ///      not mid-round, not after settlement, not ever.
+    function test_deregisteringAfterWeightsAreBookedCannotStripTheBorrower() public {
+        _mintAndChip(alice, 1, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(nvda)), _one(uint8(100)));
+        _deposit(alice, 1, 0, 1_000 ether);
+
+        _fundPot(1_000e6);
+        uint256 id = rounds.openRound();
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
+        assertEq(rounds.getRound(id).totalWeight, 10_000, "booked while registered");
+
+        // The emergency stop is pulled in the middle of the round, before settlement.
+        vm.prank(multisig);
+        activation.setCustodian(address(loans), false);
+        assertFalse(activation.isActive(address(basedNouns), 1), "the chip is dark from here on");
+
+        vm.warp(block.timestamp + 2 hours);
+        rounds.closeAccumulation(id);
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id);
+
+        assertEq(claims.claimable(id, address(nvda), alice), 5e8, "the round she was in still pays her");
+        _openClaimWindow();
+        vm.prank(alice);
+        assertEq(claims.claim(id, address(nvda)), 5e8);
+    }
+
+    /// @notice THE REAL AND ONLY EXPOSURE: de-registration between `openRound` and
+    ///         `contributeWeights`. A borrower not yet booked scores zero for that round.
+    ///
+    /// @dev This is a delay, not a loss — the borrower keeps the Noun, the loan, and the chip
+    ///      record, and earns again the moment the custodian is restored. It is bounded by the
+    ///      accumulation window rather than by anything the protocol chooses, which is why it
+    ///      is documented rather than fixed: see TRIAGE SEC-ACT-001 for why "snapshot at open"
+    ///      is not implementable and why timelocking the emergency stop would be worse.
+    function test_deregisteringBeforeWeightsAreBookedCostsThatRoundOnly() public {
+        _mintAndChip(alice, 1, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(nvda)), _one(uint8(100)));
+        _deposit(alice, 1, 0, 1_000 ether);
+
+        _fundPot(1_000e6);
+        uint256 id = rounds.openRound();
+
+        // Pulled before the keeper gets to contribute.
+        vm.prank(multisig);
+        activation.setCustodian(address(loans), false);
+
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
+        assertEq(rounds.getRound(id).totalWeight, 0, "she misses this round");
+
+        // Restored. The NEXT round pays her again, with no action from her at all.
+        vm.prank(multisig);
+        activation.setCustodian(address(loans), true);
+
+        _fundPot(1_000e6);
+        vm.warp(block.timestamp + 24 hours);
+        uint256 id2 = rounds.openRound();
+        rounds.contributeWeights(id2, address(basedNouns), _ids(1));
+        assertEq(rounds.getRound(id2).totalWeight, 10_000, "earning again, nothing to re-do");
+    }
+
+    /// @notice And the miss is recoverable WITHIN the same round, because a Noun that scored
+    ///         zero is never marked as counted.
+    ///
+    /// @dev `contributeWeights` sets `counted[roundId][collection][tokenId]` only after the
+    ///      weight check passes, so a token that scored nothing can simply be contributed
+    ///      again once the custodian is back — as long as the accumulation window is still
+    ///      open. That turns the exposure from "loses a round" into "loses a round only if
+    ///      nobody notices for two hours", which is a materially smaller claim.
+    function test_aZeroScoredNounCanBeReContributedInTheSameWindow() public {
+        _mintAndChip(alice, 1, 0);
+        _setSplit(address(basedNouns), 1, alice, _one(address(nvda)), _one(uint8(100)));
+        _deposit(alice, 1, 0, 1_000 ether);
+
+        _fundPot(1_000e6);
+        uint256 id = rounds.openRound();
+
+        vm.prank(multisig);
+        activation.setCustodian(address(loans), false);
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
+        assertEq(rounds.getRound(id).totalWeight, 0);
+
+        // Fixed inside the window, and re-contributed.
+        vm.prank(multisig);
+        activation.setCustodian(address(loans), true);
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
+        assertEq(rounds.getRound(id).totalWeight, 10_000, "no round lost after all");
+
+        // And still exactly once: the second contribution did not double-count.
+        rounds.contributeWeights(id, address(basedNouns), _ids(1));
+        assertEq(rounds.getRound(id).totalWeight, 10_000, "counted once");
+
+        vm.warp(block.timestamp + 2 hours);
+        rounds.closeAccumulation(id);
+        rounds.settleStock(id, address(nvda));
+        rounds.finalizeRound(id);
+        assertEq(claims.claimable(id, address(nvda), alice), 5e8);
+    }
 }

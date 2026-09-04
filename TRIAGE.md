@@ -67,6 +67,131 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 4: ChipActivation.sol
+
+Against `launch-candidate-5`.
+
+**External validation, recorded because it matters as much as the findings:** every attack on
+the custodian trust model came back structurally safe. The bound stated in
+`IActivationCustodian` — that a custodian can only speak for tokens `ownerOf` says it holds —
+held under review. That is the newest authorization logic in the repo and the thing
+`REVIEW_PACKAGE.md` §3 asked reviewers to hit first, so an independent "no finding" there is
+the single most useful result in this batch.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| SEC-ACT-001 | Custodian de-registration zeroes borrowers mid-round | High | **Low / Low** | **PARTIAL** | Premise refined; **exposure documented + tested**, fix disputed |
+| SEC-ACT-002 | Retroactive revival on repurchase | Medium | Info | **ACKNOWLEDGED** | **Intended tokenomics**, documented + pinned |
+| SEC-ACT-003 | Early-adopter upgrade discount | Low | Info | **ACKNOWLEDGED** | **Intended incentive**, documented + pinned |
+| SEC-ACT-004 | Instant custodian whitelist | Low | Low / Low | **VALID, bounded** | **Documented**, deliberately not timelocked |
+
+---
+
+#### SEC-ACT-001 — de-registration mid-round
+
+**PARTIAL. The conclusion is much smaller than the finding, and the proposed fix is not
+implementable in this design.**
+
+**Round scoring already snapshots.** `ChipRounds` calls `activationSource.activation` in
+exactly one place — `contributeWeights` — and writes the result into the ledger.
+`settleStock` and `finalizeRound` never touch the activation source at all. So the premise
+"reads live at settle" is wrong, and **once a borrower's weight is booked, pulling the
+custodian cannot reach it**: not mid-round, not after settlement, not ever
+(`test_deregisteringAfterWeightsAreBookedCannotStripTheBorrower`).
+
+**"Snapshot at round OPEN" cannot be built.** It would require enumerating every activated
+Noun on chain at `openRound`, and there is no such enumeration — ASSUMPTIONS **A-10**. That
+absence is why `contributeWeights` is a caller-supplied, batched list in the first place; it
+shapes the whole design. At `openRound` the round knows nothing about any Noun, so there is
+nothing to snapshot.
+
+**The real exposure is one window, and it is a delay rather than a loss.** If a custodian is
+de-registered between `openRound` and `contributeWeights` — at most the 2-hour accumulation
+window — a not-yet-booked borrower scores zero for that round. They keep the Noun, the loan,
+the chip record, and earn again the moment the custodian is restored, with no action of their
+own (`test_deregisteringBeforeWeightsAreBookedCostsThatRoundOnly`).
+
+**And it is recoverable inside the window.** `contributeWeights` sets `counted[...]` only
+after the weight check passes, so a token that scored zero is never marked counted and can
+simply be contributed again once the custodian is back
+(`test_aZeroScoredNounCanBeReContributedInTheSameWindow`). That reduces the claim from "loses
+a round" to "loses a round only if nobody notices for two hours".
+
+**Both fallbacks rejected, with reasons:**
+
+- **Timelocking `setCustodian(false)` defeats its purpose.** It is the emergency stop for a
+  custodian discovered to be lying. A 48-hour delay means a hostile custodian keeps
+  misdirecting rewards for two days — trading a *bounded, recoverable one-round delay* for an
+  *unbounded live misdirection*. Strictly worse.
+- **Blocking it during an active round couples the wrong things.** `ChipActivation` does not
+  know rounds exist, and it should not: the activation vault depending on the rounds engine
+  inverts the dependency the whole `IActivationSource` seam was built to keep one-way. It
+  would also mean the emergency stop is unavailable exactly when a round is running, which is
+  when it is most likely to be needed.
+
+Documented and tested rather than fixed. If a reviewer disagrees, the argument to beat is the
+dependency inversion, not the exposure size.
+
+---
+
+#### SEC-ACT-002 — free revival on repurchase
+
+**ACKNOWLEDGED as intended tokenomics. Documented and pinned by tests.**
+
+**The compromise cannot be implemented cleanly.** Revival is a *read-time* property — an
+activation is live whenever the effective owner matches the recorded one — so there is no
+transaction at revival time in which to charge a top-up. Making one requires either:
+
+- **Comparing stored `costPaid` against the current tier cost at read time.** This would
+  deactivate **every continuously-holding user** the moment the table rose, not just
+  repurchasers. Far worse than the thing it fixes.
+- **Marking the activation dead on transfer**, which needs a hook the collection does not
+  give us. The absence of that hook is the entire reason the reset is computed rather than
+  stored — it is the design, not an oversight.
+
+**The exploit is bounded to absurdity.** To dodge a price rise you must sell your own Noun on
+the open market and buy that exact token back, paying marketplace fees and taking the risk it
+does not return. Nobody does that to save a chip top-up. And revival is bound to the original
+activator, so a buyer never inherits a tier — the property is loyalty, not a transferable
+asset (`test_intended_revivalNeverTransfersToABuyer`).
+
+---
+
+#### SEC-ACT-003 — early-adopter upgrade discount
+
+**ACKNOWLEDGED as a deliberate incentive.** `upgrade` charges
+`cost[newTier] - cost[currentTier]` from the **current** table, so someone who activated
+before a price rise is credited the new lower tier rather than what they actually paid.
+Measured in `test_intended_upgradingAfterAPriceRiseCreditsTheCurrentLowerTier`: after a 2x
+rise, an early tier-0 holder reaches tier 4 for 7,800 where a newcomer pays 8,000.
+
+Kept because the alternative is backwards. Crediting the amount actually paid would require
+storing a per-activation cost and would charge early adopters **more** to upgrade than
+latecomers — penalising exactly the behaviour the tier ladder exists to reward. Documented in
+AUDIT_BRIEF §5.
+
+---
+
+#### SEC-ACT-004 — instant custodian whitelist
+
+**VALID and bounded. Documented; deliberately not timelocked.**
+
+We agree with the reviewer's own severity reasoning: the blast radius is limited to tokens
+physically held by that custodian, and to hold any, users must have deposited into a contract
+they chose to trust. Registering a hostile custodian requires the multisig, which is already
+trusted for strictly more.
+
+**Not timelocked, and the reason is specific to this codebase rather than general.**
+`ChipActivation.setCustodian(nounLoans, true)` is already the single most forgettable call in
+the deploy sequence — it is the one wiring step that **fails silently**, carried as a red
+can't-miss block in `LAUNCH_CONFIG` §7 and asserted by
+`test_theCustodianWireIsTheOneMistakeThatFailsSilently`. Splitting it into two transactions 48
+hours apart would make the one step that already fails without a revert harder to complete,
+and would buy a delay against an attack that needs a compromised multisig *and* users
+depositing into the hostile contract afterwards. That trade is not worth it.
+
+---
+
 ### External review — Bankr, batch 3: FeeSplitter.sol
 
 Against `launch-candidate-4`. All four accepted.
@@ -759,7 +884,8 @@ on every build.
 | `launch-candidate-2` | Skipped — batch 1 arrived before it was cut, so its contents folded into -3 | Never cut |
 | `launch-candidate-3` | EXT-R-M-1, EXT-R-M-2 (removal), EXT-R-I-1, EXT-C-H-1, **plus** SLI-001 and SLI-005 | Superseded |
 | `launch-candidate-4` | SEC-POT-001 … 006 (all six) | Superseded |
-| `launch-candidate-5` | SEC-FEE-001 … 004 | **Current** |
+| `launch-candidate-5` | SEC-FEE-001 … 004 | Superseded |
+| `launch-candidate-6` | SEC-ACT-001 … 004 — documentation and tests; **no contract logic changed** | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read
