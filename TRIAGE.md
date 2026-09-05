@@ -67,6 +67,147 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 7: Anvil.sol
+
+Against `launch-candidate-10`. No criticals or highs. **Two mediums that were both live bugs
+in the ordinary restock flow**, which is the part worth dwelling on: neither needed an
+attacker. The protocol's own shopkeeping triggered them.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| M-1 | FIFO queue-jump via a re-shelved sniped token | Medium | **Medium / Medium** | **VALID** | **FIXED** — slots retire permanently; a re-shelve appends |
+| M-2 | O(n) shelf count per purchase, gas DoS at scale | Medium | Low / **Medium** | **VALID** | **FIXED** — maintained `listed` count, O(1) |
+| L-1 | `setFeeSplitter` instant while prices are timelocked | Low | Low / **Medium** | **VALID** | **FIXED** — 48h timelock, same shape as prices |
+| L-2 | Queued changes never expire | Low | Low / Low | **VALID** | **FIXED** — 14-day grace, then re-queue |
+| L-3 | `unshelve` can take the head when `count == 1` | Low | Low / Low | **VALID** | **FIXED** — refused while the shelf is live |
+| I-1 | Force-sent `selfdestruct` ETH is permanently burned | Info | Info | **ACCEPTED** | Documented, ASSUMPTIONS A-21 |
+
+---
+
+#### M-1 — the stale slot, and why `require(!isListed)` would not have helped
+
+**VALID, and the reviewer's note about the non-fix is the important half of the finding.**
+
+The shelf recorded two things in two places. **Ordering** lived in the slot array; **availability**
+lived in `isListed[tokenId]`. A snipe only cleared the second. The slot the token had occupied
+stayed exactly where it was, holding that token's id, waiting.
+
+Then the ordinary thing happens: someone snipes Noun 2 out of the middle, the protocol buys it
+back on the open market, and restocks it. `shelve` pushes a new slot at the tail **and** sets
+`isListed[2] = true` — which re-lights the old slot at position two. The Noun reappears where it
+left, ahead of three Nouns that had been waiting longer, and is counted twice until one of the
+two slots is consumed. That is invariant #21 broken by a restock.
+
+Adding `require(!isListed[id])` to `shelve` refuses the double-listing case and does nothing
+here, because `isListed[2]` was correctly `false` — the token really had left. **The stale slot
+is the bug**, not the flag.
+
+**So retirement is now a property of the slot.** Each entry holds `tokenId + 1`, zero means
+retired, and every exit — bought, sniped, unshelved — zeroes the slot it came from and clears
+the token's index. A re-shelve can only append. The `+ 1` offset is what lets zero be the
+sentinel while slot zero stays a real position; `type(uint256).max` is refused by `shelve`
+rather than allowed to wrap.
+
+**Demonstrated before it was fixed.** `test_PROOF_M1_theStaleSlotJumpsTheQueue` was written
+against `launch-candidate-10` and passed: `shelfRemaining` returned **6 for five Nouns**, and
+the restocked Noun came out **second** instead of last. The proof file was replaced by
+`test/anvil/AnvilQueueIntegrity.t.sol`, which runs the exact buyback-restock sequence and now
+asserts the tail position, the count, the drained order, and that a restocked Noun can never be
+sold twice however many stale slots existed.
+
+**The `unshelve` path had the same shape** and is covered too: a Noun taken off the shelf and
+put back later is a new arrival.
+
+---
+
+#### M-2 — a purchase must not pay for the shelf
+
+**VALID, and it was worse than the finding says.** `_settle` called `shelfRemaining` for its
+event, which walked every slot from the cursor. But `shelve` called it too — *inside the
+loop*, once per token — so a 400-token restock counted the shelf 400 times. Quadratic, on the
+one operation the protocol performs in bulk.
+
+The count is now maintained by the two functions that can change it and `shelfRemaining` is a
+single `SLOAD`.
+
+Measured, on `launch-candidate-10` and again after:
+
+| | before | after |
+|---|---|---|
+| `buyNext`, 5-deep shelf | 175,253 | 164,368 |
+| `buyNext`, 400-deep shelf | 354,718 | **74,870** |
+
+The large-shelf buy is now *cheaper* than the small-shelf one, because it no longer pays for
+the queue behind it and the small case is the one paying cold-slot costs. Done now rather than
+"when the shelf grows", as asked: it is a one-time change, and the shelf growing is the plan.
+
+---
+
+#### L-1 — redirecting all revenue deserves at least as much notice as a price
+
+**VALID.** Every wei of every sale goes to `feeSplitter` in the same transaction. Changing that
+address redirects 100% of Anvil revenue, and it was a one-transaction instant change while
+*prices* — a strictly smaller act — had 48 hours of notice. A compromised multisig could point
+the till at itself with no warning at all.
+
+`queueFeeSplitter` / `executeFeeSplitter` / `cancelFeeSplitter`, same shape as prices and the
+premium. **`setFeeSplitter` is gone**, which is a breaking ABI change; DEPLOY step 7 carries it.
+
+The asymmetry with `setPaused` is deliberate and worth stating: pausing stays immediate,
+because stopping sales is a safety action and it is the lever to reach for during the two days
+a splitter change is maturing.
+
+**Note for a later batch, not fixed here:** `NounLoans.setFeeSplitter` and
+`POLTreasury.setFeeSplitter` are instant for the same reason and with the same consequence.
+That is the same finding in two more contracts, and expanding a scoped Anvil batch into them
+unasked is how a review loses track of what was checked. Recorded in OPEN_ITEMS 23.
+
+---
+
+#### L-2 — a queued change should go stale
+
+**VALID.** The value of the 48 hours is that the notice is *fresh*. A change queued in March
+and executed in September is a surprise wearing a timelock's reputation, and a forgotten queued
+entry is a dormant capability sitting in storage.
+
+`CONFIG_GRACE` is 14 days. After `executableAt + CONFIG_GRACE` the change reverts
+`TimelockExpired` and must be re-queued, which restarts the notice. Applied to all three
+timelocked settings through one `_requireInWindow` helper, so they cannot drift apart. Both
+edges of the window are tested — executable at the exact maturity second, and at the last
+second of the grace.
+
+---
+
+#### L-3 — the head is also the tail when one is left
+
+**VALID.** `unshelve` removes from the tail specifically so the multisig can shrink the shelf
+without taking the Noun the next buyer is about to receive. Every live slot sits at or after
+the cursor, so the first live slot is the head and the last is the tail — and at exactly one
+live slot **they are the same Noun**. The guarantee stopped holding at the one depth where a
+buyer is most likely to be racing for it.
+
+**Fixed, with a deliberate escape hatch, and this is a decision rather than just a fix.**
+Refusing outright would have been wrong: `recoverNFT` declines a shelved token, so an absolute
+rule would strand the last Noun on the shelf permanently, with no path off it but a sale. So
+the head is protected **while the shelf is live**, and a *paused* collection can be emptied.
+Pausing is what says "nobody is about to buy anything here". Winding down is now two deliberate
+transactions instead of one, which is the right shape for winding down anyway.
+
+---
+
+#### I-1 — force-sent ETH
+
+**ACCEPTED AS DESIGNED, documented rather than changed.** There is no `receive()`, so an
+ordinary send bounces. `selfdestruct` and coinbase payments cannot be refused by any contract,
+and such a balance is unrecoverable because the Anvil deliberately has no ETH withdraw path.
+
+That is the correct trade and it is worth being explicit about why: the alternative is a
+standing ETH withdraw function on the contract that handles every sale, added to protect
+against somebody choosing to destroy their own money. The one-line fix is worse than the
+problem. ASSUMPTIONS A-21.
+
+---
+
 ### External review — Bankr, batch 6: POLTreasury.sol — **the most serious of the audit**
 
 Against `launch-candidate-9`. **Two HIGHs, both real, both closed in `launch-candidate-10`.**
@@ -1231,7 +1372,8 @@ on every build.
 | `launch-candidate-7` | Short term ladder 7/14/30/90/180 and derived grace — product change, not a finding | Superseded |
 | `launch-candidate-8` | SEC-LN-002, SEC-LN-003; SEC-LN-001 and SEC-LN-004 documented | Superseded |
 | `launch-candidate-9` | Contribution-time snapshot described accurately everywhere; Lils stop being Furnace fuel | Superseded |
-| `launch-candidate-10` | **Batch 6: H-01, H-02, M-01, M-02, M-03, L-01–L-04.** SEC-POT-002 finally closed on POLTreasury too | **Current** |
+| `launch-candidate-10` | **Batch 6: H-01, H-02, M-01, M-02, M-03, L-01–L-04.** SEC-POT-002 finally closed on POLTreasury too | Superseded |
+| `launch-candidate-11` | **Batch 7 (Anvil): M-1, M-2, L-1, L-2, L-3**; I-1 documented | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read

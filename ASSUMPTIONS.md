@@ -674,3 +674,34 @@ here so nobody discovers it as a surprise.
 
 Covered by `test_realAerodromeAnswersThePoolAndGaugeChecks` and
 `test_realVoterRefusesANonCanonicalGauge` in `test/fork/PolTreasuryFork.t.sol`.
+
+---
+
+### A-21 · ETH can be forced into the Anvil and cannot be got out — **accepted, by design**
+
+External review batch 7, I-1.
+
+`Anvil` has no `receive()` and no `fallback()`, so an ordinary `send` or `transfer` to it
+reverts. Two things get past that, and no contract on any EVM chain can refuse either:
+
+- `selfdestruct(anvilAddress)` from a contract holding a balance;
+- being named as a block's `coinbase` (fee recipient).
+
+ETH that arrives either way is **permanently stuck**. The Anvil forwards 100% of every sale to
+the FeeSplitter inside the same transaction and deliberately has no ETH withdraw path, so
+there is nothing to sweep it with.
+
+**We are choosing that, and the reasoning is the point.** The fix would be an owner-callable
+ETH withdraw on the contract that handles every Anvil sale. That is a standing way to take
+sale proceeds out of the protocol, permanently, in exchange for being able to recover money
+somebody chose to destroy by sending it somewhere with no way in. A contract that cannot pay
+its owner out in ETH is a stronger property than a recoverable donation, and the amounts
+involved are whatever a griefer is willing to burn.
+
+**What it is NOT.** It cannot affect a sale: `_settle` forwards exactly `price` and refunds
+exactly `msg.value - price`, both from figures it computed, never from `address(this).balance`.
+A stuck balance changes no arithmetic anywhere in the contract, and
+`test_everyWeiIsForwardedAndNothingIsHeld` asserts the normal path holds nothing.
+
+The same is true of every other contract in the repo that forwards rather than holds. It is
+recorded once, here.

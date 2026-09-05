@@ -612,3 +612,34 @@ Their Chainlink feeds have no off-hours heartbeat (ASSUMPTIONS A-14), so any rea
 window would refuse every POL operation outside market hours. Use a real window only for
 assets that trade 24/7, such as WETH. This is in LAUNCH_CONFIG step 6, but it is the kind of
 parameter that gets copied from the wrong row.
+
+---
+
+## 23. NEW: `setFeeSplitter` is still instant on NounLoans and POLTreasury
+
+**Deliberately not fixed in `launch-candidate-11`, and this is the note so it does not get
+lost.**
+
+External review batch 7 (L-1) pointed out that `Anvil.setFeeSplitter` redirected 100% of
+revenue instantly while *prices* had 48 hours of notice, and it is now behind the same
+timelock. The finding was scoped to the Anvil, but the shape is not:
+
+| Contract | Call | What it redirects |
+|---|---|---|
+| `Anvil` | ~~`setFeeSplitter`~~ → `queueFeeSplitter` | 100% of Anvil sales — **fixed** |
+| `NounLoans` | `setFeeSplitter` | origination and late fees |
+| `POLTreasury` | `setFeeSplitter` | all POL income via `forwardIncome` |
+
+Both remaining ones are instant, owner-only, and send real money to whatever address is set.
+The argument for timelocking them is exactly the argument that was accepted for the Anvil.
+
+**Why it was not just done.** Expanding a batch scoped to one contract into two others,
+unasked, is how a review loses track of what was actually checked against which tag — and both
+of those contracts have their own review batches behind them (5 and 6) whose reviewers looked
+at the current shape. It is a small change in each and should be a deliberate decision, ideally
+alongside whatever else lands next in those files.
+
+**If it is done, do all three at once**, including the `CONFIG_GRACE` expiry (batch 7 L-2), so
+the timelock semantics stay identical across the protocol rather than drifting per contract.
+Note that `ChipActivation`, `Furnace` and `ChipClaims` also queue changes with no expiry; the
+grace-period question is protocol-wide even though only the Anvil answers it today.

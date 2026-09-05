@@ -803,14 +803,26 @@ Then, from the multisig:
 | `collection.setApprovalForAll(anvil, true)` then `shelve(collection, ids[])` | **Deposit order IS sale order.** |
 | `queueQueuePrice(collection, wei)` → 48h → `executeQueuePrice(collection)` | The Box price. Zero means not for sale. |
 | `setPaused(collection, bool)` | Immediate halt. Does not disturb the shelf. |
+| `queueFeeSplitter(addr)` → 48h → `executeFeeSplitter()` | **CHANGED in `launch-candidate-11`.** `setFeeSplitter` no longer exists: redirecting 100% of revenue now gets the same notice a price change does. See TRIAGE batch 7 L-1. |
+
+> **Every queued change now EXPIRES.** A matured price, premium or splitter change stays
+> executable for `CONFIG_GRACE` — **14 days** — and then reverts `TimelockExpired` and must be
+> re-queued. Queue-then-forget no longer leaves a dormant capability in storage. Plan the
+> 48-hour wait and the execution in the same operational window.
 
 **Two ways to buy, and the difference is the product.** `buyNext` is the Box: it pays
 `queuePrice` for **the oldest Noun on the shelf**, and you do not choose. It is FIFO by
 design — `nextOnShelf(collection)` returns exactly which token you will receive before you
 call, so it is a queue with a readable head, **not a lottery**. Say that plainly on the site;
 "mystery box" invites the opposite assumption. `snipe` lets you pick any shelved Noun for
-`queuePrice × 1.25`, and sniping does **not** reorder the queue — the token is unlisted in
-place and the FIFO cursor skips it.
+`queuePrice × 1.25`, and sniping does **not** reorder the queue — the token's slot is retired
+in place and the FIFO cursor skips the hole.
+
+**A RESTOCKED NOUN GOES TO THE BACK.** If the protocol buys back a Noun that was sniped or
+unshelved and re-shelves it, it joins at the tail, because that is when it re-joined. Before
+`launch-candidate-11` it reappeared at the position it had left (TRIAGE batch 7 M-1). Worth
+knowing operationally: **restocking a specific Noun cannot be used to promote it**, and the
+site's shelf order is the real sale order.
 
 **The sell side is not built.** `sellToAnvil` always reverts `SellNotOpen` and `sellEnabled`
 is a constant `false` **with no setter**, so it cannot be switched on by mistake. A
@@ -823,6 +835,12 @@ custodian, so shelving voids any prior activation and the buyer chips it themsel
 **Withdrawals come off the TAIL.** `unshelve` pops from the most-recently-shelved end, so the
 multisig can shrink the shelf but can never take the Noun the next buyer is about to receive.
 
+**WINDING A SHELF DOWN TAKES TWO TRANSACTIONS.** At exactly one Noun left the tail *is* the
+head, so `unshelve` reverts `WouldTakeTheHead` on a live shelf (TRIAGE batch 7 L-3). To empty
+a collection: `setPaused(collection, true)` first — that is the statement that nobody is about
+to buy anything here — then `unshelve`. A paused shelf can be taken to zero. Do not plan a
+wind-down as a single transaction.
+
 Post-deploy checks:
 - `owner()` is the multisig, `feeSplitter()` is right
 - `sellEnabled()` is **false**, and `sellToAnvil` reverts `SellNotOpen`
@@ -830,6 +848,11 @@ Post-deploy checks:
 - `prices(collection)` returns `(queuePrice, queuePrice + 25%)`
 - buy one at the exact price: confirm 100% landed at the FeeSplitter and
   `address(anvil).balance` is **0** — the Anvil has no ETH withdraw path by design
+- `shelfQueue(collection)` matches the order you shelved in, and `shelfRemaining` matches its
+  length. These are now O(1)/exact rather than counted, so a mismatch means a real problem
+- snipe one from the middle and confirm `shelfQueue` loses exactly that entry and nothing
+  moves position
+- `unshelve(collection, <everything>, ...)` reverts `WouldTakeTheHead` while unpaused
 
 ---
 

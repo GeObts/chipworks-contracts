@@ -302,13 +302,21 @@ poolBalance() == chip.balanceOf(nounLoans)
 
 **10. Anvil** — `(MULTISIG, FeeSplitter, 2500)`
 Then `shelve` per collection, and `queueQueuePrice` → **48h** → `executeQueuePrice`.
+
+The fee splitter is timelocked too since `launch-candidate-11` — `queueFeeSplitter` → 48h →
+`executeFeeSplitter`; there is no instant setter. **And every queued change expires 14 days
+after it matures** (`CONFIG_GRACE`), so queue and execute inside one operational window.
 ```
 sellEnabled() == false                  # and there is no setter
 sellToAnvil(...) -> reverts SellNotOpen
 nextOnShelf(BASED_NOUNS)                # the Box's head is readable before anyone buys
 prices(BASED_NOUNS) -> (queuePrice, queuePrice + 25%)
+shelfQueue(BASED_NOUNS)                 # exactly the order you shelved in
 buyNext with the exact price, confirm 100% landed at the FeeSplitter and the Anvil holds 0
+unshelve(BASED_NOUNS, shelfRemaining(), ops) -> reverts WouldTakeTheHead  # L-3
 ```
+**Winding a shelf down is two transactions**: `setPaused(collection, true)`, then `unshelve`.
+A live shelf will not give up its last Noun.
 
 ---
 

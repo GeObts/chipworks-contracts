@@ -1042,15 +1042,32 @@ library SafeERC20 {
 ///        The premium is what the queue's head is worth to someone who wants a specific
 ///        token, and it is the only reason the FIFO order is not simply arbitraged away.
 ///
-///      SNIPING DOES NOT DISTURB THE QUEUE. A sniped token is unlisted in place; the FIFO
-///      cursor skips it when it gets there. So sniping the tenth Noun does not promote the
-///      eleventh past the second, and {buyNext} always returns the oldest token still on the
-///      shelf.
+///      SNIPING DOES NOT DISTURB THE QUEUE. A sniped token has its shelf slot RETIRED in
+///      place; the FIFO cursor skips the hole when it gets there. So sniping the tenth Noun
+///      does not promote the eleventh past the second, and {buyNext} always returns the
+///      oldest token still on the shelf.
+///
+///      RETIRED IS PERMANENT, AND THAT IS THE WHOLE OF EXTERNAL REVIEW M-1. The shelf used
+///      to record availability against the TOKEN (`isListed[id]`) while ordering was recorded
+///      against the SLOT. Those two disagree the moment a token comes back: buying a sniped
+///      Noun on the open market and re-shelving it re-lit its original slot, and the Noun
+///      reappeared at the position it left rather than at the tail — ahead of every Noun that
+///      had been waiting longer. It was also counted twice until one of the two slots was
+///      consumed. A slot now holds `tokenId + 1` and is zeroed on the way out, so retiring is
+///      a property of the slot and a re-shelve is unambiguously a new arrival at the back.
+///
+///      EVERY LIVE SLOT IS AT OR AFTER `cursor`. The cursor only ever advances past zeroed
+///      slots and past the slot it consumes, which it zeroes on the way. Several things
+///      depend on that: the tail-removal rule in {unshelve}, and the fact that the views can
+///      start scanning at the cursor rather than at zero.
 ///
 ///      REVENUE IS 100% FORWARDED. Every wei of a sale goes to the FeeSplitter in the same
 ///      transaction, which routes it to the Pot, ops and POL exactly like any other inflow —
 ///      so an Anvil sale funds the next round. This contract holds no ETH between
-///      transactions and has no withdraw path for it.
+///      transactions and has no withdraw path for it. **Changing the destination is
+///      timelocked** for exactly that reason: it redirects 100% of revenue, which is a larger
+///      act than changing a price, and prices were already the thing that got 48 hours of
+///      notice. See ASSUMPTIONS A-21 for the one way ETH can end up stuck here.
 ///
 ///      A PURCHASED NOUN ARRIVES UN-CHIPPED, structurally rather than by policy. This
 ///      contract is not a registered {IActivationCustodian}, so from {ChipActivation}'s point
@@ -1062,8 +1079,17 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     uint256 public constant BPS = 10_000;
 
-    /// @notice Notice period on every price change. Same shape as ChipActivation.
+    /// @notice Notice period on every timelocked change. Same shape as ChipActivation.
     uint64 public constant CONFIG_TIMELOCK = 48 hours;
+
+    /// @notice How long a matured change stays executable before it goes stale.
+    /// @dev External review L-2. The point of the 48 hours is that the notice is FRESH. A
+    ///      change queued and forgotten in March is not something anybody is still watching
+    ///      for in September, and executing it then would be a surprise with a timelock's
+    ///      reputation attached. After this window it must be re-queued, which restarts the
+    ///      notice — so the cost of the rule is one extra transaction and the benefit is that
+    ///      a queued change is never a dormant capability.
+    uint64 public constant CONFIG_GRACE = 14 days;
 
     /// @notice Immutable ceiling on the snipe premium. A compromised multisig cannot make
     ///         picking a specific Noun cost more than three times the queue price.
@@ -1086,14 +1112,18 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     bool public constant sellEnabled = false;
 
     struct Shelf {
-        uint256[] tokenIds; // append-only, oldest first
+        uint256[] slots; // append-only. Each entry is `tokenId + 1`, or 0 once retired.
         uint256 cursor; // FIFO head; only ever moves forward
+        uint256 listed; // live slots. Maintained, never counted — external review M-2.
     }
 
     mapping(address collection => Shelf) internal _shelf;
 
-    /// @notice Whether a shelved token is still available. False once bought or withdrawn.
-    mapping(address collection => mapping(uint256 tokenId => bool)) public isListed;
+    /// @notice Which slot a token currently occupies, plus one. Zero means "not on the shelf".
+    /// @dev The `+ 1` offset is what lets slot zero be a real position and lets zero mean
+    ///      absent, in both this mapping and the `slots` array. Token id `type(uint256).max`
+    ///      is refused by {shelve} rather than allowed to wrap.
+    mapping(address collection => mapping(uint256 tokenId => uint256)) internal _slotOf;
 
     struct PendingPrice {
         bool queued;
@@ -1107,8 +1137,15 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         uint32 bps;
     }
 
+    struct PendingSplitter {
+        bool queued;
+        uint64 executableAt;
+        address splitter;
+    }
+
     mapping(address collection => PendingPrice) internal _pendingPrice;
     PendingPremium internal _pendingPremium;
+    PendingSplitter internal _pendingSplitter;
 
     /// @notice Running totals, for the site.
     uint256 public totalSold;
@@ -1130,7 +1167,9 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     event PremiumExecuted(uint32 previous, uint32 bps);
     event PremiumCancelled();
     event CollectionPaused(address indexed collection, bool paused);
+    event FeeSplitterQueued(address indexed splitter, uint64 executableAt);
     event FeeSplitterSet(address indexed previous, address indexed current);
+    event FeeSplitterCancelled();
     event Recovered(address indexed token, address indexed to, uint256 amount);
     event RecoveredNFT(address indexed collection, uint256 indexed tokenId, address indexed to);
 
@@ -1146,8 +1185,13 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     error SellNotOpen();
     error NothingQueued();
     error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
+    /// @notice The queued change matured but was left too long. Re-queue it. External review L-2.
+    error TimelockExpired(uint64 nowTs, uint64 expiredAt);
     error NothingToWithdraw();
     error IsShelved(address collection, uint256 tokenId);
+    /// @notice {unshelve} would have removed the Noun {buyNext} is about to hand out.
+    ///         External review L-3.
+    error WouldTakeTheHead(address collection, uint256 tokenId);
 
     /// @param multisig     Owner. Two-step ownership transfer.
     /// @param feeSplitter_ Where 100% of revenue goes.
@@ -1173,7 +1217,6 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         uint256 price = _requireSaleable(collection);
 
         tokenId = _takeNext(collection);
-        isListed[collection][tokenId] = false;
         totalSold += 1;
 
         _settle(collection, tokenId, price, false);
@@ -1184,11 +1227,12 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///      and does not reorder anything: {buyNext} still returns the oldest token left.
     function snipe(address collection, uint256 tokenId) external payable nonReentrant {
         uint256 price = _requireSaleable(collection);
-        if (!isListed[collection][tokenId]) revert NotListed(collection, tokenId);
+        uint256 slot = _slotOf[collection][tokenId];
+        if (slot == 0) revert NotListed(collection, tokenId);
 
         uint256 snipePrice = _withPremium(price);
 
-        isListed[collection][tokenId] = false;
+        _retire(collection, tokenId, slot);
         totalSold += 1;
         totalSnipes += 1;
 
@@ -1253,12 +1297,16 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /// @dev Advances the FIFO cursor past anything already sniped or withdrawn and returns
     ///      the oldest token still listed. The cursor is PERSISTED as it advances, so the
     ///      total work across every call is linear in the shelf rather than quadratic.
-    function _takeNext(address collection) internal returns (uint256) {
+    ///
+    ///      The slot it lands on is zeroed on the way out even though the cursor has already
+    ///      moved past it. That is not redundant: {unshelve} walks the tail and would
+    ///      otherwise find a live-looking entry for a Noun this contract no longer owns.
+    function _takeNext(address collection) internal returns (uint256 id) {
         Shelf storage sh = _shelf[collection];
         uint256 i = sh.cursor;
-        uint256 n = sh.tokenIds.length;
+        uint256 n = sh.slots.length;
 
-        while (i < n && !isListed[collection][sh.tokenIds[i]]) {
+        while (i < n && sh.slots[i] == 0) {
             unchecked {
                 ++i;
             }
@@ -1268,8 +1316,44 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
             revert ShelfEmpty(collection);
         }
 
+        unchecked {
+            id = sh.slots[i] - 1;
+        }
         sh.cursor = i + 1;
-        return sh.tokenIds[i];
+        _retire(collection, id, i + 1);
+    }
+
+    /// @dev Put a token on the shelf at a fresh slot at the tail. Always the tail: a Noun
+    ///      that has been here before is a new arrival, not a returning one.
+    ///
+    ///      The {IsShelved} guard looks unreachable through {shelve}, because that pulls the
+    ///      token with `transferFrom` and the multisig cannot send us something we already
+    ///      hold. It is not: an ERC-721 whose `transferFrom` succeeds without moving anything
+    ///      would let the same id be shelved twice, and two slots for one token is exactly
+    ///      the shape of corruption external review M-1 was about. Cheap, and it keeps the
+    ///      one-slot-per-token invariant a property of this function rather than of the
+    ///      collection's honesty.
+    function _list(address collection, uint256 id) internal {
+        if (_slotOf[collection][id] != 0) revert IsShelved(collection, id);
+        if (id == type(uint256).max) revert BadConfig(); // would wrap the `+ 1` encoding
+
+        Shelf storage sh = _shelf[collection];
+        sh.slots.push(id + 1);
+        _slotOf[collection][id] = sh.slots.length; // index + 1
+        unchecked {
+            ++sh.listed;
+        }
+    }
+
+    /// @dev Retire a token's slot permanently. `slotPlusOne` is the caller's already-read
+    ///      `_slotOf` value, which every caller has to have checked for zero anyway.
+    function _retire(address collection, uint256 id, uint256 slotPlusOne) internal {
+        Shelf storage sh = _shelf[collection];
+        sh.slots[slotPlusOne - 1] = 0;
+        _slotOf[collection][id] = 0;
+        unchecked {
+            --sh.listed;
+        }
     }
 
     function _withPremium(uint256 price) internal view returns (uint256) {
@@ -1280,23 +1364,29 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /*                               VIEWS                                  */
     /* ------------------------------------------------------------------ */
 
+    /// @notice Whether a token is on this collection's shelf and available to buy.
+    function isListed(address collection, uint256 tokenId) public view returns (bool) {
+        return _slotOf[collection][tokenId] != 0;
+    }
+
     /// @notice Nouns still available on this collection's shelf.
-    function shelfRemaining(address collection) public view returns (uint256 n) {
-        Shelf storage sh = _shelf[collection];
-        uint256 len = sh.tokenIds.length;
-        for (uint256 i = sh.cursor; i < len; ++i) {
-            if (isListed[collection][sh.tokenIds[i]]) ++n;
-        }
+    /// @dev O(1). External review M-2: this is read inside {_settle} on every purchase, so
+    ///      counting the shelf here made a sale cost more the bigger the shelf got — a gas
+    ///      ceiling on a product whose whole point is to grow. It is now maintained by
+    ///      {_list} and {_retire} instead.
+    function shelfRemaining(address collection) public view returns (uint256) {
+        return _shelf[collection].listed;
     }
 
     /// @notice The exact Noun {buyNext} would hand out right now.
     /// @dev The Box is a queue with a readable head, not a lottery. This is what makes that
     ///      claim checkable rather than a promise.
-    function nextOnShelf(address collection) external view returns (bool available, uint256 tokenId) {
+    function nextOnShelf(address collection) public view returns (bool available, uint256 tokenId) {
         Shelf storage sh = _shelf[collection];
-        uint256 len = sh.tokenIds.length;
+        uint256 len = sh.slots.length;
         for (uint256 i = sh.cursor; i < len; ++i) {
-            if (isListed[collection][sh.tokenIds[i]]) return (true, sh.tokenIds[i]);
+            uint256 v = sh.slots[i];
+            if (v != 0) return (true, v - 1);
         }
         return (false, 0);
     }
@@ -1304,12 +1394,13 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /// @notice Every Noun still on the shelf, oldest first.
     function shelfQueue(address collection) external view returns (uint256[] memory out) {
         Shelf storage sh = _shelf[collection];
-        uint256 len = sh.tokenIds.length;
-        uint256 n = shelfRemaining(collection);
+        uint256 len = sh.slots.length;
+        uint256 n = sh.listed;
         out = new uint256[](n);
         uint256 k;
         for (uint256 i = sh.cursor; i < len && k < n; ++i) {
-            if (isListed[collection][sh.tokenIds[i]]) out[k++] = sh.tokenIds[i];
+            uint256 v = sh.slots[i];
+            if (v != 0) out[k++] = v - 1;
         }
     }
 
@@ -1333,15 +1424,8 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         forSale = boxPrice != 0 && !paused[collection];
         isPaused = paused[collection];
         snipePrice = _withPremium(boxPrice);
-        remaining = shelfRemaining(collection);
-        Shelf storage sh = _shelf[collection];
-        uint256 len = sh.tokenIds.length;
-        for (uint256 i = sh.cursor; i < len; ++i) {
-            if (isListed[collection][sh.tokenIds[i]]) {
-                nextId = sh.tokenIds[i];
-                break;
-            }
-        }
+        remaining = _shelf[collection].listed;
+        (, nextId) = nextOnShelf(collection);
     }
 
     function pendingPrice(address collection) external view returns (PendingPrice memory) {
@@ -1350,6 +1434,10 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     function pendingPremium() external view returns (PendingPremium memory) {
         return _pendingPremium;
+    }
+
+    function pendingFeeSplitter() external view returns (PendingSplitter memory) {
+        return _pendingSplitter;
     }
 
     /* ------------------------------------------------------------------ */
@@ -1366,9 +1454,8 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         for (uint256 i; i < tokenIds.length; ++i) {
             uint256 id = tokenIds[i];
             IERC721(collection).transferFrom(msg.sender, address(this), id);
-            sh.tokenIds.push(id);
-            isListed[collection][id] = true;
-            emit Shelved(collection, id, sh.tokenIds.length - 1, shelfRemaining(collection));
+            _list(collection, id);
+            emit Shelved(collection, id, sh.slots.length - 1, sh.listed);
         }
     }
 
@@ -1378,28 +1465,52 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///      shrink the shelf but can never take the specific Noun the next buyer is about to
     ///      receive out from under them. Same rule as the Furnace, for the same reason: the
     ///      queue's head is a promise the moment it is readable.
+    ///
+    ///      EXTERNAL REVIEW L-3: THE TAIL IS THE HEAD WHEN ONE IS LEFT. Every live slot sits
+    ///      at or after the cursor, so the first live slot is the head and the last is the
+    ///      tail — and with exactly one live slot they are the same Noun. The rule quietly
+    ///      stopped holding at the only depth where a buyer is most likely to be racing for
+    ///      it. Taking the last one is now refused.
+    ///
+    ///      Refused **while the shelf is live**, not absolutely, and the difference matters:
+    ///      {recoverNFT} declines a shelved token, so an absolute rule would strand the final
+    ///      Noun on the shelf forever with no path off it but a sale. Pausing the collection
+    ///      is what says "nobody is about to buy anything here", and a paused shelf can be
+    ///      emptied. So winding down is two deliberate transactions rather than one, which is
+    ///      the right shape for it anyway.
     function unshelve(address collection, uint256 count, address to) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         if (count == 0) revert NothingToWithdraw();
 
         Shelf storage sh = _shelf[collection];
+        if (count > sh.listed) revert NothingToWithdraw();
+
         uint256 taken;
         while (taken < count) {
-            uint256 len = sh.tokenIds.length;
+            uint256 len = sh.slots.length;
             if (len == 0 || len <= sh.cursor) revert NothingToWithdraw();
 
-            uint256 id = sh.tokenIds[len - 1];
-            sh.tokenIds.pop();
+            uint256 v = sh.slots[len - 1];
+            if (v == 0) {
+                sh.slots.pop(); // a retired slot at the tail: drop the stale entry
+                continue;
+            }
 
-            // Already sold or already withdrawn: just drop the stale array entry.
-            if (!isListed[collection][id]) continue;
-
-            isListed[collection][id] = false;
-            IERC721(collection).transferFrom(address(this), to, id);
-            emit Unshelved(collection, id, to, shelfRemaining(collection));
+            uint256 id;
             unchecked {
+                id = v - 1;
+            }
+            if (sh.listed == 1 && !paused[collection]) revert WouldTakeTheHead(collection, id);
+
+            sh.slots.pop();
+            _slotOf[collection][id] = 0;
+            unchecked {
+                --sh.listed;
                 ++taken;
             }
+
+            IERC721(collection).transferFrom(address(this), to, id);
+            emit Unshelved(collection, id, to, sh.listed);
         }
     }
 
@@ -1415,10 +1526,43 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         emit CollectionPaused(collection, paused_);
     }
 
-    function setFeeSplitter(address v) external onlyOwner {
+    /// @notice Queue a change of revenue destination. Multisig only, 48 hours of notice.
+    /// @dev External review L-1. This redirects **100% of revenue**, which is strictly larger
+    ///      than any price change — and price changes were already the timelocked thing while
+    ///      this was instant. A compromised multisig should not be able to point the till at
+    ///      itself with no warning; now it announces the move two days before it can make it,
+    ///      which is time for anyone watching to notice and for the Nouns to be pulled.
+    ///
+    ///      Note the asymmetry with {setPaused}, which stays immediate: stopping sales is a
+    ///      safety action and is the lever to reach for while this one is maturing.
+    function queueFeeSplitter(address v) external onlyOwner {
         if (v == address(0)) revert ZeroAddress();
-        emit FeeSplitterSet(feeSplitter, v);
-        feeSplitter = v;
+        uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
+        _pendingSplitter = PendingSplitter({queued: true, executableAt: executableAt, splitter: v});
+        emit FeeSplitterQueued(v, executableAt);
+    }
+
+    function executeFeeSplitter() external onlyOwner {
+        PendingSplitter memory p = _pendingSplitter;
+        if (!p.queued) revert NothingQueued();
+        _requireInWindow(p.executableAt);
+
+        emit FeeSplitterSet(feeSplitter, p.splitter);
+        feeSplitter = p.splitter;
+        delete _pendingSplitter;
+    }
+
+    function cancelFeeSplitter() external onlyOwner {
+        if (!_pendingSplitter.queued) revert NothingQueued();
+        delete _pendingSplitter;
+        emit FeeSplitterCancelled();
+    }
+
+    /// @dev The two halves of a timelock: matured, and not yet stale. External review L-2.
+    function _requireInWindow(uint64 executableAt) internal view {
+        if (block.timestamp < executableAt) revert TimelockNotElapsed(uint64(block.timestamp), executableAt);
+        uint64 expiresAt = executableAt + CONFIG_GRACE;
+        if (block.timestamp > expiresAt) revert TimelockExpired(uint64(block.timestamp), expiresAt);
     }
 
     /* ------------------------------------------------------------------ */
@@ -1438,7 +1582,7 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     function executeQueuePrice(address collection) external onlyOwner {
         PendingPrice memory p = _pendingPrice[collection];
         if (!p.queued) revert NothingQueued();
-        if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
+        _requireInWindow(p.executableAt);
 
         emit PriceExecuted(collection, queuePrice[collection], p.price);
         queuePrice[collection] = p.price;
@@ -1462,7 +1606,7 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     function executeSnipePremium() external onlyOwner {
         PendingPremium memory p = _pendingPremium;
         if (!p.queued) revert NothingQueued();
-        if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
+        _requireInWindow(p.executableAt);
 
         emit PremiumExecuted(snipePremiumBps, p.bps);
         snipePremiumBps = p.bps;
@@ -1485,6 +1629,13 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///      forwarded to the FeeSplitter inside the same transaction, so a balance here
     ///      would mean something has already gone wrong, and a withdraw path would be a
     ///      standing way to take sale proceeds out of the protocol.
+    ///
+    ///      EXTERNAL REVIEW I-1, ACCEPTED AS DESIGNED. There is no `receive()`, so an ordinary
+    ///      send bounces; the ways ETH can arrive anyway are `selfdestruct` and being named as
+    ///      a block's coinbase, neither of which can be refused by any contract. Such a
+    ///      balance is unrecoverable. That is the correct trade: the alternative is a standing
+    ///      ETH withdraw path on the contract that handles every sale, to protect against
+    ///      somebody choosing to destroy their own money. See ASSUMPTIONS A-21.
     function recoverExcess(address token, address to) external onlyOwner nonReentrant {
         if (token == address(0) || to == address(0)) revert ZeroAddress();
         uint256 amount = IERC20(token).balanceOf(address(this));
@@ -1501,7 +1652,7 @@ contract Anvil is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///      it goes home.
     function recoverNFT(address collection, uint256 tokenId, address to) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
-        if (isListed[collection][tokenId]) revert IsShelved(collection, tokenId);
+        if (_slotOf[collection][tokenId] != 0) revert IsShelved(collection, tokenId);
         IERC721(collection).transferFrom(address(this), to, tokenId);
         emit RecoveredNFT(collection, tokenId, to);
     }

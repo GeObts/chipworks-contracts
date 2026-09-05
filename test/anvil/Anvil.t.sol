@@ -219,7 +219,10 @@ contract AnvilTest is Test {
     function test_aBrokenFeeSplitterBlocksTheSaleRatherThanStrandingTheEth() public {
         RejectingSink bad = new RejectingSink();
         vm.prank(multisig);
-        anvil.setFeeSplitter(address(bad));
+        anvil.queueFeeSplitter(address(bad));
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        anvil.executeFeeSplitter();
 
         vm.prank(alice);
         vm.expectRevert(Anvil.FeeForwardFailed.selector);

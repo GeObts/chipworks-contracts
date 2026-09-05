@@ -51,7 +51,7 @@ paths, or a paid endpoint, avoids it.
 
 Runtime sizes, all inside the 24,000-byte budget the size guard enforces (EIP-170 is 24,576):
 POLTreasury 23,032 · ChipRounds 20,377 · NounLoans 15,566 · ChipClaims 14,678 ·
-Pot 11,337 · ChipActivation 10,023 · Anvil 9,359 · StockRegistry 8,971 · Furnace 7,711 ·
+Pot 11,337 · Anvil 10,075 · ChipActivation 10,023 · StockRegistry 8,971 · Furnace 7,711 ·
 FeeSplitter 6,069 · ClaimRouter 3,149 · ClutchVaultAdapter 3,151.
 
 **POLTreasury is now the tightest at 968 bytes of headroom** and has taken ChipRounds' place
@@ -69,7 +69,7 @@ removal loop cost more than the budget had spare. The set is reconstructible fro
 | `activation/ChipActivation.sol` | 264 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
 | `POLTreasury.sol` | 785 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing. **Read this one first** — see §1.5 |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
-| `anvil/Anvil.sol` | 291 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
+| `anvil/Anvil.sol` | 340 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
 | `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn fuel NFTs + $CHIP to forge a Noun. **Outside the money path** |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
 | `FeeSplitter.sol` | 178 | transiently, **plus ETH escrow** | Three-way split of every inflow: Pot / ops / POL |
@@ -171,7 +171,10 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
 20. **The Anvil never holds ETH.** 100% of every sale is forwarded in the same transaction
     and there is no withdraw path, so a balance would mean something already went wrong.
 21. **A snipe never reorders the FIFO queue**, and `buyNext` always returns the oldest token
-    still on the shelf.
+    still on the shelf. **Including across a restock**: a Noun bought back and re-shelved
+    joins at the tail, not at the position it left. That half was broken until
+    `launch-candidate-11` — see TRIAGE batch 7 M-1, which is the clearest example in the repo
+    of two pieces of state disagreeing about the same fact.
 22. **A Noun cannot be borrowed against unless it is actively chipped to the borrower**, and
     the chip survives custody untouched for the life of the loan.
 
@@ -578,15 +581,28 @@ Furnace it **takes money from the public**, so scope it accordingly.
 
 **Then the queue, which is the product.** `buyNext` is FIFO and `nextOnShelf` makes the head
 readable before anyone commits — the claim is that this is a queue, not a lottery. `snipe`
-takes a specific token at +25% and **unlists it in place**, so the cursor skips it and nobody
-is promoted past anybody. Attack: can a snipe reorder the queue, can a token be bought twice
-by the two routes racing, can the cursor be made to skip a still-listed token or to revisit a
-sold one? The cursor is persisted as it advances, which is what keeps `buyNext` from becoming
-quadratic on a heavily-sniped shelf — check it can never move backwards.
+takes a specific token and **retires its slot in place**, so the cursor skips the hole and
+nobody is promoted past anybody. Attack: can a snipe reorder the queue, can a token be bought
+twice by the two routes racing, can the cursor be made to skip a live slot or to revisit a
+retired one? The cursor is persisted as it advances, which is what keeps `buyNext` from
+becoming quadratic on a heavily-sniped shelf — check it can never move backwards.
+
+**THE INVARIANT TO ATTACK HARDEST IS ONE SLOT PER TOKEN.** External review batch 7 found the
+shelf recording ordering against the slot and availability against the token id, and those two
+disagreed the moment a token came back: re-shelving a sniped Noun re-lit its original slot, so
+it jumped the queue and was counted twice. A slot now holds `tokenId + 1`, zero means retired,
+and `_slotOf` maps a token to at most one live slot. **Try to produce two live slots for one
+token, or a live slot whose token this contract does not hold.** Every exit — bought, sniped,
+unshelved — must zero both halves; look for a path that clears one and not the other. The
+`+ 1` offset is what lets zero be the sentinel while slot zero stays real; `shelve` refuses
+`type(uint256).max` rather than letting it wrap.
 
 **`unshelve` takes from the TAIL**, same rule as the Furnace: the multisig can shrink the
-shelf but never take the Noun the next buyer is about to receive. It also has to cope with
-tail entries that were already sniped; confirm the skipping cannot lose a listed token.
+shelf but never take the Noun the next buyer is about to receive. It has to cope with tail
+entries that were already retired; confirm the skipping cannot lose a live token or count a
+dropped stale entry against the requested number. Note the head protection now holds at
+`count == 1`, where the tail and the head are the same Noun (batch 7 L-3) — and that pausing
+lifts it, deliberately, because otherwise the last Noun could never leave the shelf.
 
 **The sell side does not exist and cannot be switched on.** `sellEnabled` is a `constant`
 `false` with no setter, and `sellToAnvil` always reverts `SellNotOpen`. That is the honest
