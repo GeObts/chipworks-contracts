@@ -50,6 +50,7 @@ contract FullSystemForkTest is Test {
     address internal constant WETH = 0x4200000000000000000000000000000000000006;
     address internal constant AERO = 0x940181a94A35A4569E4529A3CDfB74e38FD98631;
     address internal constant ETH_USD_FEED = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+    address internal constant AERO_VOTER = 0x16613524e02ad97eDfeF371bC883F2F5d6C480A5;
     address internal constant UNIV3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
     address internal constant UNIV3_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
     address internal constant SLIPSTREAM_FACTORY = 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A;
@@ -90,7 +91,7 @@ contract FullSystemForkTest is Test {
         claims = new ChipClaims(multisig, address(registry));
         rounds =
             new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), 5_000 ether);
-        polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter), UNIV3_FACTORY);
+        polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter), UNIV3_FACTORY, AERO_VOTER);
         router = new ClaimRouter(multisig, address(claims), 1_000_000);
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
@@ -148,7 +149,13 @@ contract FullSystemForkTest is Test {
 
         polTreasury.setRewards(address(claims));
         polTreasury.setManager(keeper);
-        polTreasury.setPolAsset(WETH, true);
+        // A POL asset now carries the feed that bounds every LP operation on it (H-02). The
+        // staleness window is disabled HERE ONLY: this suite warps 91 days forward to exercise
+        // the expiry sweep, and a forked feed's `updatedAt` stays at the fork block, so any
+        // real window would trip on the fixture rather than on anything the protocol did.
+        // Launch config sets a real one (LAUNCH_CONFIG), and the check itself is covered by
+        // `test_aStalePolFeedRefusesLiquidityOperations`.
+        polTreasury.setPolAsset(WETH, ETH_USD_FEED, 1_000, 0);
         polTreasury.setIncomeToken(AERO, true);
         vm.stopPrank();
     }
@@ -331,8 +338,8 @@ contract FullSystemForkTest is Test {
                 tickUpper: 887200,
                 amount0Desired: polWeth,
                 amount1Desired: polUsdc,
-                amount0Min: 0,
-                amount1Min: 0,
+                amount0Min: 1, // blank minimums are refused since batch 6 (H-02)
+                amount1Min: 1,
                 recipient: address(polTreasury),
                 deadline: block.timestamp + 1,
                 sqrtPriceX96: 0

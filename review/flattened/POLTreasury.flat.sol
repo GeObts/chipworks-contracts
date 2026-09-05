@@ -78,6 +78,35 @@ interface IAggregatorV3 {
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
 }
 
+// src/interfaces/IAmmFactories.sol
+
+/// @notice Uniswap v3 factory, keyed by fee tier.
+interface IUniswapV3Factory {
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
+}
+
+/// @notice Aerodrome Slipstream (concentrated liquidity) factory, keyed by tick spacing.
+interface ISlipstreamFactory {
+    function getPool(address tokenA, address tokenB, int24 tickSpacing) external view returns (address pool);
+}
+
+/// @notice Aerodrome's Voter, the registry that says which gauge is canonical for a pool.
+/// @dev This is the discriminator H-01 turns on. A gauge address by itself proves nothing —
+///      anyone can deploy a contract with a `deposit(uint256)`. `voter.gauges(pool)` is the
+///      only on-chain statement that a given gauge is *the* gauge for a given pool, and the
+///      pool in turn is derived from the position, not from the caller.
+interface IAerodromeVoter {
+    function gauges(address pool) external view returns (address);
+}
+
+/// @notice The one field of a concentrated-liquidity pool's `slot0` we need: its price.
+/// @dev Read by staticcall and decoded as a single word rather than through this interface,
+///      because Uniswap v3 and Slipstream disagree about the later fields of the tuple and
+///      agree about the first. Declared here for documentation.
+interface IPoolPrice {
+    function slot0() external view returns (uint160 sqrtPriceX96);
+}
+
 // lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol
 
 // OpenZeppelin Contracts (last updated v5.1.0) (utils/introspection/IERC165.sol)
@@ -348,6 +377,63 @@ interface IWETH {
     function withdraw(uint256 amount) external;
 }
 
+// lib/openzeppelin-contracts/contracts/utils/Panic.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/Panic.sol)
+
+/**
+ * @dev Helper library for emitting standardized panic codes.
+ *
+ * ```solidity
+ * contract Example {
+ *      using Panic for uint256;
+ *
+ *      // Use any of the declared internal constants
+ *      function foo() { Panic.GENERIC.panic(); }
+ *
+ *      // Alternatively
+ *      function foo() { Panic.panic(Panic.GENERIC); }
+ * }
+ * ```
+ *
+ * Follows the list from https://github.com/ethereum/solidity/blob/v0.8.24/libsolutil/ErrorCodes.h[libsolutil].
+ *
+ * _Available since v5.1._
+ */
+// slither-disable-next-line unused-state
+library Panic {
+    /// @dev generic / unspecified error
+    uint256 internal constant GENERIC = 0x00;
+    /// @dev used by the assert() builtin
+    uint256 internal constant ASSERT = 0x01;
+    /// @dev arithmetic underflow or overflow
+    uint256 internal constant UNDER_OVERFLOW = 0x11;
+    /// @dev division or modulo by zero
+    uint256 internal constant DIVISION_BY_ZERO = 0x12;
+    /// @dev enum conversion error
+    uint256 internal constant ENUM_CONVERSION_ERROR = 0x21;
+    /// @dev invalid encoding in storage
+    uint256 internal constant STORAGE_ENCODING_ERROR = 0x22;
+    /// @dev empty array pop
+    uint256 internal constant EMPTY_ARRAY_POP = 0x31;
+    /// @dev array out of bounds access
+    uint256 internal constant ARRAY_OUT_OF_BOUNDS = 0x32;
+    /// @dev resource error (too large allocation or too large array)
+    uint256 internal constant RESOURCE_ERROR = 0x41;
+    /// @dev calling invalid internal function
+    uint256 internal constant INVALID_INTERNAL_FUNCTION = 0x51;
+
+    /// @dev Reverts with a panic code. Recommended to use with
+    /// the internal constants with predefined codes.
+    function panic(uint256 code) internal pure {
+        assembly ("memory-safe") {
+            mstore(0x00, 0x4e487b71)
+            mstore(0x20, code)
+            revert(0x1c, 0x24)
+        }
+    }
+}
+
 // lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol
 
 // OpenZeppelin Contracts (last updated v5.1.0) (utils/ReentrancyGuard.sol)
@@ -432,6 +518,1168 @@ abstract contract ReentrancyGuard {
      */
     function _reentrancyGuardEntered() internal view returns (bool) {
         return _status == ENTERED;
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/utils/math/SafeCast.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/math/SafeCast.sol)
+// This file was procedurally generated from scripts/generate/templates/SafeCast.js.
+
+/**
+ * @dev Wrappers over Solidity's uintXX/intXX/bool casting operators with added overflow
+ * checks.
+ *
+ * Downcasting from uint256/int256 in Solidity does not revert on overflow. This can
+ * easily result in undesired exploitation or bugs, since developers usually
+ * assume that overflows raise errors. `SafeCast` restores this intuition by
+ * reverting the transaction when such an operation overflows.
+ *
+ * Using this library instead of the unchecked operations eliminates an entire
+ * class of bugs, so it's recommended to use it always.
+ */
+library SafeCast {
+    /**
+     * @dev Value doesn't fit in an uint of `bits` size.
+     */
+    error SafeCastOverflowedUintDowncast(uint8 bits, uint256 value);
+
+    /**
+     * @dev An int value doesn't fit in an uint of `bits` size.
+     */
+    error SafeCastOverflowedIntToUint(int256 value);
+
+    /**
+     * @dev Value doesn't fit in an int of `bits` size.
+     */
+    error SafeCastOverflowedIntDowncast(uint8 bits, int256 value);
+
+    /**
+     * @dev An uint value doesn't fit in an int of `bits` size.
+     */
+    error SafeCastOverflowedUintToInt(uint256 value);
+
+    /**
+     * @dev Returns the downcasted uint248 from uint256, reverting on
+     * overflow (when the input is greater than largest uint248).
+     *
+     * Counterpart to Solidity's `uint248` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 248 bits
+     */
+    function toUint248(uint256 value) internal pure returns (uint248) {
+        if (value > type(uint248).max) {
+            revert SafeCastOverflowedUintDowncast(248, value);
+        }
+        return uint248(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint240 from uint256, reverting on
+     * overflow (when the input is greater than largest uint240).
+     *
+     * Counterpart to Solidity's `uint240` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 240 bits
+     */
+    function toUint240(uint256 value) internal pure returns (uint240) {
+        if (value > type(uint240).max) {
+            revert SafeCastOverflowedUintDowncast(240, value);
+        }
+        return uint240(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint232 from uint256, reverting on
+     * overflow (when the input is greater than largest uint232).
+     *
+     * Counterpart to Solidity's `uint232` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 232 bits
+     */
+    function toUint232(uint256 value) internal pure returns (uint232) {
+        if (value > type(uint232).max) {
+            revert SafeCastOverflowedUintDowncast(232, value);
+        }
+        return uint232(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint224 from uint256, reverting on
+     * overflow (when the input is greater than largest uint224).
+     *
+     * Counterpart to Solidity's `uint224` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 224 bits
+     */
+    function toUint224(uint256 value) internal pure returns (uint224) {
+        if (value > type(uint224).max) {
+            revert SafeCastOverflowedUintDowncast(224, value);
+        }
+        return uint224(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint216 from uint256, reverting on
+     * overflow (when the input is greater than largest uint216).
+     *
+     * Counterpart to Solidity's `uint216` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 216 bits
+     */
+    function toUint216(uint256 value) internal pure returns (uint216) {
+        if (value > type(uint216).max) {
+            revert SafeCastOverflowedUintDowncast(216, value);
+        }
+        return uint216(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint208 from uint256, reverting on
+     * overflow (when the input is greater than largest uint208).
+     *
+     * Counterpart to Solidity's `uint208` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 208 bits
+     */
+    function toUint208(uint256 value) internal pure returns (uint208) {
+        if (value > type(uint208).max) {
+            revert SafeCastOverflowedUintDowncast(208, value);
+        }
+        return uint208(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint200 from uint256, reverting on
+     * overflow (when the input is greater than largest uint200).
+     *
+     * Counterpart to Solidity's `uint200` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 200 bits
+     */
+    function toUint200(uint256 value) internal pure returns (uint200) {
+        if (value > type(uint200).max) {
+            revert SafeCastOverflowedUintDowncast(200, value);
+        }
+        return uint200(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint192 from uint256, reverting on
+     * overflow (when the input is greater than largest uint192).
+     *
+     * Counterpart to Solidity's `uint192` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 192 bits
+     */
+    function toUint192(uint256 value) internal pure returns (uint192) {
+        if (value > type(uint192).max) {
+            revert SafeCastOverflowedUintDowncast(192, value);
+        }
+        return uint192(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint184 from uint256, reverting on
+     * overflow (when the input is greater than largest uint184).
+     *
+     * Counterpart to Solidity's `uint184` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 184 bits
+     */
+    function toUint184(uint256 value) internal pure returns (uint184) {
+        if (value > type(uint184).max) {
+            revert SafeCastOverflowedUintDowncast(184, value);
+        }
+        return uint184(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint176 from uint256, reverting on
+     * overflow (when the input is greater than largest uint176).
+     *
+     * Counterpart to Solidity's `uint176` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 176 bits
+     */
+    function toUint176(uint256 value) internal pure returns (uint176) {
+        if (value > type(uint176).max) {
+            revert SafeCastOverflowedUintDowncast(176, value);
+        }
+        return uint176(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint168 from uint256, reverting on
+     * overflow (when the input is greater than largest uint168).
+     *
+     * Counterpart to Solidity's `uint168` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 168 bits
+     */
+    function toUint168(uint256 value) internal pure returns (uint168) {
+        if (value > type(uint168).max) {
+            revert SafeCastOverflowedUintDowncast(168, value);
+        }
+        return uint168(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint160 from uint256, reverting on
+     * overflow (when the input is greater than largest uint160).
+     *
+     * Counterpart to Solidity's `uint160` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 160 bits
+     */
+    function toUint160(uint256 value) internal pure returns (uint160) {
+        if (value > type(uint160).max) {
+            revert SafeCastOverflowedUintDowncast(160, value);
+        }
+        return uint160(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint152 from uint256, reverting on
+     * overflow (when the input is greater than largest uint152).
+     *
+     * Counterpart to Solidity's `uint152` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 152 bits
+     */
+    function toUint152(uint256 value) internal pure returns (uint152) {
+        if (value > type(uint152).max) {
+            revert SafeCastOverflowedUintDowncast(152, value);
+        }
+        return uint152(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint144 from uint256, reverting on
+     * overflow (when the input is greater than largest uint144).
+     *
+     * Counterpart to Solidity's `uint144` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 144 bits
+     */
+    function toUint144(uint256 value) internal pure returns (uint144) {
+        if (value > type(uint144).max) {
+            revert SafeCastOverflowedUintDowncast(144, value);
+        }
+        return uint144(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint136 from uint256, reverting on
+     * overflow (when the input is greater than largest uint136).
+     *
+     * Counterpart to Solidity's `uint136` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 136 bits
+     */
+    function toUint136(uint256 value) internal pure returns (uint136) {
+        if (value > type(uint136).max) {
+            revert SafeCastOverflowedUintDowncast(136, value);
+        }
+        return uint136(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint128 from uint256, reverting on
+     * overflow (when the input is greater than largest uint128).
+     *
+     * Counterpart to Solidity's `uint128` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 128 bits
+     */
+    function toUint128(uint256 value) internal pure returns (uint128) {
+        if (value > type(uint128).max) {
+            revert SafeCastOverflowedUintDowncast(128, value);
+        }
+        return uint128(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint120 from uint256, reverting on
+     * overflow (when the input is greater than largest uint120).
+     *
+     * Counterpart to Solidity's `uint120` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 120 bits
+     */
+    function toUint120(uint256 value) internal pure returns (uint120) {
+        if (value > type(uint120).max) {
+            revert SafeCastOverflowedUintDowncast(120, value);
+        }
+        return uint120(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint112 from uint256, reverting on
+     * overflow (when the input is greater than largest uint112).
+     *
+     * Counterpart to Solidity's `uint112` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 112 bits
+     */
+    function toUint112(uint256 value) internal pure returns (uint112) {
+        if (value > type(uint112).max) {
+            revert SafeCastOverflowedUintDowncast(112, value);
+        }
+        return uint112(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint104 from uint256, reverting on
+     * overflow (when the input is greater than largest uint104).
+     *
+     * Counterpart to Solidity's `uint104` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 104 bits
+     */
+    function toUint104(uint256 value) internal pure returns (uint104) {
+        if (value > type(uint104).max) {
+            revert SafeCastOverflowedUintDowncast(104, value);
+        }
+        return uint104(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint96 from uint256, reverting on
+     * overflow (when the input is greater than largest uint96).
+     *
+     * Counterpart to Solidity's `uint96` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 96 bits
+     */
+    function toUint96(uint256 value) internal pure returns (uint96) {
+        if (value > type(uint96).max) {
+            revert SafeCastOverflowedUintDowncast(96, value);
+        }
+        return uint96(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint88 from uint256, reverting on
+     * overflow (when the input is greater than largest uint88).
+     *
+     * Counterpart to Solidity's `uint88` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 88 bits
+     */
+    function toUint88(uint256 value) internal pure returns (uint88) {
+        if (value > type(uint88).max) {
+            revert SafeCastOverflowedUintDowncast(88, value);
+        }
+        return uint88(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint80 from uint256, reverting on
+     * overflow (when the input is greater than largest uint80).
+     *
+     * Counterpart to Solidity's `uint80` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 80 bits
+     */
+    function toUint80(uint256 value) internal pure returns (uint80) {
+        if (value > type(uint80).max) {
+            revert SafeCastOverflowedUintDowncast(80, value);
+        }
+        return uint80(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint72 from uint256, reverting on
+     * overflow (when the input is greater than largest uint72).
+     *
+     * Counterpart to Solidity's `uint72` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 72 bits
+     */
+    function toUint72(uint256 value) internal pure returns (uint72) {
+        if (value > type(uint72).max) {
+            revert SafeCastOverflowedUintDowncast(72, value);
+        }
+        return uint72(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint64 from uint256, reverting on
+     * overflow (when the input is greater than largest uint64).
+     *
+     * Counterpart to Solidity's `uint64` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 64 bits
+     */
+    function toUint64(uint256 value) internal pure returns (uint64) {
+        if (value > type(uint64).max) {
+            revert SafeCastOverflowedUintDowncast(64, value);
+        }
+        return uint64(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint56 from uint256, reverting on
+     * overflow (when the input is greater than largest uint56).
+     *
+     * Counterpart to Solidity's `uint56` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 56 bits
+     */
+    function toUint56(uint256 value) internal pure returns (uint56) {
+        if (value > type(uint56).max) {
+            revert SafeCastOverflowedUintDowncast(56, value);
+        }
+        return uint56(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint48 from uint256, reverting on
+     * overflow (when the input is greater than largest uint48).
+     *
+     * Counterpart to Solidity's `uint48` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 48 bits
+     */
+    function toUint48(uint256 value) internal pure returns (uint48) {
+        if (value > type(uint48).max) {
+            revert SafeCastOverflowedUintDowncast(48, value);
+        }
+        return uint48(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint40 from uint256, reverting on
+     * overflow (when the input is greater than largest uint40).
+     *
+     * Counterpart to Solidity's `uint40` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 40 bits
+     */
+    function toUint40(uint256 value) internal pure returns (uint40) {
+        if (value > type(uint40).max) {
+            revert SafeCastOverflowedUintDowncast(40, value);
+        }
+        return uint40(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint32 from uint256, reverting on
+     * overflow (when the input is greater than largest uint32).
+     *
+     * Counterpart to Solidity's `uint32` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 32 bits
+     */
+    function toUint32(uint256 value) internal pure returns (uint32) {
+        if (value > type(uint32).max) {
+            revert SafeCastOverflowedUintDowncast(32, value);
+        }
+        return uint32(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint24 from uint256, reverting on
+     * overflow (when the input is greater than largest uint24).
+     *
+     * Counterpart to Solidity's `uint24` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 24 bits
+     */
+    function toUint24(uint256 value) internal pure returns (uint24) {
+        if (value > type(uint24).max) {
+            revert SafeCastOverflowedUintDowncast(24, value);
+        }
+        return uint24(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint16 from uint256, reverting on
+     * overflow (when the input is greater than largest uint16).
+     *
+     * Counterpart to Solidity's `uint16` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 16 bits
+     */
+    function toUint16(uint256 value) internal pure returns (uint16) {
+        if (value > type(uint16).max) {
+            revert SafeCastOverflowedUintDowncast(16, value);
+        }
+        return uint16(value);
+    }
+
+    /**
+     * @dev Returns the downcasted uint8 from uint256, reverting on
+     * overflow (when the input is greater than largest uint8).
+     *
+     * Counterpart to Solidity's `uint8` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 8 bits
+     */
+    function toUint8(uint256 value) internal pure returns (uint8) {
+        if (value > type(uint8).max) {
+            revert SafeCastOverflowedUintDowncast(8, value);
+        }
+        return uint8(value);
+    }
+
+    /**
+     * @dev Converts a signed int256 into an unsigned uint256.
+     *
+     * Requirements:
+     *
+     * - input must be greater than or equal to 0.
+     */
+    function toUint256(int256 value) internal pure returns (uint256) {
+        if (value < 0) {
+            revert SafeCastOverflowedIntToUint(value);
+        }
+        return uint256(value);
+    }
+
+    /**
+     * @dev Returns the downcasted int248 from int256, reverting on
+     * overflow (when the input is less than smallest int248 or
+     * greater than largest int248).
+     *
+     * Counterpart to Solidity's `int248` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 248 bits
+     */
+    function toInt248(int256 value) internal pure returns (int248 downcasted) {
+        downcasted = int248(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(248, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int240 from int256, reverting on
+     * overflow (when the input is less than smallest int240 or
+     * greater than largest int240).
+     *
+     * Counterpart to Solidity's `int240` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 240 bits
+     */
+    function toInt240(int256 value) internal pure returns (int240 downcasted) {
+        downcasted = int240(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(240, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int232 from int256, reverting on
+     * overflow (when the input is less than smallest int232 or
+     * greater than largest int232).
+     *
+     * Counterpart to Solidity's `int232` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 232 bits
+     */
+    function toInt232(int256 value) internal pure returns (int232 downcasted) {
+        downcasted = int232(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(232, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int224 from int256, reverting on
+     * overflow (when the input is less than smallest int224 or
+     * greater than largest int224).
+     *
+     * Counterpart to Solidity's `int224` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 224 bits
+     */
+    function toInt224(int256 value) internal pure returns (int224 downcasted) {
+        downcasted = int224(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(224, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int216 from int256, reverting on
+     * overflow (when the input is less than smallest int216 or
+     * greater than largest int216).
+     *
+     * Counterpart to Solidity's `int216` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 216 bits
+     */
+    function toInt216(int256 value) internal pure returns (int216 downcasted) {
+        downcasted = int216(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(216, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int208 from int256, reverting on
+     * overflow (when the input is less than smallest int208 or
+     * greater than largest int208).
+     *
+     * Counterpart to Solidity's `int208` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 208 bits
+     */
+    function toInt208(int256 value) internal pure returns (int208 downcasted) {
+        downcasted = int208(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(208, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int200 from int256, reverting on
+     * overflow (when the input is less than smallest int200 or
+     * greater than largest int200).
+     *
+     * Counterpart to Solidity's `int200` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 200 bits
+     */
+    function toInt200(int256 value) internal pure returns (int200 downcasted) {
+        downcasted = int200(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(200, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int192 from int256, reverting on
+     * overflow (when the input is less than smallest int192 or
+     * greater than largest int192).
+     *
+     * Counterpart to Solidity's `int192` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 192 bits
+     */
+    function toInt192(int256 value) internal pure returns (int192 downcasted) {
+        downcasted = int192(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(192, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int184 from int256, reverting on
+     * overflow (when the input is less than smallest int184 or
+     * greater than largest int184).
+     *
+     * Counterpart to Solidity's `int184` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 184 bits
+     */
+    function toInt184(int256 value) internal pure returns (int184 downcasted) {
+        downcasted = int184(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(184, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int176 from int256, reverting on
+     * overflow (when the input is less than smallest int176 or
+     * greater than largest int176).
+     *
+     * Counterpart to Solidity's `int176` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 176 bits
+     */
+    function toInt176(int256 value) internal pure returns (int176 downcasted) {
+        downcasted = int176(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(176, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int168 from int256, reverting on
+     * overflow (when the input is less than smallest int168 or
+     * greater than largest int168).
+     *
+     * Counterpart to Solidity's `int168` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 168 bits
+     */
+    function toInt168(int256 value) internal pure returns (int168 downcasted) {
+        downcasted = int168(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(168, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int160 from int256, reverting on
+     * overflow (when the input is less than smallest int160 or
+     * greater than largest int160).
+     *
+     * Counterpart to Solidity's `int160` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 160 bits
+     */
+    function toInt160(int256 value) internal pure returns (int160 downcasted) {
+        downcasted = int160(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(160, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int152 from int256, reverting on
+     * overflow (when the input is less than smallest int152 or
+     * greater than largest int152).
+     *
+     * Counterpart to Solidity's `int152` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 152 bits
+     */
+    function toInt152(int256 value) internal pure returns (int152 downcasted) {
+        downcasted = int152(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(152, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int144 from int256, reverting on
+     * overflow (when the input is less than smallest int144 or
+     * greater than largest int144).
+     *
+     * Counterpart to Solidity's `int144` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 144 bits
+     */
+    function toInt144(int256 value) internal pure returns (int144 downcasted) {
+        downcasted = int144(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(144, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int136 from int256, reverting on
+     * overflow (when the input is less than smallest int136 or
+     * greater than largest int136).
+     *
+     * Counterpart to Solidity's `int136` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 136 bits
+     */
+    function toInt136(int256 value) internal pure returns (int136 downcasted) {
+        downcasted = int136(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(136, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int128 from int256, reverting on
+     * overflow (when the input is less than smallest int128 or
+     * greater than largest int128).
+     *
+     * Counterpart to Solidity's `int128` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 128 bits
+     */
+    function toInt128(int256 value) internal pure returns (int128 downcasted) {
+        downcasted = int128(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(128, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int120 from int256, reverting on
+     * overflow (when the input is less than smallest int120 or
+     * greater than largest int120).
+     *
+     * Counterpart to Solidity's `int120` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 120 bits
+     */
+    function toInt120(int256 value) internal pure returns (int120 downcasted) {
+        downcasted = int120(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(120, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int112 from int256, reverting on
+     * overflow (when the input is less than smallest int112 or
+     * greater than largest int112).
+     *
+     * Counterpart to Solidity's `int112` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 112 bits
+     */
+    function toInt112(int256 value) internal pure returns (int112 downcasted) {
+        downcasted = int112(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(112, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int104 from int256, reverting on
+     * overflow (when the input is less than smallest int104 or
+     * greater than largest int104).
+     *
+     * Counterpart to Solidity's `int104` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 104 bits
+     */
+    function toInt104(int256 value) internal pure returns (int104 downcasted) {
+        downcasted = int104(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(104, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int96 from int256, reverting on
+     * overflow (when the input is less than smallest int96 or
+     * greater than largest int96).
+     *
+     * Counterpart to Solidity's `int96` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 96 bits
+     */
+    function toInt96(int256 value) internal pure returns (int96 downcasted) {
+        downcasted = int96(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(96, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int88 from int256, reverting on
+     * overflow (when the input is less than smallest int88 or
+     * greater than largest int88).
+     *
+     * Counterpart to Solidity's `int88` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 88 bits
+     */
+    function toInt88(int256 value) internal pure returns (int88 downcasted) {
+        downcasted = int88(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(88, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int80 from int256, reverting on
+     * overflow (when the input is less than smallest int80 or
+     * greater than largest int80).
+     *
+     * Counterpart to Solidity's `int80` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 80 bits
+     */
+    function toInt80(int256 value) internal pure returns (int80 downcasted) {
+        downcasted = int80(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(80, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int72 from int256, reverting on
+     * overflow (when the input is less than smallest int72 or
+     * greater than largest int72).
+     *
+     * Counterpart to Solidity's `int72` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 72 bits
+     */
+    function toInt72(int256 value) internal pure returns (int72 downcasted) {
+        downcasted = int72(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(72, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int64 from int256, reverting on
+     * overflow (when the input is less than smallest int64 or
+     * greater than largest int64).
+     *
+     * Counterpart to Solidity's `int64` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 64 bits
+     */
+    function toInt64(int256 value) internal pure returns (int64 downcasted) {
+        downcasted = int64(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(64, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int56 from int256, reverting on
+     * overflow (when the input is less than smallest int56 or
+     * greater than largest int56).
+     *
+     * Counterpart to Solidity's `int56` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 56 bits
+     */
+    function toInt56(int256 value) internal pure returns (int56 downcasted) {
+        downcasted = int56(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(56, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int48 from int256, reverting on
+     * overflow (when the input is less than smallest int48 or
+     * greater than largest int48).
+     *
+     * Counterpart to Solidity's `int48` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 48 bits
+     */
+    function toInt48(int256 value) internal pure returns (int48 downcasted) {
+        downcasted = int48(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(48, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int40 from int256, reverting on
+     * overflow (when the input is less than smallest int40 or
+     * greater than largest int40).
+     *
+     * Counterpart to Solidity's `int40` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 40 bits
+     */
+    function toInt40(int256 value) internal pure returns (int40 downcasted) {
+        downcasted = int40(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(40, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int32 from int256, reverting on
+     * overflow (when the input is less than smallest int32 or
+     * greater than largest int32).
+     *
+     * Counterpart to Solidity's `int32` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 32 bits
+     */
+    function toInt32(int256 value) internal pure returns (int32 downcasted) {
+        downcasted = int32(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(32, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int24 from int256, reverting on
+     * overflow (when the input is less than smallest int24 or
+     * greater than largest int24).
+     *
+     * Counterpart to Solidity's `int24` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 24 bits
+     */
+    function toInt24(int256 value) internal pure returns (int24 downcasted) {
+        downcasted = int24(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(24, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int16 from int256, reverting on
+     * overflow (when the input is less than smallest int16 or
+     * greater than largest int16).
+     *
+     * Counterpart to Solidity's `int16` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 16 bits
+     */
+    function toInt16(int256 value) internal pure returns (int16 downcasted) {
+        downcasted = int16(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(16, value);
+        }
+    }
+
+    /**
+     * @dev Returns the downcasted int8 from int256, reverting on
+     * overflow (when the input is less than smallest int8 or
+     * greater than largest int8).
+     *
+     * Counterpart to Solidity's `int8` operator.
+     *
+     * Requirements:
+     *
+     * - input must fit into 8 bits
+     */
+    function toInt8(int256 value) internal pure returns (int8 downcasted) {
+        downcasted = int8(value);
+        if (downcasted != value) {
+            revert SafeCastOverflowedIntDowncast(8, value);
+        }
+    }
+
+    /**
+     * @dev Converts an unsigned uint256 into a signed int256.
+     *
+     * Requirements:
+     *
+     * - input must be less than or equal to maxInt256.
+     */
+    function toInt256(uint256 value) internal pure returns (int256) {
+        // Note: Unsafe cast below is okay because `type(int256).max` is guaranteed to be positive
+        if (value > uint256(type(int256).max)) {
+            revert SafeCastOverflowedUintToInt(value);
+        }
+        return int256(value);
+    }
+
+    /**
+     * @dev Cast a boolean (false or true) to a uint256 (0 or 1) with no jump.
+     */
+    function toUint(bool b) internal pure returns (uint256 u) {
+        assembly ("memory-safe") {
+            u := iszero(iszero(b))
+        }
     }
 }
 
@@ -686,6 +1934,688 @@ abstract contract Ownable is Context {
         address oldOwner = _owner;
         _owner = newOwner;
         emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/utils/math/Math.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/math/Math.sol)
+
+/**
+ * @dev Standard math utilities missing in the Solidity language.
+ */
+library Math {
+    enum Rounding {
+        Floor, // Toward negative infinity
+        Ceil, // Toward positive infinity
+        Trunc, // Toward zero
+        Expand // Away from zero
+    }
+
+    /**
+     * @dev Returns the addition of two unsigned integers, with an success flag (no overflow).
+     */
+    function tryAdd(uint256 a, uint256 b) internal pure returns (bool success, uint256 result) {
+        unchecked {
+            uint256 c = a + b;
+            if (c < a) return (false, 0);
+            return (true, c);
+        }
+    }
+
+    /**
+     * @dev Returns the subtraction of two unsigned integers, with an success flag (no overflow).
+     */
+    function trySub(uint256 a, uint256 b) internal pure returns (bool success, uint256 result) {
+        unchecked {
+            if (b > a) return (false, 0);
+            return (true, a - b);
+        }
+    }
+
+    /**
+     * @dev Returns the multiplication of two unsigned integers, with an success flag (no overflow).
+     */
+    function tryMul(uint256 a, uint256 b) internal pure returns (bool success, uint256 result) {
+        unchecked {
+            // Gas optimization: this is cheaper than requiring 'a' not being zero, but the
+            // benefit is lost if 'b' is also tested.
+            // See: https://github.com/OpenZeppelin/openzeppelin-contracts/pull/522
+            if (a == 0) return (true, 0);
+            uint256 c = a * b;
+            if (c / a != b) return (false, 0);
+            return (true, c);
+        }
+    }
+
+    /**
+     * @dev Returns the division of two unsigned integers, with a success flag (no division by zero).
+     */
+    function tryDiv(uint256 a, uint256 b) internal pure returns (bool success, uint256 result) {
+        unchecked {
+            if (b == 0) return (false, 0);
+            return (true, a / b);
+        }
+    }
+
+    /**
+     * @dev Returns the remainder of dividing two unsigned integers, with a success flag (no division by zero).
+     */
+    function tryMod(uint256 a, uint256 b) internal pure returns (bool success, uint256 result) {
+        unchecked {
+            if (b == 0) return (false, 0);
+            return (true, a % b);
+        }
+    }
+
+    /**
+     * @dev Branchless ternary evaluation for `a ? b : c`. Gas costs are constant.
+     *
+     * IMPORTANT: This function may reduce bytecode size and consume less gas when used standalone.
+     * However, the compiler may optimize Solidity ternary operations (i.e. `a ? b : c`) to only compute
+     * one branch when needed, making this function more expensive.
+     */
+    function ternary(bool condition, uint256 a, uint256 b) internal pure returns (uint256) {
+        unchecked {
+            // branchless ternary works because:
+            // b ^ (a ^ b) == a
+            // b ^ 0 == b
+            return b ^ ((a ^ b) * SafeCast.toUint(condition));
+        }
+    }
+
+    /**
+     * @dev Returns the largest of two numbers.
+     */
+    function max(uint256 a, uint256 b) internal pure returns (uint256) {
+        return ternary(a > b, a, b);
+    }
+
+    /**
+     * @dev Returns the smallest of two numbers.
+     */
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return ternary(a < b, a, b);
+    }
+
+    /**
+     * @dev Returns the average of two numbers. The result is rounded towards
+     * zero.
+     */
+    function average(uint256 a, uint256 b) internal pure returns (uint256) {
+        // (a + b) / 2 can overflow.
+        return (a & b) + (a ^ b) / 2;
+    }
+
+    /**
+     * @dev Returns the ceiling of the division of two numbers.
+     *
+     * This differs from standard division with `/` in that it rounds towards infinity instead
+     * of rounding towards zero.
+     */
+    function ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (b == 0) {
+            // Guarantee the same behavior as in a regular Solidity division.
+            Panic.panic(Panic.DIVISION_BY_ZERO);
+        }
+
+        // The following calculation ensures accurate ceiling division without overflow.
+        // Since a is non-zero, (a - 1) / b will not overflow.
+        // The largest possible result occurs when (a - 1) / b is type(uint256).max,
+        // but the largest value we can obtain is type(uint256).max - 1, which happens
+        // when a = type(uint256).max and b = 1.
+        unchecked {
+            return SafeCast.toUint(a > 0) * ((a - 1) / b + 1);
+        }
+    }
+
+    /**
+     * @dev Calculates floor(x * y / denominator) with full precision. Throws if result overflows a uint256 or
+     * denominator == 0.
+     *
+     * Original credit to Remco Bloemen under MIT license (https://xn--2-umb.com/21/muldiv) with further edits by
+     * Uniswap Labs also under MIT license.
+     */
+    function mulDiv(uint256 x, uint256 y, uint256 denominator) internal pure returns (uint256 result) {
+        unchecked {
+            // 512-bit multiply [prod1 prod0] = x * y. Compute the product mod 2²⁵⁶ and mod 2²⁵⁶ - 1, then use
+            // the Chinese Remainder Theorem to reconstruct the 512 bit result. The result is stored in two 256
+            // variables such that product = prod1 * 2²⁵⁶ + prod0.
+            uint256 prod0 = x * y; // Least significant 256 bits of the product
+            uint256 prod1; // Most significant 256 bits of the product
+            assembly {
+                let mm := mulmod(x, y, not(0))
+                prod1 := sub(sub(mm, prod0), lt(mm, prod0))
+            }
+
+            // Handle non-overflow cases, 256 by 256 division.
+            if (prod1 == 0) {
+                // Solidity will revert if denominator == 0, unlike the div opcode on its own.
+                // The surrounding unchecked block does not change this fact.
+                // See https://docs.soliditylang.org/en/latest/control-structures.html#checked-or-unchecked-arithmetic.
+                return prod0 / denominator;
+            }
+
+            // Make sure the result is less than 2²⁵⁶. Also prevents denominator == 0.
+            if (denominator <= prod1) {
+                Panic.panic(ternary(denominator == 0, Panic.DIVISION_BY_ZERO, Panic.UNDER_OVERFLOW));
+            }
+
+            ///////////////////////////////////////////////
+            // 512 by 256 division.
+            ///////////////////////////////////////////////
+
+            // Make division exact by subtracting the remainder from [prod1 prod0].
+            uint256 remainder;
+            assembly {
+                // Compute remainder using mulmod.
+                remainder := mulmod(x, y, denominator)
+
+                // Subtract 256 bit number from 512 bit number.
+                prod1 := sub(prod1, gt(remainder, prod0))
+                prod0 := sub(prod0, remainder)
+            }
+
+            // Factor powers of two out of denominator and compute largest power of two divisor of denominator.
+            // Always >= 1. See https://cs.stackexchange.com/q/138556/92363.
+
+            uint256 twos = denominator & (0 - denominator);
+            assembly {
+                // Divide denominator by twos.
+                denominator := div(denominator, twos)
+
+                // Divide [prod1 prod0] by twos.
+                prod0 := div(prod0, twos)
+
+                // Flip twos such that it is 2²⁵⁶ / twos. If twos is zero, then it becomes one.
+                twos := add(div(sub(0, twos), twos), 1)
+            }
+
+            // Shift in bits from prod1 into prod0.
+            prod0 |= prod1 * twos;
+
+            // Invert denominator mod 2²⁵⁶. Now that denominator is an odd number, it has an inverse modulo 2²⁵⁶ such
+            // that denominator * inv ≡ 1 mod 2²⁵⁶. Compute the inverse by starting with a seed that is correct for
+            // four bits. That is, denominator * inv ≡ 1 mod 2⁴.
+            uint256 inverse = (3 * denominator) ^ 2;
+
+            // Use the Newton-Raphson iteration to improve the precision. Thanks to Hensel's lifting lemma, this also
+            // works in modular arithmetic, doubling the correct bits in each step.
+            inverse *= 2 - denominator * inverse; // inverse mod 2⁸
+            inverse *= 2 - denominator * inverse; // inverse mod 2¹⁶
+            inverse *= 2 - denominator * inverse; // inverse mod 2³²
+            inverse *= 2 - denominator * inverse; // inverse mod 2⁶⁴
+            inverse *= 2 - denominator * inverse; // inverse mod 2¹²⁸
+            inverse *= 2 - denominator * inverse; // inverse mod 2²⁵⁶
+
+            // Because the division is now exact we can divide by multiplying with the modular inverse of denominator.
+            // This will give us the correct result modulo 2²⁵⁶. Since the preconditions guarantee that the outcome is
+            // less than 2²⁵⁶, this is the final result. We don't need to compute the high bits of the result and prod1
+            // is no longer required.
+            result = prod0 * inverse;
+            return result;
+        }
+    }
+
+    /**
+     * @dev Calculates x * y / denominator with full precision, following the selected rounding direction.
+     */
+    function mulDiv(uint256 x, uint256 y, uint256 denominator, Rounding rounding) internal pure returns (uint256) {
+        return mulDiv(x, y, denominator) + SafeCast.toUint(unsignedRoundsUp(rounding) && mulmod(x, y, denominator) > 0);
+    }
+
+    /**
+     * @dev Calculate the modular multiplicative inverse of a number in Z/nZ.
+     *
+     * If n is a prime, then Z/nZ is a field. In that case all elements are inversible, except 0.
+     * If n is not a prime, then Z/nZ is not a field, and some elements might not be inversible.
+     *
+     * If the input value is not inversible, 0 is returned.
+     *
+     * NOTE: If you know for sure that n is (big) a prime, it may be cheaper to use Fermat's little theorem and get the
+     * inverse using `Math.modExp(a, n - 2, n)`. See {invModPrime}.
+     */
+    function invMod(uint256 a, uint256 n) internal pure returns (uint256) {
+        unchecked {
+            if (n == 0) return 0;
+
+            // The inverse modulo is calculated using the Extended Euclidean Algorithm (iterative version)
+            // Used to compute integers x and y such that: ax + ny = gcd(a, n).
+            // When the gcd is 1, then the inverse of a modulo n exists and it's x.
+            // ax + ny = 1
+            // ax = 1 + (-y)n
+            // ax ≡ 1 (mod n) # x is the inverse of a modulo n
+
+            // If the remainder is 0 the gcd is n right away.
+            uint256 remainder = a % n;
+            uint256 gcd = n;
+
+            // Therefore the initial coefficients are:
+            // ax + ny = gcd(a, n) = n
+            // 0a + 1n = n
+            int256 x = 0;
+            int256 y = 1;
+
+            while (remainder != 0) {
+                uint256 quotient = gcd / remainder;
+
+                (gcd, remainder) = (
+                    // The old remainder is the next gcd to try.
+                    remainder,
+                    // Compute the next remainder.
+                    // Can't overflow given that (a % gcd) * (gcd // (a % gcd)) <= gcd
+                    // where gcd is at most n (capped to type(uint256).max)
+                    gcd - remainder * quotient
+                );
+
+                (x, y) = (
+                    // Increment the coefficient of a.
+                    y,
+                    // Decrement the coefficient of n.
+                    // Can overflow, but the result is casted to uint256 so that the
+                    // next value of y is "wrapped around" to a value between 0 and n - 1.
+                    x - y * int256(quotient)
+                );
+            }
+
+            if (gcd != 1) return 0; // No inverse exists.
+            return ternary(x < 0, n - uint256(-x), uint256(x)); // Wrap the result if it's negative.
+        }
+    }
+
+    /**
+     * @dev Variant of {invMod}. More efficient, but only works if `p` is known to be a prime greater than `2`.
+     *
+     * From https://en.wikipedia.org/wiki/Fermat%27s_little_theorem[Fermat's little theorem], we know that if p is
+     * prime, then `a**(p-1) ≡ 1 mod p`. As a consequence, we have `a * a**(p-2) ≡ 1 mod p`, which means that
+     * `a**(p-2)` is the modular multiplicative inverse of a in Fp.
+     *
+     * NOTE: this function does NOT check that `p` is a prime greater than `2`.
+     */
+    function invModPrime(uint256 a, uint256 p) internal view returns (uint256) {
+        unchecked {
+            return Math.modExp(a, p - 2, p);
+        }
+    }
+
+    /**
+     * @dev Returns the modular exponentiation of the specified base, exponent and modulus (b ** e % m)
+     *
+     * Requirements:
+     * - modulus can't be zero
+     * - underlying staticcall to precompile must succeed
+     *
+     * IMPORTANT: The result is only valid if the underlying call succeeds. When using this function, make
+     * sure the chain you're using it on supports the precompiled contract for modular exponentiation
+     * at address 0x05 as specified in https://eips.ethereum.org/EIPS/eip-198[EIP-198]. Otherwise,
+     * the underlying function will succeed given the lack of a revert, but the result may be incorrectly
+     * interpreted as 0.
+     */
+    function modExp(uint256 b, uint256 e, uint256 m) internal view returns (uint256) {
+        (bool success, uint256 result) = tryModExp(b, e, m);
+        if (!success) {
+            Panic.panic(Panic.DIVISION_BY_ZERO);
+        }
+        return result;
+    }
+
+    /**
+     * @dev Returns the modular exponentiation of the specified base, exponent and modulus (b ** e % m).
+     * It includes a success flag indicating if the operation succeeded. Operation will be marked as failed if trying
+     * to operate modulo 0 or if the underlying precompile reverted.
+     *
+     * IMPORTANT: The result is only valid if the success flag is true. When using this function, make sure the chain
+     * you're using it on supports the precompiled contract for modular exponentiation at address 0x05 as specified in
+     * https://eips.ethereum.org/EIPS/eip-198[EIP-198]. Otherwise, the underlying function will succeed given the lack
+     * of a revert, but the result may be incorrectly interpreted as 0.
+     */
+    function tryModExp(uint256 b, uint256 e, uint256 m) internal view returns (bool success, uint256 result) {
+        if (m == 0) return (false, 0);
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            // | Offset    | Content    | Content (Hex)                                                      |
+            // |-----------|------------|--------------------------------------------------------------------|
+            // | 0x00:0x1f | size of b  | 0x0000000000000000000000000000000000000000000000000000000000000020 |
+            // | 0x20:0x3f | size of e  | 0x0000000000000000000000000000000000000000000000000000000000000020 |
+            // | 0x40:0x5f | size of m  | 0x0000000000000000000000000000000000000000000000000000000000000020 |
+            // | 0x60:0x7f | value of b | 0x<.............................................................b> |
+            // | 0x80:0x9f | value of e | 0x<.............................................................e> |
+            // | 0xa0:0xbf | value of m | 0x<.............................................................m> |
+            mstore(ptr, 0x20)
+            mstore(add(ptr, 0x20), 0x20)
+            mstore(add(ptr, 0x40), 0x20)
+            mstore(add(ptr, 0x60), b)
+            mstore(add(ptr, 0x80), e)
+            mstore(add(ptr, 0xa0), m)
+
+            // Given the result < m, it's guaranteed to fit in 32 bytes,
+            // so we can use the memory scratch space located at offset 0.
+            success := staticcall(gas(), 0x05, ptr, 0xc0, 0x00, 0x20)
+            result := mload(0x00)
+        }
+    }
+
+    /**
+     * @dev Variant of {modExp} that supports inputs of arbitrary length.
+     */
+    function modExp(bytes memory b, bytes memory e, bytes memory m) internal view returns (bytes memory) {
+        (bool success, bytes memory result) = tryModExp(b, e, m);
+        if (!success) {
+            Panic.panic(Panic.DIVISION_BY_ZERO);
+        }
+        return result;
+    }
+
+    /**
+     * @dev Variant of {tryModExp} that supports inputs of arbitrary length.
+     */
+    function tryModExp(
+        bytes memory b,
+        bytes memory e,
+        bytes memory m
+    ) internal view returns (bool success, bytes memory result) {
+        if (_zeroBytes(m)) return (false, new bytes(0));
+
+        uint256 mLen = m.length;
+
+        // Encode call args in result and move the free memory pointer
+        result = abi.encodePacked(b.length, e.length, mLen, b, e, m);
+
+        assembly ("memory-safe") {
+            let dataPtr := add(result, 0x20)
+            // Write result on top of args to avoid allocating extra memory.
+            success := staticcall(gas(), 0x05, dataPtr, mload(result), dataPtr, mLen)
+            // Overwrite the length.
+            // result.length > returndatasize() is guaranteed because returndatasize() == m.length
+            mstore(result, mLen)
+            // Set the memory pointer after the returned data.
+            mstore(0x40, add(dataPtr, mLen))
+        }
+    }
+
+    /**
+     * @dev Returns whether the provided byte array is zero.
+     */
+    function _zeroBytes(bytes memory byteArray) private pure returns (bool) {
+        for (uint256 i = 0; i < byteArray.length; ++i) {
+            if (byteArray[i] != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @dev Returns the square root of a number. If the number is not a perfect square, the value is rounded
+     * towards zero.
+     *
+     * This method is based on Newton's method for computing square roots; the algorithm is restricted to only
+     * using integer operations.
+     */
+    function sqrt(uint256 a) internal pure returns (uint256) {
+        unchecked {
+            // Take care of easy edge cases when a == 0 or a == 1
+            if (a <= 1) {
+                return a;
+            }
+
+            // In this function, we use Newton's method to get a root of `f(x) := x² - a`. It involves building a
+            // sequence x_n that converges toward sqrt(a). For each iteration x_n, we also define the error between
+            // the current value as `ε_n = | x_n - sqrt(a) |`.
+            //
+            // For our first estimation, we consider `e` the smallest power of 2 which is bigger than the square root
+            // of the target. (i.e. `2**(e-1) ≤ sqrt(a) < 2**e`). We know that `e ≤ 128` because `(2¹²⁸)² = 2²⁵⁶` is
+            // bigger than any uint256.
+            //
+            // By noticing that
+            // `2**(e-1) ≤ sqrt(a) < 2**e → (2**(e-1))² ≤ a < (2**e)² → 2**(2*e-2) ≤ a < 2**(2*e)`
+            // we can deduce that `e - 1` is `log2(a) / 2`. We can thus compute `x_n = 2**(e-1)` using a method similar
+            // to the msb function.
+            uint256 aa = a;
+            uint256 xn = 1;
+
+            if (aa >= (1 << 128)) {
+                aa >>= 128;
+                xn <<= 64;
+            }
+            if (aa >= (1 << 64)) {
+                aa >>= 64;
+                xn <<= 32;
+            }
+            if (aa >= (1 << 32)) {
+                aa >>= 32;
+                xn <<= 16;
+            }
+            if (aa >= (1 << 16)) {
+                aa >>= 16;
+                xn <<= 8;
+            }
+            if (aa >= (1 << 8)) {
+                aa >>= 8;
+                xn <<= 4;
+            }
+            if (aa >= (1 << 4)) {
+                aa >>= 4;
+                xn <<= 2;
+            }
+            if (aa >= (1 << 2)) {
+                xn <<= 1;
+            }
+
+            // We now have x_n such that `x_n = 2**(e-1) ≤ sqrt(a) < 2**e = 2 * x_n`. This implies ε_n ≤ 2**(e-1).
+            //
+            // We can refine our estimation by noticing that the middle of that interval minimizes the error.
+            // If we move x_n to equal 2**(e-1) + 2**(e-2), then we reduce the error to ε_n ≤ 2**(e-2).
+            // This is going to be our x_0 (and ε_0)
+            xn = (3 * xn) >> 1; // ε_0 := | x_0 - sqrt(a) | ≤ 2**(e-2)
+
+            // From here, Newton's method give us:
+            // x_{n+1} = (x_n + a / x_n) / 2
+            //
+            // One should note that:
+            // x_{n+1}² - a = ((x_n + a / x_n) / 2)² - a
+            //              = ((x_n² + a) / (2 * x_n))² - a
+            //              = (x_n⁴ + 2 * a * x_n² + a²) / (4 * x_n²) - a
+            //              = (x_n⁴ + 2 * a * x_n² + a² - 4 * a * x_n²) / (4 * x_n²)
+            //              = (x_n⁴ - 2 * a * x_n² + a²) / (4 * x_n²)
+            //              = (x_n² - a)² / (2 * x_n)²
+            //              = ((x_n² - a) / (2 * x_n))²
+            //              ≥ 0
+            // Which proves that for all n ≥ 1, sqrt(a) ≤ x_n
+            //
+            // This gives us the proof of quadratic convergence of the sequence:
+            // ε_{n+1} = | x_{n+1} - sqrt(a) |
+            //         = | (x_n + a / x_n) / 2 - sqrt(a) |
+            //         = | (x_n² + a - 2*x_n*sqrt(a)) / (2 * x_n) |
+            //         = | (x_n - sqrt(a))² / (2 * x_n) |
+            //         = | ε_n² / (2 * x_n) |
+            //         = ε_n² / | (2 * x_n) |
+            //
+            // For the first iteration, we have a special case where x_0 is known:
+            // ε_1 = ε_0² / | (2 * x_0) |
+            //     ≤ (2**(e-2))² / (2 * (2**(e-1) + 2**(e-2)))
+            //     ≤ 2**(2*e-4) / (3 * 2**(e-1))
+            //     ≤ 2**(e-3) / 3
+            //     ≤ 2**(e-3-log2(3))
+            //     ≤ 2**(e-4.5)
+            //
+            // For the following iterations, we use the fact that, 2**(e-1) ≤ sqrt(a) ≤ x_n:
+            // ε_{n+1} = ε_n² / | (2 * x_n) |
+            //         ≤ (2**(e-k))² / (2 * 2**(e-1))
+            //         ≤ 2**(2*e-2*k) / 2**e
+            //         ≤ 2**(e-2*k)
+            xn = (xn + a / xn) >> 1; // ε_1 := | x_1 - sqrt(a) | ≤ 2**(e-4.5)  -- special case, see above
+            xn = (xn + a / xn) >> 1; // ε_2 := | x_2 - sqrt(a) | ≤ 2**(e-9)    -- general case with k = 4.5
+            xn = (xn + a / xn) >> 1; // ε_3 := | x_3 - sqrt(a) | ≤ 2**(e-18)   -- general case with k = 9
+            xn = (xn + a / xn) >> 1; // ε_4 := | x_4 - sqrt(a) | ≤ 2**(e-36)   -- general case with k = 18
+            xn = (xn + a / xn) >> 1; // ε_5 := | x_5 - sqrt(a) | ≤ 2**(e-72)   -- general case with k = 36
+            xn = (xn + a / xn) >> 1; // ε_6 := | x_6 - sqrt(a) | ≤ 2**(e-144)  -- general case with k = 72
+
+            // Because e ≤ 128 (as discussed during the first estimation phase), we know have reached a precision
+            // ε_6 ≤ 2**(e-144) < 1. Given we're operating on integers, then we can ensure that xn is now either
+            // sqrt(a) or sqrt(a) + 1.
+            return xn - SafeCast.toUint(xn > a / xn);
+        }
+    }
+
+    /**
+     * @dev Calculates sqrt(a), following the selected rounding direction.
+     */
+    function sqrt(uint256 a, Rounding rounding) internal pure returns (uint256) {
+        unchecked {
+            uint256 result = sqrt(a);
+            return result + SafeCast.toUint(unsignedRoundsUp(rounding) && result * result < a);
+        }
+    }
+
+    /**
+     * @dev Return the log in base 2 of a positive value rounded towards zero.
+     * Returns 0 if given 0.
+     */
+    function log2(uint256 value) internal pure returns (uint256) {
+        uint256 result = 0;
+        uint256 exp;
+        unchecked {
+            exp = 128 * SafeCast.toUint(value > (1 << 128) - 1);
+            value >>= exp;
+            result += exp;
+
+            exp = 64 * SafeCast.toUint(value > (1 << 64) - 1);
+            value >>= exp;
+            result += exp;
+
+            exp = 32 * SafeCast.toUint(value > (1 << 32) - 1);
+            value >>= exp;
+            result += exp;
+
+            exp = 16 * SafeCast.toUint(value > (1 << 16) - 1);
+            value >>= exp;
+            result += exp;
+
+            exp = 8 * SafeCast.toUint(value > (1 << 8) - 1);
+            value >>= exp;
+            result += exp;
+
+            exp = 4 * SafeCast.toUint(value > (1 << 4) - 1);
+            value >>= exp;
+            result += exp;
+
+            exp = 2 * SafeCast.toUint(value > (1 << 2) - 1);
+            value >>= exp;
+            result += exp;
+
+            result += SafeCast.toUint(value > 1);
+        }
+        return result;
+    }
+
+    /**
+     * @dev Return the log in base 2, following the selected rounding direction, of a positive value.
+     * Returns 0 if given 0.
+     */
+    function log2(uint256 value, Rounding rounding) internal pure returns (uint256) {
+        unchecked {
+            uint256 result = log2(value);
+            return result + SafeCast.toUint(unsignedRoundsUp(rounding) && 1 << result < value);
+        }
+    }
+
+    /**
+     * @dev Return the log in base 10 of a positive value rounded towards zero.
+     * Returns 0 if given 0.
+     */
+    function log10(uint256 value) internal pure returns (uint256) {
+        uint256 result = 0;
+        unchecked {
+            if (value >= 10 ** 64) {
+                value /= 10 ** 64;
+                result += 64;
+            }
+            if (value >= 10 ** 32) {
+                value /= 10 ** 32;
+                result += 32;
+            }
+            if (value >= 10 ** 16) {
+                value /= 10 ** 16;
+                result += 16;
+            }
+            if (value >= 10 ** 8) {
+                value /= 10 ** 8;
+                result += 8;
+            }
+            if (value >= 10 ** 4) {
+                value /= 10 ** 4;
+                result += 4;
+            }
+            if (value >= 10 ** 2) {
+                value /= 10 ** 2;
+                result += 2;
+            }
+            if (value >= 10 ** 1) {
+                result += 1;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * @dev Return the log in base 10, following the selected rounding direction, of a positive value.
+     * Returns 0 if given 0.
+     */
+    function log10(uint256 value, Rounding rounding) internal pure returns (uint256) {
+        unchecked {
+            uint256 result = log10(value);
+            return result + SafeCast.toUint(unsignedRoundsUp(rounding) && 10 ** result < value);
+        }
+    }
+
+    /**
+     * @dev Return the log in base 256 of a positive value rounded towards zero.
+     * Returns 0 if given 0.
+     *
+     * Adding one to the result gives the number of pairs of hex symbols needed to represent `value` as a hex string.
+     */
+    function log256(uint256 value) internal pure returns (uint256) {
+        uint256 result = 0;
+        uint256 isGt;
+        unchecked {
+            isGt = SafeCast.toUint(value > (1 << 128) - 1);
+            value >>= isGt * 128;
+            result += isGt * 16;
+
+            isGt = SafeCast.toUint(value > (1 << 64) - 1);
+            value >>= isGt * 64;
+            result += isGt * 8;
+
+            isGt = SafeCast.toUint(value > (1 << 32) - 1);
+            value >>= isGt * 32;
+            result += isGt * 4;
+
+            isGt = SafeCast.toUint(value > (1 << 16) - 1);
+            value >>= isGt * 16;
+            result += isGt * 2;
+
+            result += SafeCast.toUint(value > (1 << 8) - 1);
+        }
+        return result;
+    }
+
+    /**
+     * @dev Return the log in base 256, following the selected rounding direction, of a positive value.
+     * Returns 0 if given 0.
+     */
+    function log256(uint256 value, Rounding rounding) internal pure returns (uint256) {
+        unchecked {
+            uint256 result = log256(value);
+            return result + SafeCast.toUint(unsignedRoundsUp(rounding) && 1 << (result << 3) < value);
+        }
+    }
+
+    /**
+     * @dev Returns whether a provided rounding mode is considered rounding up for unsigned integers.
+     */
+    function unsignedRoundsUp(Rounding rounding) internal pure returns (bool) {
+        return uint8(rounding) % 2 == 1;
     }
 }
 
@@ -1202,24 +3132,36 @@ abstract contract ConversionRoutes {
         Route storage r = _routes[token];
         if (!r.enabled) revert NoRoute(token);
 
-        _requireSequencerUp();
-
-        (, int256 answer,, uint256 updatedAt,) = IAggregatorV3(r.feed).latestRoundData();
-        if (answer <= 0) revert BadFeedAnswer();
-        if (r.maxFeedAge != 0 && block.timestamp > updatedAt + r.maxFeedAge) {
-            revert StaleFeed(updatedAt, r.maxFeedAge);
-        }
-        _requireInBand(r.feed, answer);
+        uint256 answer = _readFeed(r.feed, r.maxFeedAge);
 
         // amount (tokenDecimals) x USD per token -> quote units, then the slippage haircut.
-        uint256 gross =
-            (amount * uint256(answer) * (10 ** quoteDecimals)) / (10 ** r.feedDecimals) / (10 ** r.tokenDecimals);
+        uint256 gross = (amount * answer * (10 ** quoteDecimals)) / (10 ** r.feedDecimals) / (10 ** r.tokenDecimals);
         return (gross * (BPS - r.maxSlippageBps)) / BPS;
     }
 
     /* ------------------------------------------------------------------ */
     /*                            INTERNALS                                 */
     /* ------------------------------------------------------------------ */
+
+    /// @notice Read a Chainlink answer with every check this contract insists on: the
+    ///         sequencer is up and has been for the grace period, the answer is positive,
+    ///         it is not older than `maxAge`, and it is not pinned at the aggregator's
+    ///         circuit-breaker band.
+    /// @dev ONE implementation, for the same reason there is one `_convert`. {POLTreasury}
+    ///      prices its POL assets through this to bound LP execution (H-02), and `minOutFor`
+    ///      prices swaps through it. If a future change makes a feed check stricter, both
+    ///      inherit it; there is no second copy to forget.
+    /// @return answer The raw feed answer. Its decimals are the caller's cached `feedDecimals`.
+    function _readFeed(address feed, uint64 maxAge) internal view returns (uint256 answer) {
+        _requireSequencerUp();
+
+        (, int256 raw,, uint256 updatedAt,) = IAggregatorV3(feed).latestRoundData();
+        if (raw <= 0) revert BadFeedAnswer();
+        if (maxAge != 0 && block.timestamp > updatedAt + maxAge) revert StaleFeed(updatedAt, maxAge);
+        _requireInBand(feed, raw);
+
+        return uint256(raw);
+    }
 
     /// @param callerMinOut A floor the caller insists on, on top of the Chainlink one. Zero
     ///        means "no opinion". SEC-POT-002: `convert` is permissionless so anyone can push
@@ -1420,6 +3362,36 @@ interface IDecimals {
 ///         pairs them into Aerodrome Slipstream positions, and routes the income those
 ///         positions throw off back to the FeeSplitter, where it re-enters the Pot.
 ///
+/// @dev THE MANAGER IS A HOT KEY, AND THIS CONTRACT IS WRITTEN AS IF IT IS ALREADY LEAKED.
+///
+///      `manager` exists so the Bankr optimizer can move ranges without holding the keys to
+///      configuration. That is a session key on a server, so the only useful security claim
+///      is one that survives its loss. External review (TRIAGE batch 6, H-01/H-02) showed the
+///      earlier version did not: the per-operation allowance work was real but it hardened
+///      the wrong layer. Allowances were never the vector. **The vector was the parameters.**
+///      A leaked key could stake a position into a contract of its own choosing, or mint the
+///      whole USDC balance against a token it had just printed, with correctly-scoped,
+///      promptly-cleared approvals throughout.
+///
+///      So every `onlyManager` entry point is now written to be safe for ANY arguments:
+///
+///        1. TOKENS ARE ALLOWLISTED. A position is always the quote token paired with a
+///           registered POL asset. There is no path that touches an arbitrary token.
+///        2. POOLS ARE DERIVED, NOT SUPPLIED. The pool comes from the Slipstream factory for
+///           that exact pair and tick spacing, and `sqrtPriceX96` is forced to zero, so a
+///           caller can neither name a pool nor create one at a price of their choosing.
+///        3. GAUGES ARE VERIFIED AGAINST THE VOTER. `voter.gauges(pool)` is the only thing
+///           that makes an address a gauge, with the pool derived from the position itself.
+///        4. EXECUTION IS BOUNDED BY CHAINLINK. The pool's own price must sit inside a band
+///           around the POL asset's feed before liquidity moves in either direction. That
+///           band, not the caller's minimums, is what bounds the value that moves; blank
+///           minimums are refused on top of it as operator hygiene.
+///
+///      What a leaked manager key can still do is move liquidity between honest ranges of
+///      honest pools at honest prices. It cannot send value anywhere, because no manager
+///      function has a destination argument at all. That is the claim, and it is enforced
+///      here rather than by key hygiene.
+///
 /// @dev THE RESCUE RULE IS DIFFERENT HERE, ON PURPOSE.
 ///      In ChipRewards, `recoverExcess` protects a computed sum of user credits, because
 ///      that contract holds tokens on behalf of named claimants. POLTreasury does not: it
@@ -1429,7 +3401,7 @@ interface IDecimals {
 ///        - the quote token,
 ///        - any registered POL asset,
 ///        - any registered income token,
-///        - any position NFT.
+///        - the position manager itself, and so no position NFT.
 ///      It can only move tokens the treasury does not recognise — stray airdrops. Anything
 ///      the protocol actually owns leaves only through `forwardIncome` (to the splitter) or
 ///      a manager action on a position. There is no path that sends POL assets to a wallet.
@@ -1441,8 +3413,20 @@ interface IDecimals {
 contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, ConversionRoutes {
     using SafeERC20 for IERC20;
 
+    /// @notice Widest band a POL asset may be registered with: 10%.
+    uint32 public constant MAX_DEVIATION_BPS = 1_000;
+
     /// @notice Aerodrome Slipstream position manager.
     INonfungiblePositionManager public immutable positionManager;
+
+    /// @notice The concentrated-liquidity factory the position manager itself reports.
+    /// @dev Read from `positionManager.factory()` at construction rather than passed in, so
+    ///      the pool check can never be pointed at a factory that disagrees with the manager
+    ///      the positions actually live in.
+    address public immutable positionFactory;
+
+    /// @notice Aerodrome's Voter. The only authority on which gauge belongs to which pool.
+    IAerodromeVoter public immutable voter;
 
     /// @notice Where POL income is sent. The FeeSplitter, which then feeds the Pot.
     address public feeSplitter;
@@ -1453,8 +3437,21 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     /// @notice ChipRewards, the only contract allowed to record compound credits.
     address public rewards;
 
-    /// @notice Tokens this treasury deliberately holds as POL. Never rescuable.
-    mapping(address token => bool) public isPolAsset;
+    /// @notice A token this treasury deliberately holds as POL, and the feed that prices it.
+    /// @dev The feed is MANDATORY. An optional price check that silently does nothing when
+    ///      the feed was forgotten is exactly the shape of guard this repo has already been
+    ///      bitten by once (the `setCustodian` trap in LAUNCH_CONFIG). A POL asset without a
+    ///      price is one no LP operation could bound, so it cannot be registered at all.
+    struct PolAsset {
+        bool registered;
+        address feed; // Chainlink <asset>/USD
+        uint8 tokenDecimals; // cached
+        uint8 feedDecimals; // cached
+        uint32 maxDeviationBps; // how far the pool price may sit from the feed
+        uint64 maxFeedAge; // reject a feed older than this. 0 disables the check
+    }
+
+    mapping(address token => PolAsset) internal _polAssets;
 
     /// @notice Tokens that count as income and get forwarded to the splitter (AERO,
     ///         collected fees). Never rescuable.
@@ -1464,6 +3461,9 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     uint256[] public positionIds;
     mapping(uint256 tokenId => bool) public holdsPosition;
 
+    /// @notice Which gauge a position is staked in, if any. Set only by `stakePosition`.
+    mapping(uint256 tokenId => address) public stakedIn;
+
     /// @notice Compound-share ledger. USD value each holder has routed into POL.
     mapping(address owner => uint256) public compoundShares;
     uint256 public totalCompoundShares;
@@ -1471,9 +3471,12 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     event ManagerUpdated(address indexed previousManager, address indexed newManager);
     event FeeSplitterUpdated(address indexed previousSplitter, address indexed newSplitter);
     event RewardsUpdated(address indexed previousRewards, address indexed newRewards);
-    event PolAssetSet(address indexed token, bool isPol);
+    event PolAssetSet(address indexed token, address feed, uint32 maxDeviationBps, uint64 maxFeedAge);
+    event PolAssetRemoved(address indexed token);
     event IncomeTokenSet(address indexed token, bool isIncome);
     event PositionMinted(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
+    event PositionRegistered(uint256 indexed tokenId);
+    event PositionPruned(uint256 indexed tokenId);
     event LiquidityIncreased(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
     event LiquidityDecreased(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
     event FeesCollected(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
@@ -1490,19 +3493,48 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     error NothingToForward(address token);
     error UnknownPosition(uint256 tokenId);
     error NothingToRecover(address token);
+    error BadConfig();
+
+    /// @notice H-01. The address is not the gauge Aerodrome's voter names for this pool.
+    error GaugeNotCanonical(address gauge);
+    /// @notice H-01. The gauge did not take custody, so a live approval would have been left.
+    error GaugeDidNotCustody(address gauge);
+    /// @notice H-02(a). A token in the pair is not a registered POL asset.
+    error TokenNotPolAsset(address token);
+    /// @notice H-02(a). Every POL position is quote-paired; neither side was the quote token.
+    error NotQuotePaired();
+    /// @notice H-02(b). The Slipstream factory has no pool for that pair and tick spacing.
+    error PoolNotCanonical(address pool);
+    /// @notice H-02(c). The pool's price is outside the band around the POL asset's feed.
+    error PoolPriceOffMark(uint256 poolPrice, uint256 markPrice);
+    /// @notice H-02(c). The pool would not report a price at all.
+    error PoolPriceUnavailable(address pool);
+    /// @notice H-02(c)/(d). Minimums were blank or looser than the configured bound.
+    error SlippageUnbounded();
+    /// @notice M-02. Income tokens must be disjoint from the quote token and POL assets.
+    error TokenNotDisjoint(address token);
+    /// @notice M-03. The position is still held here, or still staked, so it cannot be pruned.
+    error PositionStillHeld(uint256 tokenId);
 
     constructor(
         address multisig,
         address quoteToken_,
         address positionManager_,
         address feeSplitter_,
-        address uniswapV3Factory_
+        address uniswapV3Factory_,
+        address voter_
     ) Ownable(multisig) ConversionRoutes(quoteToken_, uniswapV3Factory_) {
         if (
             multisig == address(0) || quoteToken_ == address(0) || positionManager_ == address(0)
-                || feeSplitter_ == address(0)
+                || feeSplitter_ == address(0) || voter_ == address(0)
         ) revert ZeroAddress();
         positionManager = INonfungiblePositionManager(positionManager_);
+        voter = IAerodromeVoter(voter_);
+
+        address f = INonfungiblePositionManager(positionManager_).factory();
+        if (f == address(0)) revert ZeroAddress();
+        positionFactory = f;
+
         feeSplitter = feeSplitter_;
         emit FeeSplitterUpdated(address(0), feeSplitter_);
     }
@@ -1534,16 +3566,52 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
         rewards = newRewards;
     }
 
-    /// @notice Mark a token as POL. Protected from the rescue from then on.
-    function setPolAsset(address token, bool isPol) external onlyOwner {
-        if (token == address(0)) revert ZeroAddress();
-        isPolAsset[token] = isPol;
-        emit PolAssetSet(token, isPol);
+    /// @notice Register a token as POL, with the feed that bounds every LP operation on it.
+    /// @dev Registration is what makes an asset usable in `mintPosition` at all, so this is
+    ///      the whole of the H-02(a) allowlist. Re-registering an existing asset updates its
+    ///      feed and band.
+    function setPolAsset(address token, address feed, uint32 maxDeviationBps, uint64 maxFeedAge) external onlyOwner {
+        if (token == address(0) || feed == address(0)) revert ZeroAddress();
+        if (token == quoteToken) revert TokenNotDisjoint(token);
+        if (isIncomeToken[token]) revert TokenNotDisjoint(token); // M-02
+        if (maxDeviationBps == 0 || maxDeviationBps > MAX_DEVIATION_BPS) revert BadConfig();
+
+        uint8 feedDecimals = IAggregatorV3(feed).decimals();
+        if (feedDecimals == 0 || feedDecimals > 18) revert BadConfig();
+
+        _polAssets[token] = PolAsset({
+            registered: true,
+            feed: feed,
+            tokenDecimals: _probeDecimals(token),
+            feedDecimals: feedDecimals,
+            maxDeviationBps: maxDeviationBps,
+            maxFeedAge: maxFeedAge
+        });
+        emit PolAssetSet(token, feed, maxDeviationBps, maxFeedAge);
+    }
+
+    /// @notice Stop treating a token as POL. It stays protected from the rescue only while
+    ///         registered, so this is a deliberate two-consequence action.
+    /// @dev There is no on-chain enumeration of POL assets: nothing in this contract iterates
+    ///      them, and the array plus its removal loop cost more code size than the repo's
+    ///      24,000-byte budget had to spare. `PolAssetSet` and `PolAssetRemoved` carry the
+    ///      full history, so the set is reconstructible from logs.
+    function removePolAsset(address token) external onlyOwner {
+        if (!_polAssets[token].registered) revert TokenNotPolAsset(token);
+        delete _polAssets[token];
+        emit PolAssetRemoved(token);
     }
 
     /// @notice Mark a token as income, so `forwardIncome` will push it to the splitter.
+    /// @dev M-02. `forwardIncome` sends the FULL balance of an income token to the splitter,
+    ///      so an income token that was also a POL asset or the quote token would turn a
+    ///      permissionless function into a drain of pairing inventory. The two sets are kept
+    ///      disjoint here, in both directions — see also `setPolAsset`.
     function setIncomeToken(address token, bool isIncome) external onlyOwner {
         if (token == address(0)) revert ZeroAddress();
+        if (isIncome) {
+            if (token == quoteToken || _polAssets[token].registered) revert TokenNotDisjoint(token);
+        }
         isIncomeToken[token] = isIncome;
         emit IncomeTokenSet(token, isIncome);
     }
@@ -1560,6 +3628,22 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     function convert(address token) external nonReentrant returns (uint256 amountIn, uint256 quoteOut) {
         if (!_routes[token].enabled) revert NoRoute(token);
         return _convert(token, 0);
+    }
+
+    /// @notice Convert with a floor of the caller's own, on top of the Chainlink one.
+    /// @dev M-01, and the call that finally makes SEC-POT-002 reachable. The keeper-floor
+    ///      defence was built into `_convert` in batch 3, but on this contract the only
+    ///      caller passed a hardcoded zero — so the parameter existed and the defence did
+    ///      not. A keeper holding a real quote can now refuse a worse fill. The floor may
+    ///      only be RAISED: `_convert` takes the maximum of this and the Chainlink minimum,
+    ///      so a caller can tighten the bound and never widen it.
+    function convert(address token, uint256 callerMinOut)
+        external
+        nonReentrant
+        returns (uint256 amountIn, uint256 quoteOut)
+    {
+        if (!_routes[token].enabled) revert NoRoute(token);
+        return _convert(token, callerMinOut);
     }
 
     /// @notice Set the wrapped-native token so native ETH can be converted. Multisig only.
@@ -1587,51 +3671,90 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     }
 
     /* ------------------------------------------------------------------ */
-    /*                             POSITIONS                                */
+    /*                               VIEWS                                  */
     /* ------------------------------------------------------------------ */
 
     function positionCount() external view returns (uint256) {
         return positionIds.length;
     }
 
+    function isPolAsset(address token) public view returns (bool) {
+        return _polAssets[token].registered;
+    }
+
+    function polAssetOf(address token) external view returns (PolAsset memory) {
+        return _polAssets[token];
+    }
+
+    /// @notice The gauge Aerodrome names for a position's pool. Zero if the pool has none.
+    function canonicalGaugeOf(uint256 tokenId) external view returns (address) {
+        (address pool,,) = _positionPool(tokenId);
+        return voter.gauges(pool);
+    }
+
+    /// @notice Quote-token value of one whole `asset` at its Chainlink mark, and at `pool`.
+    /// @dev Exposed so an operator can see why an operation was refused rather than guessing.
+    function markAndPoolPrice(address asset, address pool) external view returns (uint256 mark, uint256 poolPrice) {
+        PolAsset storage a = _polAssets[asset];
+        if (!a.registered) revert TokenNotPolAsset(asset);
+        mark = (_readFeed(a.feed, a.maxFeedAge) * (10 ** quoteDecimals)) / (10 ** a.feedDecimals);
+        poolPrice = _poolQuotePerAsset(pool, asset, a.tokenDecimals);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                             POSITIONS                                */
+    /* ------------------------------------------------------------------ */
+
     /// @notice Open a new Slipstream position. Manager or multisig.
-    /// @dev Approvals are set to the exact amounts and cleared afterwards, so a stale
-    ///      allowance can never be left sitting on the position manager.
+    /// @dev H-02. The caller chooses the range and the size. It does not choose the tokens,
+    ///      the pool, the pool's price, or where the NFT lands. `sqrtPriceX96` is forced to
+    ///      zero because that field exists only to CREATE and initialise a pool, and this
+    ///      function may only add liquidity to one that already exists and already prices
+    ///      correctly.
     function mintPosition(INonfungiblePositionManager.MintParams calldata params)
         external
         onlyManager
         nonReentrant
         returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)
     {
+        address asset = _requireQuotePaired(params.token0, params.token1);
+        address pool = _requireCanonicalPool(params.token0, params.token1, params.tickSpacing);
+        _requirePoolOnMark(pool, asset);
+        _requireStatedMins(params.amount0Min, params.amount1Min);
+
         IERC20(params.token0).forceApprove(address(positionManager), params.amount0Desired);
         IERC20(params.token1).forceApprove(address(positionManager), params.amount1Desired);
 
         INonfungiblePositionManager.MintParams memory p = params;
         p.recipient = address(this); // never mint to anywhere but here
+        p.sqrtPriceX96 = 0; // never create a pool, only join one that exists
 
         (tokenId, liquidity, amount0, amount1) = positionManager.mint(p);
 
         IERC20(params.token0).forceApprove(address(positionManager), 0);
         IERC20(params.token1).forceApprove(address(positionManager), 0);
 
-        if (!holdsPosition[tokenId]) {
-            holdsPosition[tokenId] = true;
-            positionIds.push(tokenId);
-        }
+        _register(tokenId);
         emit PositionMinted(tokenId, liquidity, amount0, amount1);
     }
 
     /// @notice Add to an existing position. Manager or multisig.
+    /// @dev The pair is read from the position rather than taken from the caller, so the
+    ///      approvals granted here are always for the tokens that position actually holds.
+    ///      A caller-supplied pair let a manager approve one token while topping up a
+    ///      position in another; there was no legitimate use for the freedom.
     function increaseLiquidity(
         uint256 tokenId,
-        address token0,
-        address token1,
         uint256 amount0Desired,
         uint256 amount1Desired,
         uint256 amount0Min,
         uint256 amount1Min
     ) external onlyManager nonReentrant returns (uint128 liquidity, uint256 amount0, uint256 amount1) {
         if (!holdsPosition[tokenId]) revert UnknownPosition(tokenId);
+
+        (address pool, address token0, address token1) = _positionPool(tokenId);
+        _requirePoolOnMark(pool, _requireQuotePaired(token0, token1));
+        _requireStatedMins(amount0Min, amount1Min);
 
         IERC20(token0).forceApprove(address(positionManager), amount0Desired);
         IERC20(token1).forceApprove(address(positionManager), amount1Desired);
@@ -1655,6 +3778,14 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     /// @notice Pull liquidity out of a position, e.g. to re-range. Manager or multisig.
     /// @dev The withdrawn tokens land in this contract and stay here. There is no path
     ///      from this function to an external wallet.
+    ///
+    ///      H-02(d). An exit is the mirror of an entry and was previously the softer of the
+    ///      two: `amountMin = 0` let a position be unwound at whatever price the pool happened
+    ///      to be showing. The Chainlink band is the real bound here — a manipulated pool is
+    ///      refused outright — and blank minimums are refused on top of it, because an
+    ///      operator who has not said what they expect is not in a position to notice they
+    ///      did not get it. A single-sided exit is normal for an out-of-range position, so
+    ///      only one of the two must be stated.
     function decreaseLiquidity(uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min)
         external
         onlyManager
@@ -1662,6 +3793,11 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
         returns (uint256 amount0, uint256 amount1)
     {
         if (!holdsPosition[tokenId]) revert UnknownPosition(tokenId);
+        _requireStatedMins(amount0Min, amount1Min);
+
+        (address pool, address token0, address token1) = _positionPool(tokenId);
+        _requirePoolOnMark(pool, _requireQuotePaired(token0, token1));
+
         (amount0, amount1) = positionManager.decreaseLiquidity(
             INonfungiblePositionManager.DecreaseLiquidityParams({
                 tokenId: tokenId,
@@ -1689,7 +3825,8 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
 
     /// @notice Collect from every position we hold. Permissionless.
     /// @dev One failing position is skipped rather than reverting the sweep, so a single
-    ///      broken or frozen pair cannot stop the others from paying out.
+    ///      broken or frozen pair cannot stop the others from paying out. The list it walks
+    ///      is bounded by construction — see `onERC721Received` and `prunePosition` (M-03).
     function collectAllFees() external returns (uint256 collected) {
         uint256 len = positionIds.length;
         for (uint256 i; i < len; ++i) {
@@ -1700,28 +3837,91 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     }
 
     /* ------------------------------------------------------------------ */
+    /*                       POSITION BOOKKEEPING                           */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Track a position that arrived without being minted here. Multisig only.
+    /// @dev M-03. Auto-registration on receipt now covers only positions minted TO this
+    ///      contract, so a deliberate transfer in — a migration, a top-up from the multisig —
+    ///      is registered here instead. Owner-gated, because the cost of a junk entry is paid
+    ///      by `collectAllFees` forever.
+    function registerPosition(uint256 tokenId) external onlyOwner {
+        if (positionManager.ownerOf(tokenId) != address(this)) revert UnknownPosition(tokenId);
+        _register(tokenId);
+        emit PositionRegistered(tokenId);
+    }
+
+    /// @notice Forget a position this treasury no longer holds. Manager or multisig.
+    /// @dev M-03, the other half. `positionIds` was append-only, so anything that ever landed
+    ///      here was walked by `collectAllFees` forever — a griefer could donate dust
+    ///      positions until the sweep ran out of gas. Removal is permitted only for a token
+    ///      this contract genuinely no longer owns and has not staked, so it can never be
+    ///      used to hide a live position from the fee sweep.
+    function prunePosition(uint256 tokenId) external onlyManager {
+        if (!holdsPosition[tokenId]) revert UnknownPosition(tokenId);
+        if (stakedIn[tokenId] != address(0)) revert PositionStillHeld(tokenId);
+        if (positionManager.ownerOf(tokenId) == address(this)) revert PositionStillHeld(tokenId);
+
+        holdsPosition[tokenId] = false;
+        uint256 len = positionIds.length;
+        for (uint256 i; i < len; ++i) {
+            if (positionIds[i] == tokenId) {
+                positionIds[i] = positionIds[len - 1];
+                positionIds.pop();
+                break;
+            }
+        }
+        emit PositionPruned(tokenId);
+    }
+
+    /* ------------------------------------------------------------------ */
     /*                          GAUGE STAKING                               */
     /* ------------------------------------------------------------------ */
 
     /// @notice Stake a position in its Aerodrome gauge to earn AERO. Manager or multisig.
+    /// @dev H-01. `stakePosition` grants the gauge an ERC-721 approval and then calls into
+    ///      it, so an arbitrary gauge address was an arbitrary `transferFrom` of the position
+    ///      — a one-call theft by anyone holding the manager key. The gauge must now be the
+    ///      one Aerodrome's voter names for the pool this position is actually in, and the
+    ///      pool is derived from `positions(tokenId)` rather than supplied.
+    ///
+    ///      The approval is also checked out again: after `deposit` the gauge must own the
+    ///      position. A canonical gauge always takes custody, so this both asserts the stake
+    ///      happened and guarantees no live approval is left behind — the ERC-721 transfer
+    ///      clears it.
     function stakePosition(uint256 tokenId, address gauge) external onlyManager nonReentrant {
         if (!holdsPosition[tokenId]) revert UnknownPosition(tokenId);
-        if (gauge == address(0)) revert ZeroAddress();
+        _requireCanonicalGauge(tokenId, gauge);
+
+        stakedIn[tokenId] = gauge;
         IERC721Approve(address(positionManager)).approve(gauge, tokenId);
         ISlipstreamGauge(gauge).deposit(tokenId);
+
+        if (positionManager.ownerOf(tokenId) != gauge) revert GaugeDidNotCustody(gauge);
         emit PositionStaked(tokenId, gauge);
     }
 
     /// @notice Withdraw a staked position back to this contract. Manager or multisig.
+    /// @dev Withdrawal goes to the gauge we actually deposited into, recorded at stake time.
+    ///      Nothing else is a legitimate counterparty, and remembering is stricter than
+    ///      re-deriving: it holds even if the voter's answer for that pool changes later.
     function unstakePosition(uint256 tokenId, address gauge) external onlyManager nonReentrant {
         if (!holdsPosition[tokenId]) revert UnknownPosition(tokenId);
+        if (gauge == address(0) || stakedIn[tokenId] != gauge) revert GaugeNotCanonical(gauge);
+
+        delete stakedIn[tokenId];
         ISlipstreamGauge(gauge).withdraw(tokenId);
         emit PositionUnstaked(tokenId, gauge);
     }
 
     /// @notice Claim AERO for a staked position. Permissionless.
-    function claimGaugeRewards(uint256 tokenId, address gauge) external nonReentrant {
-        if (!holdsPosition[tokenId]) revert UnknownPosition(tokenId);
+    /// @dev The gauge is the one we staked into, not one the caller names. As an arbitrary
+    ///      `getReward(uint256)` against any address, this was a free call primitive pointed
+    ///      wherever a caller liked, made from the contract that holds the treasury's assets.
+    ///      There is no reason for it to reach anything but our own gauge.
+    function claimGaugeRewards(uint256 tokenId) external nonReentrant {
+        address gauge = stakedIn[tokenId];
+        if (gauge == address(0)) revert UnknownPosition(tokenId);
         ISlipstreamGauge(gauge).getReward(tokenId);
     }
 
@@ -1771,8 +3971,13 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     /* ------------------------------------------------------------------ */
 
     /// @notice True if the rescue is forbidden from moving this token.
+    /// @dev The position manager is named explicitly rather than left to the fact that an
+    ///      ERC-721 has no matching `transfer` shape. Relying on the absence of a function
+    ///      selector on a third-party contract is a property of THEIR code, not ours, and it
+    ///      would stop being true the day the NFPM gained an ERC-20-shaped method.
     function isProtected(address token) public view returns (bool) {
-        return token == quoteToken || isPolAsset[token] || isIncomeToken[token];
+        return token == quoteToken || _polAssets[token].registered || isIncomeToken[token]
+            || token == address(positionManager);
     }
 
     /// @notice Recover a token the treasury does not recognise. Multisig only.
@@ -1791,13 +3996,130 @@ contract POLTreasury is Ownable2Step, ReentrancyGuard, IERC721Receiver, Conversi
     /*                             ERC721                                   */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Accept position NFTs, and remember any that arrive unannounced.
-    function onERC721Received(address, address, uint256 tokenId, bytes calldata) external override returns (bytes4) {
-        if (msg.sender == address(positionManager) && !holdsPosition[tokenId]) {
+    /// @notice Accept position NFTs, and remember the ones minted to us.
+    /// @dev M-03. Registration is limited to `from == address(0)` — a fresh mint into this
+    ///      contract. A transfer in from somebody else is accepted (refusing it would let a
+    ///      griefer make our own migrations fail) but not tracked, so donated dust cannot
+    ///      grow the list `collectAllFees` walks. A deliberate transfer in is picked up by
+    ///      `registerPosition`.
+    function onERC721Received(address, address from, uint256 tokenId, bytes calldata)
+        external
+        override
+        returns (bytes4)
+    {
+        if (msg.sender == address(positionManager) && from == address(0)) _register(tokenId);
+        return IERC721Receiver.onERC721Received.selector;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                            INTERNALS                                 */
+    /* ------------------------------------------------------------------ */
+
+    function _register(uint256 tokenId) internal {
+        if (!holdsPosition[tokenId]) {
             holdsPosition[tokenId] = true;
             positionIds.push(tokenId);
         }
-        return IERC721Receiver.onERC721Received.selector;
+    }
+
+    /// @dev H-02(a). Every POL position is the quote token paired with a registered POL
+    ///      asset. Requiring the quote side is stricter than the finding asked for, and
+    ///      deliberately so: it is what makes the pool's price checkable against a single
+    ///      USD feed, and a POL/POL pair is not something this treasury has any reason to
+    ///      hold. Adding an asset is a multisig call; adding a pair shape is a code change.
+    function _requireQuotePaired(address token0, address token1) internal view returns (address asset) {
+        if (token0 == quoteToken) asset = token1;
+        else if (token1 == quoteToken) asset = token0;
+        else revert NotQuotePaired();
+
+        if (!_polAssets[asset].registered) revert TokenNotPolAsset(asset);
+    }
+
+    /// @dev H-02(b). The pool is whatever the position manager's own factory says it is.
+    function _requireCanonicalPool(address token0, address token1, int24 tickSpacing)
+        internal
+        view
+        returns (address pool)
+    {
+        pool = ISlipstreamFactory(positionFactory).getPool(token0, token1, tickSpacing);
+        if (pool == address(0)) revert PoolNotCanonical(pool);
+    }
+
+    /// @dev The pool a position lives in, plus its pair. Derived, never supplied.
+    function _positionPool(uint256 tokenId) internal view returns (address pool, address token0, address token1) {
+        int24 tickSpacing;
+        (,, token0, token1, tickSpacing,,,,,,,) = positionManager.positions(tokenId);
+        pool = _requireCanonicalPool(token0, token1, tickSpacing);
+    }
+
+    /// @dev H-01. A gauge is only a gauge because the voter says so, for the pool this
+    ///      position is actually in.
+    function _requireCanonicalGauge(uint256 tokenId, address gauge) internal view {
+        (address pool,,) = _positionPool(tokenId);
+        if (gauge == address(0) || voter.gauges(pool) != gauge) revert GaugeNotCanonical(gauge);
+    }
+
+    /// @dev H-02(c). Liquidity moves only while the pool agrees with Chainlink.
+    ///
+    ///      This is the check that makes the pool derivation meaningful. Deriving the pool
+    ///      stops a caller inventing one; the band stops them using a real-but-thin pool for
+    ///      the same pair that they have just pushed to an absurd price. Both halves are
+    ///      needed — either alone leaves a way to enter or exit at a price the treasury never
+    ///      agreed to.
+    function _requirePoolOnMark(address pool, address asset) internal view {
+        PolAsset storage a = _polAssets[asset];
+        uint256 mark = (_readFeed(a.feed, a.maxFeedAge) * (10 ** quoteDecimals)) / (10 ** a.feedDecimals);
+        uint256 poolPrice = _poolQuotePerAsset(pool, asset, a.tokenDecimals);
+
+        uint256 tolerance = (mark * a.maxDeviationBps) / BPS;
+        uint256 delta = poolPrice > mark ? poolPrice - mark : mark - poolPrice;
+        if (delta > tolerance) revert PoolPriceOffMark(poolPrice, mark);
+    }
+
+    /// @dev Quote-token units one whole unit of `asset` costs, at the pool's current price.
+    ///      `slot0` is read by staticcall and decoded as a single word: Uniswap v3 and
+    ///      Slipstream return different tuples and agree only on the first field, which is
+    ///      the one we want.
+    function _poolQuotePerAsset(address pool, address asset, uint8 assetDecimals) internal view returns (uint256) {
+        (bool ok, bytes memory ret) = pool.staticcall(abi.encodeWithSignature("slot0()"));
+        if (!ok || ret.length < 32) revert PoolPriceUnavailable(pool);
+        // Read the first returned word directly. `abi.decode` would tie us to one tuple
+        // arity, and the whole point is that we do not care about the fields after the price.
+        uint256 word;
+        assembly {
+            word := mload(add(ret, 32))
+        }
+        uint256 sqrtPriceX96 = uint256(uint160(word));
+        if (sqrtPriceX96 == 0) revert PoolPriceUnavailable(pool);
+
+        uint256 q96 = 1 << 96;
+        // token1 per token0, in raw units, Q96-scaled.
+        uint256 priceX96 = Math.mulDiv(sqrtPriceX96, sqrtPriceX96, q96);
+        uint256 whole = 10 ** assetDecimals;
+
+        // Pools sort by address. If the asset is token0 the pool already quotes it in the
+        // quote token; if it is token1 the ratio is the other way up and must be inverted.
+        return asset < quoteToken ? Math.mulDiv(priceX96, whole, q96) : Math.mulDiv(whole, q96, priceX96);
+    }
+
+    /// @dev H-02(c)/(d). Blank minimums are refused on every liquidity operation.
+    ///
+    ///      WHAT ACTUALLY BOUNDS EXECUTION IS THE BAND, NOT THIS. It is worth being precise,
+    ///      because a check that looks like the protection but is not would be worse than
+    ///      none. `_requirePoolOnMark` has already established that the pool agrees with
+    ///      Chainlink, and there is no external call between that check and the position
+    ///      manager call — the tokens are allowlisted, so nothing in the pair can reenter and
+    ///      move the pool in between. Liquidity therefore enters and leaves at a price the
+    ///      treasury has verified, and its value is bounded by that.
+    ///
+    ///      This rule is hygiene on top: an operator who states no expectation cannot notice
+    ///      they did not get it. It deliberately does NOT require the minimums to track the
+    ///      desired amounts, because in concentrated liquidity `amountDesired` is a maximum
+    ///      and a range sitting on one side of the current price legitimately consumes zero
+    ///      of the other token. A ratio rule would refuse ordinary range orders, which is why
+    ///      only one side must be stated.
+    function _requireStatedMins(uint256 min0, uint256 min1) internal pure {
+        if (min0 == 0 && min1 == 0) revert SlippageUnbounded();
     }
 }
 

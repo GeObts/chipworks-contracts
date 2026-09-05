@@ -15,7 +15,7 @@ should be read.
 
 ```bash
 git clone <repo> chipworks-contracts && cd chipworks-contracts
-git checkout launch-candidate-8
+git checkout launch-candidate-10
 git submodule update --init --recursive     # forge-std, openzeppelin-contracts
 
 cp .env.example .env                        # then set BASE_RPC_URL
@@ -31,13 +31,13 @@ tag from `-3` onwards carries the review package with it — `REVIEW_PACKAGE.md`
 and regenerated `review/flattened/` sources — so the current candidate is the only thing to
 check out.
 
-**Reference `launch-candidate-8`.** Review is iterative rather than a single frozen pass:
+**Reference `launch-candidate-10`.** Review is iterative rather than a single frozen pass:
 findings arrive in batches, each batch is triaged in `TRIAGE.md` and lands in the next
 candidate, and the tag numbering is honest history — no tag is ever moved or deleted, so you
 can always diff the tree you read against the tree that shipped:
 
 ```bash
-git diff launch-candidate-7 launch-candidate-8 -- src/
+git diff launch-candidate-9 launch-candidate-10 -- src/
 ```
 
 `review-1` and `launch-candidate-1` still exist and still resolve; they are simply eight
@@ -121,7 +121,7 @@ misdirects money rather than losing it — which can be worse, because it looks 
 |---|---:|---:|---|
 | `activation/ChipActivation.sol` | 264 | 10,023 | Our own soft-staking vault. Burn $CHIP to activate a Noun at a tier; lazy atomic reset; **the custodian registry**. |
 | `loans/NounLoans.sol` | 363 | 13,425 | Borrow $CHIP against a chipped Noun. Holds collateral NFTs and the lending pool. The first registered custodian. |
-| `POLTreasury.sol` | 244 | 15,190 | Slipstream POL positions, gauge staking, income routing. Holds protocol assets, never user credits. |
+| `POLTreasury.sol` | 785 | 23,032 | Slipstream POL positions, gauge staking, income routing. Holds protocol assets, never user credits. **The largest contract and the tightest on size (968 bytes spare). Start here** — external review batch 6 found two HIGHs in it, both drains a leaked hot key could execute in one block, and the fix is the newest and least-reviewed code in the repo. |
 
 ### Tier 3 — isolated
 
@@ -178,6 +178,7 @@ after them. **Stated as things you should try to break.**
 | 3 | A frozen stock cannot corrupt a healthy one. NVDA/GOOGL accounting stays exact whatever AAPL does. |
 | 4 | `recoverExcess` can never reach a user credit — booked, expired-but-unswept, or a live round's budget. |
 | 5 | POLTreasury's rescue can never move a protocol asset. Exclusion-based, not arithmetic. |
+| 5b | **A leaked POLTreasury `manager` key cannot move value anywhere.** No manager function has a destination argument; tokens and pools are allowlisted and derived, gauges are verified against Aerodrome's Voter, and liquidity moves only while the pool agrees with Chainlink. |
 | 6 | Routing is never worse than claiming directly. Byte-identical outcomes, including when a leg is broken. |
 | 7 | Every conversion is Chainlink-bounded, capped per call, and measured by balance delta. |
 | 8 | Value is conserved in every split: `pot + ops + pol == amount`, dust always to the Pot. |

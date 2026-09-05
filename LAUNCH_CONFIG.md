@@ -218,9 +218,22 @@ setRoute(.., <slipstream router>, ..) -> reverts RouterNotUniswapV3   # SEC-POT-
 sequencerUptimeFeed()       -> 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433
 ```
 
-**6. POLTreasury** — `(MULTISIG, USDC, POSITION_MANAGER, FeeSplitter, UNIV3_FACTORY)`
+**6. POLTreasury** — `(MULTISIG, USDC, POSITION_MANAGER, FeeSplitter, UNIV3_FACTORY,
+AERO_VOTER)` where `AERO_VOTER` is `0x16613524e02ad97eDfeF371bC883F2F5d6C480A5`.
+
+Each POL asset is registered with its feed and its band:
+`setPolAsset(NVDAc, NVDA_USD_FEED, 500, 0)` — 5%, and `maxFeedAge` **0 for equities**, because
+the B20 feeds have no off-hours heartbeat (A-14) and a real window would refuse every mint
+outside market hours. Use a real window (1 hour) only for 24/7 assets such as WETH.
 ```
-isProtected(USDC) && isProtected(AERO) == true
+isProtected(USDC) && isProtected(AERO) && isProtected(POSITION_MANAGER) == true
+positionFactory() == 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A
+setIncomeToken(USDC, true)  -> reverts TokenNotDisjoint      # M-02
+setPolAsset(AERO, feed, 500, 0) -> reverts TokenNotDisjoint  # M-02, other direction
+stakePosition(id, <not the canonical gauge>) -> reverts GaugeNotCanonical   # H-01
+mintPosition(.., token1: <unregistered token>, ..) -> reverts TokenNotPolAsset  # H-02
+mintPosition(.., amount0Min: 0, amount1Min: 0) -> reverts SlippageUnbounded # H-02
+markAndPoolPrice(NVDAc, <pool>) -> two numbers inside the band
 ```
 
 ### After $CHIP, after price discovery

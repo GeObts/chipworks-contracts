@@ -79,7 +79,7 @@ contract CodeSizeTest is Test {
             address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]))
         );
         _check("FeeSplitter", address(new FeeSplitter(multisig, multisig, multisig, 2_000, 2_000)));
-        _check("POLTreasury", address(new POLTreasury(multisig, _erc20(), _nft(), multisig, _factory())));
+        _check("POLTreasury", address(new POLTreasury(multisig, _erc20(), _nft(), multisig, _factory(), multisig)));
         _check("ClaimRouter", address(new ClaimRouter(multisig, claims, 1_000_000)));
 
         NounLoans.Terms memory loanTerms;
@@ -117,8 +117,10 @@ contract CodeSizeTest is Test {
         a = address(new SizeStub());
     }
 
+    /// @dev POLTreasury reads `factory()` off the position manager at construction, so the
+    ///      stub has to answer it.
     function _nft() internal returns (address a) {
-        a = address(new SizeStub());
+        a = address(new SizeStubNfpm());
     }
 
     function _nft721() internal returns (address a) {
@@ -127,6 +129,14 @@ contract CodeSizeTest is Test {
 }
 
 contract SizeStub {
+    fallback() external {}
+}
+
+contract SizeStubNfpm {
+    function factory() external view returns (address) {
+        return address(this);
+    }
+
     fallback() external {}
 }
 

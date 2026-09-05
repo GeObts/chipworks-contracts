@@ -5,6 +5,7 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {INonfungiblePositionManager, ISlipstreamGauge} from "../../src/interfaces/INonfungiblePositionManager.sol";
+import {MockSlipstreamFactoryReal} from "./MockAerodrome.sol";
 
 /// @notice Slipstream position manager test double. Pulls the deposited tokens, mints an
 ///         NFT, and pays out configurable owed fees on collect.
@@ -16,15 +17,22 @@ contract MockPositionManager is ERC721, INonfungiblePositionManager {
     struct Pos {
         address token0;
         address token1;
+        int24 tickSpacing;
         uint128 liquidity;
         uint128 owed0;
         uint128 owed1;
     }
 
+    /// @dev Deployed here rather than injected so `factory()` is honest: POLTreasury reads it
+    ///      at construction and derives every pool from it, so the two must agree.
+    MockSlipstreamFactoryReal public immutable clFactory;
+
     mapping(uint256 => Pos) public pos;
     mapping(uint256 => bool) public collectReverts;
 
-    constructor() ERC721("Slipstream Position NFT v1", "AERO-CL-POS") {}
+    constructor() ERC721("Slipstream Position NFT v1", "AERO-CL-POS") {
+        clFactory = new MockSlipstreamFactoryReal();
+    }
 
     function setOwedFees(uint256 tokenId, uint128 a0, uint128 a1) external {
         pos[tokenId].owed0 = a0;
@@ -46,7 +54,7 @@ contract MockPositionManager is ERC721, INonfungiblePositionManager {
 
         tokenId = nextId++;
         liquidity = uint128(p.amount0Desired + p.amount1Desired);
-        pos[tokenId] = Pos(p.token0, p.token1, liquidity, 0, 0);
+        pos[tokenId] = Pos(p.token0, p.token1, p.tickSpacing, liquidity, 0, 0);
         _safeMint(p.recipient, tokenId);
         return (tokenId, liquidity, p.amount0Desired, p.amount1Desired);
     }
@@ -98,11 +106,11 @@ contract MockPositionManager is ERC721, INonfungiblePositionManager {
         returns (uint96, address, address, address, int24, int24, int24, uint128, uint256, uint256, uint128, uint128)
     {
         Pos storage s = pos[tokenId];
-        return (0, address(0), s.token0, s.token1, 100, -887200, 887200, s.liquidity, 0, 0, s.owed0, s.owed1);
+        return (0, address(0), s.token0, s.token1, s.tickSpacing, -887200, 887200, s.liquidity, 0, 0, s.owed0, s.owed1);
     }
 
-    function factory() external pure override returns (address) {
-        return address(0);
+    function factory() external view override returns (address) {
+        return address(clFactory);
     }
 
     function ownerOf(uint256 tokenId) public view override(ERC721, INonfungiblePositionManager) returns (address) {

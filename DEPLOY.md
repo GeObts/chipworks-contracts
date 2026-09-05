@@ -75,7 +75,7 @@ below that does not depend on the token.
 | 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; 🔴 `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
 | 5a | `ChipClaims` | multisig, StockRegistry | `setRounds`, `setPolTreasury`, `setClaimSchedule`, `setCreditExpiry` | **`contributeWeights` reverts until `setRounds`** — the ledger rejects an unknown caller |
 | 5b | `ChipRounds` | multisig, registry, Pot, **ChipActivation**, ChipClaims, 🔶fee | the config table in step 5b | a round reverts at the first `contributeWeights` until 5a is wired |
-| 6 | `POLTreasury` | multisig, USDC, position manager, FeeSplitter | `setManager`, `setRewards(ChipClaims)`, POL assets, routes, income tokens | holds nothing until `ChipRounds.setPolTreasury` points at it |
+| 6 | `POLTreasury` | multisig, USDC, position manager, FeeSplitter, UniV3 factory, **Aerodrome Voter** | `setManager`, `setRewards(ChipClaims)`, POL assets **with feeds**, routes, income tokens | holds nothing until `ChipRounds.setPolTreasury` points at it |
 | 7 | `ClaimRouter` | multisig, **ChipClaims**, 1000000 | nothing | holds no funds and needs no permissions, ever |
 | 8 | `Furnace` | multisig, **$CHIP**, Lil Nouns, 🔶two recipes | approve + `depositStock` | **`forge` reverts `OutOfStock` until stock is deposited** |
 | 9 | `NounLoans` | multisig, **$CHIP**, FeeSplitter, treasury, terms | 🔴 `ChipActivation.setCustodian(this, true)`; 🔶`setMaxPrincipal`; 🔶`depositPool` | **`borrow` reverts `CollectionNotLendable` at `maxPrincipal == 0`**, and `PoolTooSmall` on an empty pool |
@@ -549,23 +549,52 @@ Post-deploy checks:
 
 ### 6. POLTreasury — **built**
 
-Needs: `MULTISIG`, USDC, the Slipstream position manager, and the FeeSplitter from step 1.
+> **CHANGED IN `launch-candidate-10`.** The constructor takes a sixth argument and
+> `setPolAsset` takes four. If you are working from an older runbook, both calls will fail —
+> see TRIAGE batch 6 (H-01, H-02) for why. **A POL asset now cannot be registered without a
+> Chainlink feed**, because the feed is what bounds every LP operation on it, and an optional
+> price check that silently does nothing when the feed was forgotten is the failure mode this
+> repo already documents once (the `setCustodian` trap, below).
+
+Needs: `MULTISIG`, USDC, the Slipstream position manager, the FeeSplitter from step 1, and
+the Aerodrome Voter.
 
 | Arg | Value |
 |---|---|
 | `multisig` | `MULTISIG` |
 | `quoteToken_` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | `positionManager_` | `0x827922686190790b37229fd06084350E74485b72` (verified: Slipstream `mint` with tickSpacing + sqrtPriceX96) |
-| `uniswapV3Factory_` | `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` — POL converts through Uniswap too |
 | `feeSplitter_` | FeeSplitter from step 1 |
+| `uniswapV3Factory_` | `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` — POL converts through Uniswap too |
+| `voter_` | `0x16613524e02ad97eDfeF371bC883F2F5d6C480A5` — Aerodrome Voter. **Verified on chain**: 33.8 KB of code, and `gauges(0xb2cc…DC59)` returns `0xF33a…e0c8` for the WETH/USDC tickSpacing-100 pool. See ASSUMPTIONS A-20. |
+
+There is no `slipstreamFactory_` argument on purpose: it is read from
+`positionManager.factory()` at construction, so the factory the pool checks use can never
+disagree with the manager the positions actually live in.
 
 Then, from the multisig:
 - `setManager(BANKR_OPTIMIZER)` — may manage positions, cannot change configuration
 - `setRewards(chipClaims)` — the ledger is what notifies compound credits
-- `setPolAsset(token, true)` for each stock POL will hold (protects it from the rescue)
+- **`setPolAsset(token, feed, maxDeviationBps, maxFeedAge)` for each stock POL will hold.**
+  Registers it, protects it from the rescue, and supplies the Chainlink mark that bounds
+  every mint, top-up and exit involving it. `maxDeviationBps` is capped at 1,000 (10%) and
+  cannot be zero. Use the same `<stock>/USD` feeds from the §A-13 table the registry uses.
 - `setWeth(WETH)` and `setRoute(WETH, ETH_USD_FEED, …)` so POL can realise its ETH slice
 - `setRoute(AERO, AERO_USD_FEED, …)` if POL keeps any of its own AERO
 - `setIncomeToken(AERO, true)` and any fee tokens (enables `forwardIncome`)
+
+**Income tokens and POL assets are disjoint sets, enforced in both directions.** Attempting
+`setIncomeToken(USDC, true)` or `setIncomeToken(NVDAc, true)` reverts `TokenNotDisjoint`, and
+so does registering an income token as POL. `forwardIncome` moves a token's whole balance to
+the splitter, so an overlap would let anyone strip POL of its pairing inventory for the price
+of gas (TRIAGE M-02).
+
+**A pool must exist before its first mint.** Positions are quote-paired only — one side is
+always USDC — and the pool comes from the Slipstream factory for that exact pair and tick
+spacing. `mintPosition` cannot create one: `sqrtPriceX96` is forced to zero on the way
+through. If the USDC pair for a stock has no Slipstream pool at the tick spacing you intend,
+the mint reverts `PoolNotCanonical` and the pool has to be created outside this contract
+first.
 
 And on ChipRewards:
 - `setPolTreasury(polTreasury)`
@@ -575,9 +604,25 @@ Income loop, all permissionless: `collectAllFees()` → `forwardIncomeMany([AERO
 FeeSplitter → 80% Pot → next round. Nobody needs permission to push income back to holders.
 
 Post-deploy checks:
-- `isProtected(USDC)`, `isProtected(NVDAc)` and `isProtected(AERO)` all true
+- `isProtected(USDC)`, `isProtected(NVDAc)`, `isProtected(AERO)` and
+  `isProtected(POSITION_MANAGER)` all true
 - `manager` is the optimizer, and calling `setFeeSplitter` from it reverts
+- `positionFactory()` equals `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A`
+- `markAndPoolPrice(NVDAc, <its USDC pool>)` returns two numbers within the band. **Do this
+  before the first mint**, not after it fails: it is the one call that tells you the feed and
+  the pool agree, and it is also how you diagnose a `PoolPriceOffMark` refusal later.
 - mint one small position and confirm `positionCount()` is 1 and the NFT is held here
+- **`stakePosition(id, <any address that is not the canonical gauge>)` reverts
+  `GaugeNotCanonical`.** This is the H-01 check; do it once on the live deployment.
+- `canonicalGaugeOf(id)` matches `voter.gauges(pool)` read directly
+
+**Session-key note for the runbook.** `manager` is a hot key and the contract is written on
+the assumption that it will leak eventually. Since `launch-candidate-10` there is no manager
+function with a destination argument, tokens and pools are allowlisted and derived rather
+than supplied, gauges are voter-verified, and liquidity only moves while the pool agrees with
+Chainlink. Rotating a suspected-leaked key is still the right response — `setManager` is
+immediate and un-timelocked — but it is no longer the thing standing between an attacker and
+the POL book.
 
 ### 7. ClaimRouter — **built**
 

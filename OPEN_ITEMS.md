@@ -557,3 +557,58 @@ required non-zero constructor argument. DEPLOY step 8 carries the blocker and th
 caveats: it must be the ERC-721 **mirror**, ids may be reassigned when the fungible side moves,
 and *"burned means burned"* needs re-proving because sending a mirror token to `0xdead` also
 moves the underlying balance.
+
+
+---
+
+## 21. NEW: the keeper should check `voter.isAlive(gauge)` before staking
+
+**Not a contract change, and deliberately so.** `stakePosition` verifies that a gauge is the
+canonical one for its pool (`voter.gauges(pool) == gauge`, TRIAGE batch 6 H-01). Aerodrome's
+Voter also exposes `isAlive(gauge)`, which says whether that gauge is still receiving
+emissions.
+
+We do not check it on-chain. A killed gauge is a **yield** problem, not a **custody** one: it
+is still the canonical gauge, it still holds the position safely, and `unstakePosition` still
+returns it. Adding the call would put another Voter interface dependency directly in the
+staking path, where an Aerodrome change would break staking outright rather than merely cost
+us AERO — a worse failure than the one it prevents.
+
+**So it belongs on the keeper.** Before calling `stakePosition`, the optimizer should read
+`voter.isAlive(gauge)` and skip a dead one; and a periodic check over currently-staked
+positions should flag any gauge that has since been killed, so the position can be moved. If
+nothing is built, the failure mode is quiet: POL keeps a position staked in a gauge that pays
+nothing, and `claimGaugeRewards` keeps succeeding while returning zero.
+
+Recorded rather than built because the keeper is out of this repo's scope. See ASSUMPTIONS
+A-20 for the reasoning in full.
+
+---
+
+## 22. NEW: a POL asset cannot be added without a Slipstream pool and a Chainlink feed
+
+**A deploy-ordering dependency created by the batch-6 fix, worth having in one place before
+somebody hits it during a launch window.**
+
+Since `launch-candidate-10`, opening a POL position requires three things to already be true,
+and each fails with a different error:
+
+| Missing | Call that fails | Error |
+|---|---|---|
+| The asset is not registered | `setPolAsset` never ran | `TokenNotPolAsset` |
+| The asset has no Chainlink feed | `setPolAsset` itself | `ZeroAddress` — it cannot be registered at all |
+| No Slipstream pool for the USDC pair at that tick spacing | `mintPosition` | `PoolNotCanonical` |
+| A pool exists but is priced away from the feed | `mintPosition` | `PoolPriceOffMark` |
+
+**The third one is the one that will surprise somebody.** `mintPosition` deliberately cannot
+create a pool — `sqrtPriceX96` is forced to zero, because a caller-chosen initial price was
+half of H-02. So for any stock whose USDC pair has no Slipstream pool yet, the pool has to be
+created **outside** this contract first, by someone willing to set its initial price. That is
+a real, funded action with real MEV exposure, and it is not something to discover with a
+funded treasury waiting.
+
+**Also note the equity-feed interaction.** `maxFeedAge` should be **0** for the B20 stocks.
+Their Chainlink feeds have no off-hours heartbeat (ASSUMPTIONS A-14), so any real staleness
+window would refuse every POL operation outside market hours. Use a real window only for
+assets that trade 24/7, such as WETH. This is in LAUNCH_CONFIG step 6, but it is the kind of
+parameter that gets copied from the wrong row.

@@ -50,10 +50,16 @@ paths, or a paid endpoint, avoids it.
 ## 1. What each contract does
 
 Runtime sizes, all inside the 24,000-byte budget the size guard enforces (EIP-170 is 24,576):
-ChipRounds 20,834 · POLTreasury 15,190 · NounLoans 13,425 · ChipClaims 12,879 ·
-ChipActivation 10,023 · Anvil 9,359 · Pot 9,042 · StockRegistry 8,971 · Furnace 7,711 ·
-FeeSplitter 4,782 · ClaimRouter 3,149 · ClutchVaultAdapter 3,151. ChipRounds has the least
-headroom at 3,742 bytes and is the one to watch.
+POLTreasury 23,032 · ChipRounds 20,377 · NounLoans 15,566 · ChipClaims 14,678 ·
+Pot 11,337 · ChipActivation 10,023 · Anvil 9,359 · StockRegistry 8,971 · Furnace 7,711 ·
+FeeSplitter 6,069 · ClaimRouter 3,149 · ClutchVaultAdapter 3,151.
+
+**POLTreasury is now the tightest at 968 bytes of headroom** and has taken ChipRounds' place
+as the one to watch. It grew by roughly 7,800 bytes in `launch-candidate-10` closing the two
+HIGHs of external review batch 6, and paid for part of that by dropping its on-chain
+enumeration of POL assets — nothing in the contract iterated them, and the array plus its
+removal loop cost more than the budget had spare. The set is reconstructible from the
+`PolAssetSet` / `PolAssetRemoved` events.
 
 | Contract | Code LOC | Holds funds | Role |
 |---|---:|---|---|
@@ -61,7 +67,7 @@ headroom at 3,742 bytes and is the one to watch.
 | `loans/NounLoans.sol` | 418 | **yes, collateral + pool $CHIP** | Borrow $CHIP against a Noun; the first registered custodian |
 | `ChipClaims.sol` | 333 | **yes, user credits** | Credits, claim windows, expiry, sweeps, the ledger |
 | `activation/ChipActivation.sol` | 264 | **never** | **Our own soft-staking vault.** Activation, tiers, lazy reset, custodians |
-| `POLTreasury.sol` | 244 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing |
+| `POLTreasury.sol` | 785 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing. **Read this one first** — see §1.5 |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
 | `anvil/Anvil.sol` | 291 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
 | `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn fuel NFTs + $CHIP to forge a Noun. **Outside the money path** |
@@ -125,6 +131,11 @@ runs (`test/ChipRewards.invariant.t.sol`, 128,000 calls each).
 5. **POLTreasury's rescue can never move a protocol asset** — not the quote token, a
    registered POL asset, a registered income token, or a position NFT. Exclusion-based, not
    arithmetic, because POL has no per-user "owed" figure to subtract.
+5b. **A leaked POLTreasury manager key cannot move value anywhere.** Not "is unlikely to" —
+   *cannot*, because no manager function has a destination argument, tokens and pools are
+   allowlisted and derived rather than supplied, gauges are verified against Aerodrome's
+   Voter, and liquidity only moves while the pool price agrees with Chainlink. This is the
+   newest invariant and the one most worth attacking; §1.5 says how.
 6. **Routing is never worse than claiming directly.** Byte-identical outcomes, including
    when a leg is broken; a failed leg leaves the credit fully claimable.
 7. **Every conversion is Chainlink-bounded, capped per call, and measured by balance delta.**
@@ -277,7 +288,49 @@ one to test hardest, because it is the only one whose safety is an argument rath
 arithmetic. Attack all five: can an attacker or the multisig get value out through a path
 other than the intended one? In POLTreasury check `decreaseLiquidity` → does anything let
 withdrawn tokens leave to a wallet? (Intended: no.) Check that marking a token as POL/income
-is enough to protect it retroactively.
+is enough to protect it retroactively — and that `removePolAsset` un-protecting a token is
+visible rather than surprising, since it is one call with two consequences. Note that
+POLTreasury's exclusion list now names the position manager explicitly rather than relying on
+an ERC-721 not exposing an ERC-20 transfer shape; that was batch 6 L-01, and the general
+lesson is that a safety property which lives in somebody else's contract is not ours.
+
+### 4.4 POL — `POLTreasury.sol` (785 LOC), THE HOT-KEY SURFACE
+
+**Attack this on the assumption that the `manager` key is already in your hands.** It is a
+session key on the Bankr optimizer's server; treating it as trusted is exactly the mistake
+external review batch 6 found, and both HIGHs it produced were drains that a leaked key could
+execute in a single block with correctly-scoped, promptly-cleared approvals throughout.
+
+The claim to break is that a leaked manager key can move liquidity between honest ranges of
+honest pools at honest prices, and nothing else. Four things enforce it:
+
+| # | Property | Where |
+|---|---|---|
+| 1 | Every position is the quote token paired with a **registered** POL asset | `_requireQuotePaired` |
+| 2 | The pool is derived from `positionManager.factory()`, and `sqrtPriceX96` is forced to zero so no pool can be created | `_requireCanonicalPool`, `mintPosition` |
+| 3 | A gauge is only a gauge if `voter.gauges(pool)` says so, with the pool derived from `positions(tokenId)` | `_requireCanonicalGauge` |
+| 4 | The pool's own price must sit inside a Chainlink band before liquidity moves either way | `_requirePoolOnMark` |
+
+Specific things worth trying, beyond the obvious:
+
+- **Can any manager path name a destination?** (Intended: no. Grep every `onlyManager`
+  function for an `address` parameter that is not a gauge or a token.)
+- **Can the pool check and the execution disagree?** The band is checked, then the position
+  manager is called. Is there anything in between that could move the pool? The token
+  allowlist is what closes this; find a token that could be registered and still reenter.
+- **Is the price maths right in both address orderings?** `_poolQuotePerAsset` inverts the
+  Q96 ratio depending on whether the asset sorts below the quote token. An error here would
+  make the band nonsense for half the pairs — and it would fail *open* for one of them.
+- **`prunePosition`** removes an entry from the fee sweep. Can it be made to drop a position
+  the treasury still owns? (Intended: no — it requires the token to be neither held here nor
+  staked.)
+- **`forwardIncome`** is permissionless and moves a whole balance. The disjointness rules are
+  what stop it reaching pairing inventory; try to reach an overlap through any ordering of
+  `setPolAsset` / `setIncomeToken` / `removePolAsset`.
+
+`test/POLTreasuryExploit.t.sol` is the adversarial suite and is the best place to start: it
+is written as the attacker throughout, and its header records that both HIGHs were first
+demonstrated to *succeed* against `launch-candidate-9` before the fix landed.
 
 ### 4.5 ACTIVATION — `activation/ChipActivation.sol` (264 LOC), NEW AND CORE
 

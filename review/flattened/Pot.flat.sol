@@ -1077,24 +1077,36 @@ abstract contract ConversionRoutes {
         Route storage r = _routes[token];
         if (!r.enabled) revert NoRoute(token);
 
-        _requireSequencerUp();
-
-        (, int256 answer,, uint256 updatedAt,) = IAggregatorV3(r.feed).latestRoundData();
-        if (answer <= 0) revert BadFeedAnswer();
-        if (r.maxFeedAge != 0 && block.timestamp > updatedAt + r.maxFeedAge) {
-            revert StaleFeed(updatedAt, r.maxFeedAge);
-        }
-        _requireInBand(r.feed, answer);
+        uint256 answer = _readFeed(r.feed, r.maxFeedAge);
 
         // amount (tokenDecimals) x USD per token -> quote units, then the slippage haircut.
-        uint256 gross =
-            (amount * uint256(answer) * (10 ** quoteDecimals)) / (10 ** r.feedDecimals) / (10 ** r.tokenDecimals);
+        uint256 gross = (amount * answer * (10 ** quoteDecimals)) / (10 ** r.feedDecimals) / (10 ** r.tokenDecimals);
         return (gross * (BPS - r.maxSlippageBps)) / BPS;
     }
 
     /* ------------------------------------------------------------------ */
     /*                            INTERNALS                                 */
     /* ------------------------------------------------------------------ */
+
+    /// @notice Read a Chainlink answer with every check this contract insists on: the
+    ///         sequencer is up and has been for the grace period, the answer is positive,
+    ///         it is not older than `maxAge`, and it is not pinned at the aggregator's
+    ///         circuit-breaker band.
+    /// @dev ONE implementation, for the same reason there is one `_convert`. {POLTreasury}
+    ///      prices its POL assets through this to bound LP execution (H-02), and `minOutFor`
+    ///      prices swaps through it. If a future change makes a feed check stricter, both
+    ///      inherit it; there is no second copy to forget.
+    /// @return answer The raw feed answer. Its decimals are the caller's cached `feedDecimals`.
+    function _readFeed(address feed, uint64 maxAge) internal view returns (uint256 answer) {
+        _requireSequencerUp();
+
+        (, int256 raw,, uint256 updatedAt,) = IAggregatorV3(feed).latestRoundData();
+        if (raw <= 0) revert BadFeedAnswer();
+        if (maxAge != 0 && block.timestamp > updatedAt + maxAge) revert StaleFeed(updatedAt, maxAge);
+        _requireInBand(feed, raw);
+
+        return uint256(raw);
+    }
 
     /// @param callerMinOut A floor the caller insists on, on top of the Chainlink one. Zero
     ///        means "no opinion". SEC-POT-002: `convert` is permissionless so anyone can push

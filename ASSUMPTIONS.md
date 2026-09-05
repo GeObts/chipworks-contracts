@@ -632,3 +632,45 @@ The sweep is permissionless, per (round, stock), batched over a holder list with
 and emits one `CreditExpired` per holder so the site can show exactly what each person lost.
 Per-holder shares are floored, so the final batch settles the rounding dust and the contract
 never keeps a remainder it no longer owes.
+
+---
+
+### A-20 · The Aerodrome Voter is the only authority on gauges — **verified on chain 2026-09-04**
+
+`0x16613524e02ad97eDfeF371bC883F2F5d6C480A5`, 33,827 bytes of code on Base.
+
+**Why this is an assumption worth writing down rather than a detail.** `POLTreasury.stakePosition`
+grants an ERC-721 approval to a gauge and then calls into it. Whether that is a staking
+operation or a theft depends entirely on whether the address is really a gauge, and there is
+nothing about a gauge address that says so — anyone can deploy a contract with a
+`deposit(uint256)`. The Voter's `gauges(pool)` mapping is the only on-chain statement that a
+given gauge belongs to a given pool. **We are trusting Aerodrome's Voter to answer that
+honestly**, which is a much smaller and much more inspectable trust than trusting whoever
+holds the manager key.
+
+Probed live:
+
+```
+voter.gauges(0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59)  # WETH/USDC, tickSpacing 100
+  -> 0xF33a96b5932D9E9B9A0eDA447AbD8C9d48d2e0c8
+voter.isAlive(0xF33a96b5932D9E9B9A0eDA447AbD8C9d48d2e0c8) -> true
+```
+
+The pool address itself comes from the Slipstream factory
+`0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A`, which POLTreasury reads out of
+`positionManager.factory()` at construction rather than accepting as an argument.
+
+**`isAlive` is deliberately NOT checked.** A killed gauge earns nothing, so checking it is
+tempting, but it is an economics question and not a custody one: a killed gauge is still the
+canonical gauge and `withdraw` still returns the position. Adding the call would put an extra
+Voter interface dependency in the staking path, where a change would break staking rather
+than merely cost yield. It belongs on the keeper side — see OPEN_ITEMS 21.
+
+**What breaks if this is wrong.** If Aerodrome migrated to a new Voter, `stakePosition` would
+start refusing the new canonical gauges and POL would stop earning AERO until the treasury
+was redeployed. It would not become unsafe — the failure is a refusal, not an acceptance —
+but the Voter is an immutable constructor argument, so a migration is a redeploy. Recorded
+here so nobody discovers it as a surprise.
+
+Covered by `test_realAerodromeAnswersThePoolAndGaugeChecks` and
+`test_realVoterRefusesANonCanonicalGauge` in `test/fork/PolTreasuryFork.t.sol`.

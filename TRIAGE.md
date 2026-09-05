@@ -67,6 +67,235 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### External review — Bankr, batch 6: POLTreasury.sol — **the most serious of the audit**
+
+Against `launch-candidate-9`. **Two HIGHs, both real, both closed in `launch-candidate-10`.**
+
+This batch is different from the five before it, and the difference is worth stating before
+the table. Every earlier finding was about a contract behaving wrongly. These two were about
+a contract behaving exactly as written, for parameters it had no business accepting. The
+earlier per-operation allowance hardening on this contract was real work and it solved the
+wrong layer: **allowances were never the vector. The parameters were.** Both attacks below
+drain the treasury with correctly-scoped, promptly-cleared approvals throughout.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| H-01 | Fake-gauge NFT theft via `stakePosition` | High | **High / High** | **VALID** | **FIXED** — voter-verified gauge, pool derived from the position |
+| H-02 | Attacker-pool mint and unbounded exit | High | **High / High** | **VALID** | **FIXED** — token allowlist, derived pool, Chainlink band, stated minimums |
+| M-01 | `convert` hardcodes `callerMinOut = 0`, so SEC-POT-002's keeper floor is unreachable | Medium | **Medium / Medium** | **VALID** | **FIXED** — `convert(token, minOut)` overload |
+| M-02 | `setIncomeToken` overlaps POL assets, making `forwardIncome` a drain | Medium | **Medium / High** | **VALID** | **FIXED** — disjointness enforced both ways |
+| M-03 | Dust-donation griefing bloats `positionIds` toward gas death | Medium | Low / **Medium** | **VALID** | **FIXED** — self-mint-only registration plus a prune path |
+| L-01 | `recoverExcess` relies on the NFPM lacking an ERC-20 shape | Low | Low / Low | **VALID** | **FIXED** — explicit exclusion |
+| L-02 | `stakePosition` can leave a live ERC-721 approval | Low | **Low / High** | **VALID** | **FIXED** — post-deposit custody assertion |
+| L-03 | `increaseLiquidity` trusts caller-supplied `token0`/`token1` | Low | Low / Low | **VALID** | **FIXED** — read from `positions(tokenId)` |
+| L-04 | `claimGaugeRewards` is an arbitrary-call primitive | Info | **Low / Low** | **VALID** | **FIXED** — reaches only the gauge we staked into |
+
+---
+
+#### The session-key claim, stated so it can be checked
+
+`manager` is a hot key. It lives on the Bankr optimizer's server so it can move ranges
+without holding configuration rights, and the honest way to reason about it is that **it is
+already leaked**. Before this batch the protocol's safety under that assumption rested on key
+hygiene, which is not a property of the code and is not something a reviewer can verify.
+
+It now rests on four properties that are enforced on-chain and testable:
+
+1. **Tokens are allowlisted.** Every position is the quote token paired with a registered POL
+   asset. No manager path touches an arbitrary token.
+2. **Pools are derived, not supplied.** The pool comes from the position manager's own
+   factory for that exact pair and tick spacing, and `sqrtPriceX96` is forced to zero, so a
+   caller can neither name a pool nor create one at a price of their choosing.
+3. **Gauges are verified against the Voter.** `voter.gauges(pool)` with the pool derived from
+   `positions(tokenId)` is the only thing that makes an address a gauge.
+4. **Execution is bounded by Chainlink.** The pool's own price must sit inside a band around
+   the POL asset's feed before liquidity moves in either direction.
+
+What a leaked manager key can still do is move liquidity between honest ranges of honest
+pools at honest prices, and it can churn gas doing it. What it cannot do is send value
+anywhere, because **no manager function has a destination argument at all**. That is the
+whole claim, and `test/POLTreasuryExploit.t.sol` is where it is checked.
+
+---
+
+#### H-01 — fake-gauge NFT theft
+
+**VALID, and the cheapest attack in the repo.** `stakePosition` granted the caller-supplied
+gauge an ERC-721 approval and then called into it. A contract with a `deposit(uint256)` that
+spends that approval takes the position. One call, one block, no cleverness.
+
+**Demonstrated before it was fixed.** The attack was written against `launch-candidate-9`
+first and run: `test_PROOF_H01_fakeGaugeStealsThePosition` passed, ending with
+`ownerOf(tokenId) == attacker`. That run is the reason this entry says the finding is real
+rather than plausible. The proof file was then replaced by the permanent post-fix suite.
+
+**The fix is the Voter.** A gauge address proves nothing on its own — anyone can deploy one.
+`voter.gauges(pool)` is the only on-chain statement that a given gauge is *the* gauge for a
+given pool, and the pool is derived from `positions(tokenId)` rather than supplied, so
+naming a pool you do control does not help either
+(`test_H01_exploit_aGaugeForAnotherPoolIsStillRefused`).
+
+**Two smaller holes closed with it.** `unstakePosition` now withdraws only to the gauge we
+recorded at stake time — remembering is stricter than re-deriving, because it holds even if
+the Voter's answer for that pool changes later. And `claimGaugeRewards` no longer takes a
+gauge argument at all: as an arbitrary `getReward(uint256)` against any address, made from
+the contract that holds the treasury's assets, it was a free call primitive pointed wherever
+a caller liked (L-04).
+
+**And the approval is checked back in.** After `deposit` the gauge must own the position
+(L-02). A canonical gauge always takes custody, so this asserts the stake happened *and*
+guarantees no live approval is left behind, since the ERC-721 transfer clears it. A gauge
+that accepts the call and quietly declines the NFT is refused
+(`test_H01_exploit_aGaugeThatDoesNotCustodyIsRefused`).
+
+**Verified against real Aerodrome, not just mocks.** `test_realAerodromeAnswersThePoolAndGaugeChecks`
+forks Base and asserts that the Slipstream factory resolves the WETH/USDC pool our derivation
+produces, that the live Voter names a gauge for it, and that the live pool price sits inside
+the band around the live Chainlink mark — so the check does not simply refuse everything.
+`test_realVoterRefusesANonCanonicalGauge` runs the attack against the real Voter.
+
+---
+
+#### H-02 — attacker-pool mint and unbounded exit
+
+**VALID, and the larger of the two by value.** `mintPosition` validated `recipient` and
+nothing else. The token pair, the tick spacing, the pool's initial price and both minimums
+were all the caller's to choose. A leaked key could mint the entire USDC balance against a
+token it had just printed, into a pool it initialised at a price of its choosing, with
+`amountMin = 0`, and then buy the USDC out for nothing.
+
+**Also demonstrated before it was fixed.** `test_PROOF_H02_arbitraryTokenAndBlindMinimumsAreAccepted`
+passed on `launch-candidate-9` with the full treasury balance committed against an
+unregistered token.
+
+The finding asked for four things and all four landed, though **(c) landed differently from
+how it was specified and that difference matters**:
+
+**(a) Token allowlist — done, and tightened.** Both sides must be the quote token or a
+registered POL asset. We went further: **exactly one side must be the quote token.** A
+POL/POL pair is not something this treasury has any reason to hold, and requiring the quote
+side is what makes the pool's price checkable against a single USD feed. Adding an asset
+stays a multisig call; adding a pair *shape* is now a code change.
+
+**(b) Pool verified through the factory — done.** The pool comes from
+`positionManager.factory()`, read at construction rather than passed in, so the pool check
+can never be pointed at a factory that disagrees with the manager the positions live in. And
+`sqrtPriceX96` is forced to zero on the way through: that field exists only to create and
+initialise a pool, and this function may only join one that already exists.
+
+**(c) Chainlink-bounded execution — done, but as a POOL PRICE BAND, not an amount ratio.**
+This is the part worth reading carefully.
+
+The finding asked to "bound executed amounts against the Chainlink feeds the contract already
+holds". The first implementation did exactly that — every `amountMin` had to sit within a
+configured slippage of its `amountDesired` — and **it was wrong**. In concentrated liquidity
+`amountDesired` is a *maximum*, not a target: a range sitting on one side of the current
+price legitimately consumes zero of the other token. A ratio rule would have refused ordinary
+range orders, which is to say it would have been an outage disguised as a fix. It was caught
+by writing the fork test, where a real full-range WETH/USDC mint does not consume both sides
+in the ratio requested.
+
+What replaced it is stronger. `_requirePoolOnMark` reads the pool's own `slot0` price and
+requires it to sit inside a per-asset band around that asset's Chainlink feed, before
+liquidity moves **in either direction**. Since the pair is allowlisted, nothing in it can
+reenter and move the pool between the check and the position-manager call, so liquidity
+enters and leaves at a price the treasury has verified. That, not the caller's minimums, is
+what bounds the value that moves.
+
+This also closes a case the pool-derivation alone would miss: a **real** pool for the same
+pair at a different tick spacing, which the attacker has just pushed to an absurd price. It
+is canonical; it is simply lying (`test_H02_exploit_cannotMintIntoAPoolPushedOffItsMark`).
+
+Blank minimums are still refused, on every liquidity operation, and the code says plainly
+that this is operator hygiene rather than the protection — an operator who states no
+expectation cannot notice they did not get it. A check that *looks* like the bound but is not
+would be worse than none.
+
+**The feed is mandatory, which is the deploy-time half of this.** `setPolAsset` now takes
+`(token, feed, maxDeviationBps, maxFeedAge)` and refuses a zero feed or a zero band. An
+optional price check that silently does nothing when the feed was forgotten is exactly the
+shape of guard this repo has already been bitten by once — the `setCustodian` wiring trap in
+LAUNCH_CONFIG — and the whole point of H-02 is that we stop relying on someone remembering.
+**This is a breaking change to the deploy sequence: see DEPLOY step 6.**
+
+**(d) Same treatment on increase and decrease — done.** Both now derive the pool, check the
+band, and refuse blank minimums. `increaseLiquidity` additionally reads the pair from
+`positions(tokenId)` instead of taking it from the caller (L-03): a caller-supplied pair let
+a manager approve one token while topping up a position in another, and there was no
+legitimate use for the freedom.
+
+---
+
+#### M-01 — the keeper floor was unreachable, so SEC-POT-002 was not actually closed
+
+**VALID, and a good catch about our own previous fix.** Batch 3 accepted SEC-POT-002 by
+adding `callerMinOut` to `ConversionRoutes._convert`, so a keeper holding a real quote could
+refuse a bad fill on a permissionless conversion. `Pot` exposes overloads that pass it.
+**`POLTreasury` did not** — its only `convert` passed a hardcoded zero. The parameter
+existed; on this contract the defence did not.
+
+`convert(address token, uint256 callerMinOut)` now exists here too. The floor can only ever
+be raised: `_convert` takes the maximum of the caller's number and the Chainlink minimum, so
+a caller can tighten the bound and never widen it
+(`test_M01_aCallerCannotWidenTheChainlinkBound`).
+
+**SEC-POT-002 is now closed on both contracts.** Its batch-3 entry stands, but it was only
+half true for POLTreasury between `launch-candidate-3` and `-9`, and that is recorded here
+rather than quietly corrected over there.
+
+---
+
+#### M-02 — income tokens and POL assets must be disjoint
+
+**VALID, and the severity is higher uncapped than the finding says.** `forwardIncome` is
+permissionless and moves the **entire balance** of an income token to the FeeSplitter. If a
+token were both an income token and a POL asset — or worse, the quote token — that
+permissionless call would become a drain of the treasury's pairing inventory. Not a theft:
+the funds go to the splitter and re-enter the Pot. But POL would be stripped of the ability
+to do its job by anyone, at any time, for the price of gas.
+
+Disjointness is enforced **in both directions**, which the finding did not ask for but is
+necessary: guarding only `setIncomeToken` would leave the same overlap reachable by
+registering in the other order (`test_M02_theDisjointnessHoldsInBothDirections`).
+
+---
+
+#### M-03 — donated positions and an append-only list
+
+**VALID.** `onERC721Received` registered any position the NFPM delivered, and `positionIds`
+had no removal path, so anything that ever landed here was walked by `collectAllFees`
+forever. Dust donations were a one-way ratchet toward a gas-dead sweep.
+
+Registration on receipt is now limited to `from == address(0)` — a fresh mint into this
+contract. A transfer in is still *accepted*, because refusing it would let a griefer make our
+own migrations fail, but it is not tracked. Deliberate transfers in are picked up by
+`registerPosition` (owner-gated: the cost of a junk entry is paid by every future sweep), and
+`prunePosition` removes an entry for a position this contract genuinely no longer owns and
+has not staked — so it can never be used to hide a live position from the fee sweep
+(`test_M03_pruningRequiresThePositionToBeReallyGone`).
+
+---
+
+#### L-01 — the rescue names the position manager
+
+**VALID and fixed, and the reasoning generalises.** `recoverExcess` was safe from moving
+position NFTs because an ERC-721 has no ERC-20 `transfer` shape for `safeTransfer` to hit.
+That is a property of **somebody else's contract**, not ours, and it stops being true the day
+the NFPM gains an ERC-20-shaped method. `isProtected` now names `positionManager` explicitly.
+
+---
+
+#### A note on what was deliberately NOT added
+
+Aerodrome's Voter also exposes `isAlive(gauge)`. Staking into a killed gauge earns nothing,
+so checking it is tempting — but it is an **economics** concern, not a custody one: a killed
+gauge is still the canonical gauge, and `withdraw` still returns the position. Adding the
+call would turn an availability dependency into the staking path for no security gain, and a
+Voter interface change would then break staking rather than just cost yield. Recorded in
+OPEN_ITEMS as a keeper-side check instead.
+
+---
+
 ### External review — Bankr, batch 5: NounLoans.sol
 
 Against `launch-candidate-7`.
@@ -1000,7 +1229,9 @@ on every build.
 | `launch-candidate-5` | SEC-FEE-001 … 004 | Superseded |
 | `launch-candidate-6` | SEC-ACT-001 … 004 — documentation and tests; **no contract logic changed** | Superseded |
 | `launch-candidate-7` | Short term ladder 7/14/30/90/180 and derived grace — product change, not a finding | Superseded |
-| `launch-candidate-8` | SEC-LN-002, SEC-LN-003; SEC-LN-001 and SEC-LN-004 documented | **Current** |
+| `launch-candidate-8` | SEC-LN-002, SEC-LN-003; SEC-LN-001 and SEC-LN-004 documented | Superseded |
+| `launch-candidate-9` | Contribution-time snapshot described accurately everywhere; Lils stop being Furnace fuel | Superseded |
+| `launch-candidate-10` | **Batch 6: H-01, H-02, M-01, M-02, M-03, L-01–L-04.** SEC-POT-002 finally closed on POLTreasury too | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read
