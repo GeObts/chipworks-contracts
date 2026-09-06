@@ -523,16 +523,20 @@ from scope entirely, without weakening any statement made about the rest of this
 What it does: burn `fuelCost` tokens of the **fuel collection** and `chipCost` $CHIP, receive
 one Based Noun or DarkNOUN from stock the multisig has deposited.
 
-**THE FUEL IS A CONSTRUCTOR ARGUMENT AND IS CURRENTLY UNDECIDED.** It was going to be Lil
-Based Nouns; that was cancelled, and a DN404 "Chip" collection from a separate workstream
-replaces it. Lils revert to a normal family collection — a 0.5x earner, never burned, same
-status as Based and Dark.
+**THE FUEL IS CHIPLETS, AND CHIPLETS IS A PLAIN ERC-721.** It was going to be Lil Based
+Nouns; that was cancelled. The replacement was going to be a DN404 hybrid, which would have
+needed a mirror-aware burn path; that was cancelled too. Chiplets now ships as a standard
+ERC-721 on OpenSea, so the Furnace burns it with the interface it already has —
+`ownerOf`, then `transferFrom` to `0xdead`. **No adapter, no mirror, no `0xdead` exemption.**
 
-Nothing in the logic ever depended on which collection it was: the fuel is an *input to every
-recipe* rather than a recipe of its own, so there is no "Lil recipe" to remove. Proven by
-`test_theFuelCollectionIsADeployArgumentNotAnAssumption`, which forges both Based and Dark
-against a completely different fuel collection. **Review the Furnace against an unknown
-ERC-721**, and see the fuel-collection note in the source for what a DN404 would change.
+Lils are a normal family collection: a 0.5x earner, never burned, same status as Based and
+Dark.
+
+Nothing in the logic ever depended on which collection the fuel was: it is an *input to every
+recipe* rather than a recipe of its own, so there was never a "Lil recipe" to remove. Proven
+by `test_theFuelCollectionIsADeployArgumentNotAnAssumption`, which forges both Based and Dark
+against a completely different fuel collection. **Review the Furnace against a plain ERC-721**
+— that is now the whole of the requirement.
 
 Four properties to attack, each of which is structural rather than policy:
 

@@ -705,3 +705,44 @@ A stuck balance changes no arithmetic anywhere in the contract, and
 
 The same is true of every other contract in the repo that forwards rather than holds. It is
 recorded once, here.
+
+---
+
+### A-22 · No B20 stock has an Aerodrome Slipstream pool — **swept on chain 2026-09-06**
+
+**This one contradicts a briefing, so it is written with the method attached.**
+
+The stock-registry expansion was specified as adding TSLA, AMZN, MSFT, MSTR, SNDK and SPCX
+"all with live Aerodrome Slipstream pools". They do not have any. Neither do the four already
+registered, and neither do the three being added disabled.
+
+Swept with `test/fork/B20PoolDiscovery.t.sol` against latest Base, for **all thirteen** B20
+tickers:
+
+| Venue | Probed | Found |
+|---|---|---|
+| Aerodrome Slipstream (CL) `0x5e7BB1…809A` | vs USDC **and** vs WETH, tick spacings 1, 2, 5, 10, 25, 50, 100, 200, 500, 2000 | **nothing, for any ticker** |
+| Aerodrome basic AMM `0x420DD3…40Da` | vs USDC (v and s) and vs WETH | AAPL and NVDA only, both **vAMM**, ~$4.9k and ~$4.2k |
+| Uniswap v3 `0x33128a…FDfD` | vs USDC, fees 100/500/2500/3000/10000 | every pool with real depth |
+
+**The control matters.** The same `getPool` call on the same Slipstream factory resolves
+WETH/USDC at tick spacing 100 in the same test run, so a zero is "there is no pool", not "we
+are calling it wrong". `test_noB20StockHasASlipstreamPool` asserts both halves and will start
+failing the day a Slipstream pool appears — which is the point of writing it as an assertion
+rather than a note.
+
+**Where the belief probably came from.** AAPL and NVDA really do have Aerodrome pools, and a
+router or aggregator UI would happily route a stock buy through Aerodrome for them. But they
+are **basic vAMM pools, not concentrated-liquidity ones**, and they are the two smallest
+venues either token trades on. `Venue.Slipstream` verifies against the CL factory and
+correctly refuses them; `Venue.UniswapV3` is where the depth is.
+
+**Consequence for the registry.** Every B20 stock is registered as `Venue.UniswapV3`, with the
+deepest USDC pool for that ticker. `test_slipstreamVenueCannotBeFakedForAB20` proves the
+registry cannot be told otherwise: passing `Venue.Slipstream` with a ticker's real Uniswap
+pool reverts `PoolNotFoundInFactory`, because the CL factory has never heard of it.
+
+**This does not close the Slipstream path.** `ChipRounds` encodes both venue shapes and
+`StockRegistry` verifies both factories, so the day a B20 Slipstream pool appears with real
+depth it is a `setVenue` call and nothing else. See A-16, which said the same thing about the
+conversion side and is still correct.

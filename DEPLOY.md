@@ -20,7 +20,7 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `LOAN_TREASURY` | _TBD_ | Where liquidated NounLoans collateral goes. May be the Safe. |
 | ~~`CLUTCH_VAULT_*`~~ | — | **Gone.** Chipworks runs its own activation vault; see step 4. |
 | `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. **A normal family collection: 0.5x earner, never burned.** |
-| `FURNACE_FUEL` | **_TBD_** | The collection the Furnace consumes. A DN404 "Chip" collection from a separate workstream. **Was Lil Based Nouns; no longer.** See step 8. |
+| `CHIPLETS` | **_TBD_** | The collection the Furnace consumes. **A standard ERC-721**, dropping on OpenSea. Was going to be Lil Based Nouns, then a DN404 hybrid; it is neither. See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
 | `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead`. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). |
@@ -547,6 +547,63 @@ Post-deploy checks:
 - `rounds.activationSource()` is ChipActivation
 - open a tiny test round end to end on a fork before funding the real Pot
 
+### The full B20 set — registry config, derived from chain 2026-09-06
+
+All thirteen tickers register. **Every one is `Venue.UniswapV3`**, not Slipstream — see
+ASSUMPTIONS A-22, which is the sweep proving no B20 stock has a Slipstream pool on Base at any
+tick spacing, against USDC or WETH. `test/fork/B20RegistryConfig.t.sol` re-derives every pool
+below from the live factory on each run, so this table cannot silently go stale.
+
+Depth is `poolLiquidityUsd` — both sides, stock valued at its Chainlink mark. Measured
+2026-09-06 at the latest block.
+
+| Ticker | Token | Chainlink feed | Venue | Pool | Fee | Depth USD |
+|---|---|---|---|---|---|---|
+| GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | UniV3 | `0x1f52F46BaC657564c31122b12b43A459E09273C8` | 10000 | **129,959** |
+| SPCX | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` | UniV3 | `0x127a12FC0953ab2ab89558c67Ba6D597D7140431` | 10000 | **40,844** |
+| MSFT | `0xB200000000000000000000Ab99cFa739E253872B` | `0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c` | UniV3 | `0xD73cBeCC0F62C7C1704332ED119514d6d84DC607` | 10000 | 13,989 |
+| NVDA | `0xb20000000000000000000078ee7ce2fE4908108C` | `0x04689a41629776563E6822F76f2e57D148d28513` | UniV3 | `0x60661b315553EB81872deEA9a66d567Cf0CCd33B` | 3000 | 12,341 |
+| AMZN | `0xb200000000000000000000d9192b6B456483C2E8` | `0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295` | UniV3 | `0x7F030e5fD657795C0937a3e8af2929Fd90DA91C7` | 10000 | 8,411 |
+| AAPL | `0xb200000000000000000000C2e324d24d7eEcd1fb` | `0x787f13dEa48Db0897CbCDD985de77809D837F988` | UniV3 | `0x97F35d1E92795327614BE000cd18cba1Be2c1931` | 3000 | 4,485 |
+| META | `0xb2000000000000000000008bC8786B856E61707C` | `0x6526aE6797A76123638b863AeE4dD27Ba4E4b27D` | UniV3 | `0x583919ec1975a1238C50e1940911894ee6912476` | 3000 | 1,482 |
+| TSLA | `0xb2000000000000000000001e800a7f5189430cD0` | `0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4` | UniV3 | `0xad6A86333C579d5Bbd150F28e74651006Fa87b3B` | 10000 | 276 |
+| MSTR | `0xb2000000000000000000004884b426556b92883d` | `0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a` | UniV3 | `0x5237817130DFc43F176A9146D3aE1Be85cBacAFb` | 10000 | **0** |
+| SNDK | `0xb200000000000000000000397293Cb8cda9a10c5` | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` | UniV3 | `0x26fa54cdfc64fAacb5364c09De7Ac2F72308052D` | 10000 | **0** |
+| COIN | `0xb200000000000000000000c85a31389D71F3ecfb` | `0x408e44f504A7371a345F03a73dDC96A4b48e8aa7` | **None** | — | — | no pool |
+| CRCL | `0xB20000000000000000000019f6E7C675b73C2e4D` | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` | **None** | — | — | no pool |
+| INTC | `0xB2000000000000000000004AFF16039bA04bdFBc` | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` | **None** | — | — | no pool |
+
+All thirteen feeds are 8dp, live, and return sane prices — asserted by
+`test_allThirteenRegisterDisabledWithRealFeeds`, which replaces the stand-in feed the registry
+suite used while A-13 was open.
+
+**MSTR and SNDK have deployed pool contracts holding no USDC.** They register with a venue and
+are blocked by the depth gate rather than by `PoolNotSet`, which is a different failure with
+the same outcome; `test_anEmptyPoolIsAsBlockedAsAMissingOne` pins both.
+
+### Which of these can actually be enabled
+
+**At a 25,000 USD threshold, two: GOOGL and SPCX.** That is not a bug in the threshold, it is
+the state of B20 secondary liquidity on Base — the whole set totals a little over 200k across
+every pool, and `poolLiquidityUsd` is headline TVL rather than tradeable depth, so what is
+buyable near spot is a fraction of even these numbers.
+
+Two consequences for the launch runbook:
+
+1. **Enable per ticker, on the day, from `liquidityReport()`.** Do not assume the table above
+   still holds — these pools are small enough that one LP leaving halves them.
+2. **The per-stock max-impact check in `ChipRounds` is the real protection**, not this gate.
+   The gate decides whether a stock is eligible at all; the impact check decides whether an
+   individual buy is allowed to land. Setting `minLiquidityUsd` low to get more tickers
+   enabled does not make thin pools safe to trade — it just moves the refusal later.
+
+The three pool-less tickers **cannot be enabled at all**, at any threshold including zero,
+because `setEnabled(true)` requires a venue before it reaches the number
+(`test_theEnableGateBlocksThePoollessTickersByConstruction`). When their pools appear it is
+`setVenue` then `setEnabled`, and the gate re-measures.
+
+---
+
 ### 6. POLTreasury — **built**
 
 > **CHANGED IN `launch-candidate-10`.** The constructor takes a sixth argument and
@@ -667,7 +724,7 @@ matter; it is listed last because it depends on `$CHIP` existing.
 |---|---|---|
 | `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
 | `chipToken_` | `$CHIP` | Burned alongside the fuel. Must exist first. |
-| `fuelCollection_` | **`FURNACE_FUEL` — TBD** | The collection consumed as fuel. **No longer Lil Based Nouns.** Blocks the Furnace deploy until the DN404 address exists. |
+| `fuelCollection_` | **`CHIPLETS` — TBD** | The collection consumed as fuel. A plain ERC-721. Blocks the Furnace deploy until the Chiplets address exists — and that is now the *only* thing blocking it, since there is no hybrid-token integration work left. |
 | `basedRecipe` | `{outputCollection: BASED_NOUNS, lilCost, chipCost}` | Recipe id 0, `FORGE_BASED`. |
 | `darkRecipe` | `{outputCollection: DARK_NOUNS, lilCost, chipCost}` | Recipe id 1, `FORGE_DARK`. |
 

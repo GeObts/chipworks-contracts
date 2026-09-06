@@ -519,8 +519,9 @@ a line of code.
 ## 20. NEW: Lils are no longer Furnace fuel — and the Anvil's Lil price assumed they were
 
 **The change:** Lil Based Nouns revert to a normal family collection — a 0.5x earner, never
-burned, exactly the same status as Based Nouns and DarkNOUNs. A DN404 "Chip" collection from a
-separate workstream becomes the Furnace's burn input instead.
+burned, exactly the same status as Based Nouns and DarkNOUNs. **Chiplets** becomes the
+Furnace's burn input instead — and as of 2026-09-06 Chiplets is a **standard ERC-721**, not the
+DN404 hybrid it was going to be. The hybrid integration work is cancelled along with it.
 
 **The contract side is clean.** The fuel is a constructor argument and an input to *every*
 recipe rather than a recipe of its own, so there is nothing to remove and both forge paths are
@@ -552,11 +553,14 @@ Based and Dark are still never burned; Lils have joined them.
 
 ### Blocking
 
-The Furnace **cannot be deployed** until the DN404 address exists — `fuelCollection_` is a
-required non-zero constructor argument. DEPLOY step 8 carries the blocker and the DN404
-caveats: it must be the ERC-721 **mirror**, ids may be reassigned when the fungible side moves,
-and *"burned means burned"* needs re-proving because sending a mirror token to `0xdead` also
-moves the underlying balance.
+The Furnace **cannot be deployed** until the Chiplets address exists — `fuelCollection_` is a
+required non-zero constructor argument. That is now the *only* thing blocking it. The DN404
+caveats that used to live here — point at the mirror, ids may be reassigned when the fungible
+side moves, re-prove "burned means burned" — are **all void**: Chiplets is a plain ERC-721 and
+the Furnace already burns plain ERC-721s with `ownerOf` then `transferFrom` to `0xdead`.
+
+The integration is now: put the Chiplets address in `fuelCollection_`, set `fuelCost` per
+recipe, deploy. No adapter, no seam.
 
 
 ---

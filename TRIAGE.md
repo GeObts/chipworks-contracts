@@ -67,6 +67,41 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+### SEC-POT-001 re-checked against the B20 expansion — **still settled correctly**
+
+Asked when the stock set expanded, on the belief that stock buys would now route through
+Aerodrome Slipstream. Worth answering carefully, because "we changed venue" is exactly the
+kind of change that quietly invalidates a closed finding.
+
+**Two different code paths, and only one of them was ever Uniswap-only.**
+
+| Path | Contract | Direction | Venues it encodes |
+|---|---|---|---|
+| Stock BUYS | `ChipRounds._buy` | quote → stock | **both** — `Venue.UniswapV3` and `Venue.Slipstream`, picked per stock from the registry |
+| Conversions | `ConversionRoutes._convert` (Pot, POLTreasury) | asset → quote | **Uniswap v3 only**, by design |
+
+SEC-POT-001 was about the *second* one: pointing a conversion route at a Slipstream router
+would revert on the ABI mismatch, so `_setRoute` refuses any router whose `factory()` is not
+the Uniswap v3 factory. That finding is about converting WETH and AERO into USDC, and those
+two both trade in Uniswap v3 pools (A-16). **A stock's venue has nothing to do with it** — no
+conversion route has ever pointed at a stock, and the Pot never buys.
+
+So expanding the stock set changes nothing here even if the buys were on Slipstream:
+`ChipRounds` already encodes the 8-field Slipstream `exactInputSingle` with `tickSpacing` and
+`deadline`, and `StockRegistry._setVenue` already verifies a Slipstream pool against the CL
+factory. Both were built for exactly this.
+
+**As it turns out the buys are not on Slipstream anyway** — see ASSUMPTIONS A-22. There is no
+Slipstream pool for any B20 stock on Base, at any tick spacing, against USDC or WETH. Every
+one registers as `Venue.UniswapV3`. The Slipstream buy path stays in the contract because it
+is correct and because the day a B20 CL pool appears it becomes a `setVenue` call — but it is
+dead code at launch, and a reviewer should know that rather than assume it is exercised.
+
+**Nothing changed in `src/`. This entry exists because the question was asked and the answer
+needed to be checkable.**
+
+---
+
 ### External review — Bankr, batch 7: Anvil.sol
 
 Against `launch-candidate-10`. No criticals or highs. **Two mediums that were both live bugs

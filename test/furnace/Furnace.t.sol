@@ -612,10 +612,13 @@ contract FurnaceTest is Test {
     /// @notice A Furnace deployed against a COMPLETELY DIFFERENT fuel collection forges Based
     ///         and Dark exactly as before.
     ///
-    /// @dev Lil Based Nouns are no longer the burn input — a separate DN404 "Chip" collection
-    ///      will be, once it exists. This proves the swap is a deploy-time argument and
-    ///      nothing more: there is no "Lil recipe" to remove, because the fuel is an INPUT to
-    ///      every recipe rather than a recipe of its own. Both output paths are unaffected.
+    /// @dev Lil Based Nouns are no longer the burn input; Chiplets is, and Chiplets is a
+    ///      plain ERC-721. This proves the swap is a deploy-time argument and nothing more:
+    ///      there is no "Lil recipe" to remove, because the fuel is an INPUT to every recipe
+    ///      rather than a recipe of its own. Both output paths are unaffected.
+    ///
+    ///      It is also the test that makes the Chiplets integration a one-line deploy change
+    ///      rather than a code change, now that the DN404 seam is gone.
     function test_theFuelCollectionIsADeployArgumentNotAnAssumption() public {
         MockNoun otherFuel = new MockNoun("Some Other Fuel", "FUEL");
 

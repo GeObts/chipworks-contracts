@@ -1082,14 +1082,20 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///      costs people without the 48h notice that guards every other economic parameter
     ///      here. Changing it means a redeploy, which is the right amount of friction.
     ///
-    ///      WHAT A NON-ERC-721 FUEL WOULD NEED CHECKING — the interface here is plain
-    ///      ERC-721: `ownerOf` then `transferFrom` to `0xdead`. A hybrid such as DN404 has an
-    ///      ERC-20 base and an ERC-721 mirror, so this must point at the MIRROR, and three
-    ///      things stop being obvious: token ids may be reassigned when the fungible side
-    ///      moves, `ownerOf` may not be stable between a user's approval and their forge, and
-    ///      "burned means burned" needs re-proving because sending the mirror token to
-    ///      `0xdead` also moves the underlying balance. None of that is a reason it cannot
-    ///      work; all of it is a reason not to assume it does.
+    ///      THE FUEL IS CHIPLETS, A PLAIN ERC-721. That was an open question for a while
+    ///      and it is now closed: Chiplets ships as a standard ERC-721, not a DN404 hybrid.
+    ///      The interface this contract uses — `ownerOf`, then `transferFrom` to `0xdead` —
+    ///      is exactly the right one, with no adapter and no mirror to reason about.
+    ///
+    ///      WHAT THE HYBRID WOULD HAVE COST, recorded because it is why this reads as a
+    ///      relief rather than a non-event: a DN404 has an ERC-20 base and an ERC-721 mirror,
+    ///      so this would have had to point at the mirror, and three things would have
+    ///      stopped being obvious — token ids may be reassigned when the fungible side moves,
+    ///      `ownerOf` may not be stable between a user's approval and their forge, and
+    ///      "burned means burned" would need re-proving because sending a mirror token to
+    ///      `0xdead` also moves the underlying balance. None of that applies now.
+    ///
+    ///      **So review this against a plain ERC-721 and nothing more.**
     IERC721 public immutable fuelCollection;
 
     mapping(uint8 recipeId => Recipe) internal _recipes;
