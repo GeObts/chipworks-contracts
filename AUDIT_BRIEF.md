@@ -11,8 +11,8 @@ re-review; every finding is fixed with a test or accepted with written reasoning
 tally, the per-contract index and the two gaps are at the top of
 **[TRIAGE.md](TRIAGE.md)** — read that before this document if you are picking up the review.
 
-**The deployable tag is `launch-candidate-14`.** It is the only tag containing every fix;
-`launch-candidate-13` predates the Furnace batch. 728 tests pass there, 51 on a Base fork.
+**The deployable tag is `launch-candidate-15`.** It is the current tag containing every fix;
+729 tests pass there, 51 on a Base fork.
 
 > **TWO THINGS ARE NOT DONE, and neither should be discovered later.**
 >
@@ -30,7 +30,7 @@ tally, the per-contract index and the two gaps are at the top of
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
 **Size:** ~3,790 lines of non-comment source across 12 contracts + 1 base + 14 interfaces.
-**Tests:** 728 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 51 tests
+**Tests:** 729 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 51 tests
 against a live Base mainnet fork.
 
 **Where the review is written down.** `TRIAGE.md` carries every finding with its full
@@ -70,7 +70,7 @@ particular spread; if you prefer bit-for-bit reproducibility, pin a block in the
 
 ```
 forge test                                   # everything (needs BASE_RPC_URL)
-forge test --no-match-contract "Fork"        # no RPC needed
+forge test --no-match-path "test/fork/*"      # no RPC needed
 forge test --match-contract Invariant        # ~105s
 forge test --match-path "test/fork/*" -j 1   # serialise: a free-tier RPC will 429 otherwise
 forge test --match-contract CodeSizeTest     # the size guard
