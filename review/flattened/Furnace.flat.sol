@@ -1034,6 +1034,20 @@ library SafeERC20 {
 ///      the multisig can reduce stock but can never pull the specific token a user is about
 ///      to forge out from under them.
 ///
+///      THE ONE EXCEPTION IS A TOKEN THAT CANNOT MOVE AT ALL, AND IT COSTS 48 HOURS.
+///      External review SEC-FUR-003: an output token that becomes untransferable — a paused
+///      collection, a compliance freeze, a broken migration — sits at the head and reverts
+///      every `forge` against that collection, forever. Nothing behind it can ever be
+///      reached, `withdrawStock` only takes the tail, and `rescueStrayNFT` refuses anything
+///      in the live queue. One dead token bricked the whole recipe.
+///
+///      {queueStockSkip} → 48h → {executeStockSkip} advances past it without dispensing it.
+///      The queued skip PINS THE TOKEN ID, so the announcement is "we intend to skip token
+///      X" rather than a standing right to skip whatever reaches the head two days later —
+///      a healthy token that arrives at the head in the meantime is not skippable by an
+///      already-queued change. That is what keeps this from being the queue-jumping lever
+///      the paragraph above says does not exist.
+///
 ///      RECIPE CHANGES ARE TIMELOCKED. Amounts move only through queue → 48h → execute,
 ///      each step emitting an event, so a change is visible long before it bites. Pausing
 ///      is NOT timelocked: stopping a recipe is a safety action and must be immediate.
@@ -1107,6 +1121,15 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /// @notice How far through `_stock` forging has consumed. Never decreases.
     mapping(address collection => uint256) public forgedFrom;
 
+    /// @notice A queued intent to skip one stuck token at the head of a collection's queue.
+    struct PendingSkip {
+        bool queued;
+        uint64 executableAt;
+        uint256 tokenId;
+    }
+
+    mapping(address collection => PendingSkip) internal _pendingSkip;
+
     /// @notice Running totals, for the site.
     uint256 public totalFuelBurned;
     uint256 public totalChipBurned;
@@ -1128,6 +1151,9 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     event RecipeChangeExecuted(uint8 indexed recipeId, uint16 fuelCost, uint256 chipCost);
     event RecipeChangeCancelled(uint8 indexed recipeId);
     event RecipePaused(uint8 indexed recipeId, bool paused);
+    event StockSkipQueued(address indexed collection, uint256 tokenId, uint64 executableAt);
+    event StockSkipped(address indexed collection, uint256 tokenId);
+    event StockSkipCancelled(address indexed collection, uint256 tokenId);
 
     error ZeroAddress();
     error BadRecipe(uint8 recipeId);
@@ -1141,6 +1167,13 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     error BadConfig();
     error NotEnoughStock(uint256 requested, uint256 available);
     error ChipBurnShortfall(uint256 delivered, uint256 required);
+    /// @notice `fuelIds` must be strictly ascending. SEC-FUR-005.
+    error FuelIdsNotAscending(uint256 previous, uint256 current);
+    /// @notice The head moved between reading it and forging. SEC-FUR-004.
+    error UnexpectedOutput(uint256 got, uint256 expected);
+    /// @notice The queued skip named a different token than the one now at the head.
+    error SkipTargetMoved(uint256 head, uint256 queued);
+    error NothingSkipQueued(address collection);
 
     /// @param multisig       Owner.
     /// @param chipToken_     $CHIP.
@@ -1187,10 +1220,45 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     /// @notice Burn `fuelIds` and the recipe's $CHIP cost, receive the oldest token in stock.
     ///
-    /// @dev Order is checks → effects → interactions, and the output NFT leaves last, so the
+    /// @dev **`fuelIds` MUST BE STRICTLY ASCENDING.** SEC-FUR-005: the duplicate check used to
+    ///      be a nested loop over the inputs, which is quadratic in `fuelCost`. Bounded by
+    ///      `MAX_FUEL_COST` at 100 it was never a denial of service, only waste — but sorting
+    ///      is free for the caller, it makes the check a single comparison per element, and
+    ///      strictly-ascending implies distinct so the two rules collapse into one. The site
+    ///      must sort before submitting; see the error {FuelIdsNotAscending}.
+    ///
+    ///      Order is checks → effects → interactions, and the output NFT leaves last, so the
     ///      `onERC721Received` hook on a contract recipient cannot re-enter into a second
     ///      forge against stock this call has already claimed. `nonReentrant` belts it.
     function forge(uint8 recipeId, uint256[] calldata fuelIds) external nonReentrant returns (uint256 outputTokenId) {
+        return _forge(recipeId, fuelIds, 0, false);
+    }
+
+    /// @notice Forge, but only if the token you receive is the one you were promised.
+    ///
+    /// @dev SEC-FUR-004. The queue's head is readable with {nextOutput}, and between reading
+    ///      it and landing a transaction somebody else can forge and move it on. Without this
+    ///      the caller burns their fuel and their $CHIP for a token they did not choose — and
+    ///      since the head is public, it is trivially front-runnable by anyone who wants a
+    ///      specific Noun to go to someone else.
+    ///
+    ///      Passing the expected id makes the forge all-or-nothing: mismatch reverts and
+    ///      nothing is consumed. The unchecked overload above is kept because "give me the
+    ///      next one, I do not mind which" is a real and common intent, and forcing every
+    ///      caller to name a token would make an ordinary forge fail whenever anyone else
+    ///      forged first.
+    function forge(uint8 recipeId, uint256[] calldata fuelIds, uint256 expectedTokenId)
+        external
+        nonReentrant
+        returns (uint256 outputTokenId)
+    {
+        return _forge(recipeId, fuelIds, expectedTokenId, true);
+    }
+
+    function _forge(uint8 recipeId, uint256[] calldata fuelIds, uint256 expectedTokenId, bool checkExpected)
+        internal
+        returns (uint256 outputTokenId)
+    {
         Recipe memory r = _recipes[recipeId];
         if (!r.exists) revert BadRecipe(recipeId);
         if (r.paused) revert RecipeIsPaused(recipeId);
@@ -1201,13 +1269,22 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         uint256[] storage stock = _stock[r.outputCollection];
         if (cursor >= stock.length) revert OutOfStock(recipeId, r.outputCollection);
         outputTokenId = stock[cursor];
+        if (checkExpected && outputTokenId != expectedTokenId) {
+            revert UnexpectedOutput(outputTokenId, expectedTokenId);
+        }
 
-        // ---- checks: inputs are the caller's, and distinct ----
+        // ---- checks: inputs are the caller's, and strictly ascending ----
+        // Ascending is what makes this O(n): each id need only be compared with the one
+        // before it, and "greater than the last" is also "not equal to any of them".
         for (uint256 i; i < fuelIds.length; ++i) {
-            if (fuelCollection.ownerOf(fuelIds[i]) != msg.sender) revert NotFuelOwner(fuelIds[i], msg.sender);
-            for (uint256 j; j < i; ++j) {
-                if (fuelIds[j] == fuelIds[i]) revert DuplicateFuelToken(fuelIds[i]);
+            if (i != 0) {
+                // Equality kept its own error: submitting the same token twice is the mistake
+                // a caller is overwhelmingly most likely to make, and "not ascending" is a
+                // worse thing to read than "duplicate".
+                if (fuelIds[i] == fuelIds[i - 1]) revert DuplicateFuelToken(fuelIds[i]);
+                if (fuelIds[i] < fuelIds[i - 1]) revert FuelIdsNotAscending(fuelIds[i - 1], fuelIds[i]);
             }
+            if (fuelCollection.ownerOf(fuelIds[i]) != msg.sender) revert NotFuelOwner(fuelIds[i], msg.sender);
         }
 
         // ---- effects ----
@@ -1250,6 +1327,10 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     function pendingChange(uint8 recipeId) external view returns (PendingChange memory) {
         return _pending[recipeId];
+    }
+
+    function pendingSkip(address collection) external view returns (PendingSkip memory) {
+        return _pendingSkip[collection];
     }
 
     /// @notice Output NFTs still available to forge for this recipe.
@@ -1326,6 +1407,62 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
             IERC721(collection).transferFrom(address(this), to, tokenId);
             emit StockWithdrawn(collection, tokenId, to, stockRemainingFor(collection));
         }
+    }
+
+    /// @notice Announce an intent to skip the token currently at the head of a collection's
+    ///         forge queue. Multisig only, executable after 48 hours.
+    ///
+    /// @dev SEC-FUR-003, and the escape hatch for exactly one situation: the head cannot be
+    ///      transferred at all, so every forge against this collection reverts and the stock
+    ///      behind it is unreachable. There was no lever for that — `withdrawStock` takes the
+    ///      tail and `rescueStrayNFT` refuses live stock — so one dead token bricked a recipe.
+    ///
+    ///      **The token id is pinned at queue time.** This is the whole reason the function
+    ///      is safe: it announces "we intend to skip token X", and if X is no longer at the
+    ///      head when the timelock expires the execution reverts {SkipTargetMoved}. So a
+    ///      queued skip can never be used against a healthy token that happens to reach the
+    ///      head during the 48 hours, and it cannot be left queued as a standing right to
+    ///      jump the queue later.
+    ///
+    ///      Pausing the recipe is the immediate lever while this matures, exactly as with a
+    ///      recipe change.
+    function queueStockSkip(address collection) external onlyOwner {
+        uint256 cursor = forgedFrom[collection];
+        uint256[] storage stock = _stock[collection];
+        if (cursor >= stock.length) revert NotEnoughStock(1, 0);
+
+        uint256 tokenId = stock[cursor];
+        uint64 executableAt = uint64(block.timestamp) + RECIPE_TIMELOCK;
+        _pendingSkip[collection] = PendingSkip({queued: true, executableAt: executableAt, tokenId: tokenId});
+        emit StockSkipQueued(collection, tokenId, executableAt);
+    }
+
+    /// @notice Advance past the announced stuck token WITHOUT dispensing it. Multisig only.
+    /// @dev The token stays owned by this contract and simply leaves the forge queue. It is
+    ///      not sent anywhere, because the reason it is being skipped is that it cannot be
+    ///      sent anywhere. If it ever becomes transferable again, `rescueStrayNFT` can move
+    ///      it — it is no longer live stock once the cursor has passed it.
+    function executeStockSkip(address collection) external onlyOwner {
+        PendingSkip memory p = _pendingSkip[collection];
+        if (!p.queued) revert NothingSkipQueued(collection);
+        if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
+
+        uint256 cursor = forgedFrom[collection];
+        uint256[] storage stock = _stock[collection];
+        if (cursor >= stock.length) revert NotEnoughStock(1, 0);
+        if (stock[cursor] != p.tokenId) revert SkipTargetMoved(stock[cursor], p.tokenId);
+
+        forgedFrom[collection] = cursor + 1;
+        delete _pendingSkip[collection];
+        emit StockSkipped(collection, p.tokenId);
+    }
+
+    /// @notice Drop a queued skip. Multisig only.
+    function cancelStockSkip(address collection) external onlyOwner {
+        PendingSkip memory p = _pendingSkip[collection];
+        if (!p.queued) revert NothingSkipQueued(collection);
+        delete _pendingSkip[collection];
+        emit StockSkipCancelled(collection, p.tokenId);
     }
 
     /* ------------------------------------------------------------------ */

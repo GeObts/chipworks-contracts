@@ -730,7 +730,25 @@ matter; it is listed last because it depends on `$CHIP` existing.
 
 Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
 their value in calldata is ignored. `lilCost` must be in `1..100` (`MAX_LIL_COST`) or the
-constructor reverts. `chipCost` may be zero, which makes a recipe Lils-only.
+constructor reverts. `chipCost` may be zero, which makes a recipe **fuel-only** — whether
+that should be allowed at all is an open decision, see OPEN_ITEMS 24. Both launch recipes carry
+a real `chipCost`, so this is about what a future `queueRecipeChange` may do.
+
+**Re-pointing the fuel means a REDEPLOY.** `fuelCollection` is immutable and stays that way
+(external review SEC-FUR-002): a settable fuel input would let whoever holds it point the burn
+at a collection they can mint for free and forge out the deposited stock. The migration route,
+if the fuel ever changes, is: `setPaused` both recipes → `withdrawStock` the output queue to
+the multisig → deploy a fresh Furnace with the new `fuelCollection_` → `depositStock` again.
+Nothing is stranded, because burned inputs are at `0xdead` and the only assets the Furnace
+holds are the outputs it was given.
+
+**Two operational notes from batch 9:**
+- **`fuelIds` must be sorted strictly ascending** when calling `forge`, or it reverts
+  `FuelIdsNotAscending`. The site must sort before submitting.
+- **A stuck output token no longer bricks a recipe.** If a deposited Noun becomes
+  untransferable, `queueStockSkip(collection)` → 48h → `executeStockSkip(collection)` advances
+  past it. The skip pins the token id at queue time, so it cannot be aimed at a different
+  token later. Pause the recipe while it matures.
 
 **Recipe amounts are deploy arguments on purpose.** Do not treat them as final: they are
 the one thing here that will be tuned after launch, and tuning them costs two multisig

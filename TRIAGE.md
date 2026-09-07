@@ -102,6 +102,163 @@ needed to be checkable.**
 
 ---
 
+### External review — Bankr, batch 9: Furnace.sol
+
+Against `launch-candidate-13`. The Furnace sits outside the money path — it shares no storage,
+no inheritance and no call path with ChipRounds, ChipClaims, Pot or POLTreasury, so a bug here
+loses forge stock rather than a holder's rewards. That is why it was reviewed last, and it is
+the right reason to have deprioritised it, not an excuse for the findings being minor.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| SEC-FUR-001 | DN404 burn adapter needed | — | — | **NOT APPLICABLE** | Resolved by design change — Chiplets is a plain ERC-721 |
+| SEC-FUR-002 | `fuelCollection` is immutable, no re-point | Low | Low / Low | **ACCEPTED** | No code change; redeploy is the migration route |
+| SEC-FUR-003 | An untransferable output wedges the FIFO queue with no skip | Medium | **Medium / Medium** | **VALID** | **FIXED** — 48h-timelocked, id-pinned skip |
+| SEC-FUR-004 | No `expectedTokenId`; front-running hands you an unwanted token | Medium | Low / **Medium** | **VALID** | **FIXED** — opt-in overload |
+| SEC-FUR-005 | Quadratic duplicate-input check | Low | Low / Low | **VALID** | **FIXED** — strictly ascending, O(n) |
+| — | Zero-CHIP recipe guard | — | — | **OPEN QUESTION** | Evidence below; **needs a product decision**, OPEN_ITEMS 24 |
+
+---
+
+#### SEC-FUR-001 — resolved by a design change, not by code
+
+**NOT APPLICABLE.** The Furnace was going to burn a DN404 hybrid, which would have meant
+pointing at the ERC-721 mirror and re-proving three things: that token ids are not reassigned
+when the fungible side moves, that `ownerOf` is stable between a user's approval and their
+forge, and that "burned means burned" still holds when sending a mirror token to `0xdead` also
+moves an underlying balance.
+
+Chiplets now ships as a **standard ERC-721**, so none of it applies. The Furnace burns it with
+the interface it already had — `ownerOf`, then `transferFrom` to `0xdead` — with no adapter and
+no `0xdead` exemption. The integration is one constructor argument.
+
+Recorded as resolved-by-design-change rather than as a fix, because nothing in `src/` needed to
+change and a reviewer should not go looking for a commit that closed it.
+
+---
+
+#### SEC-FUR-002 — immutable stays immutable
+
+**ACCEPTED, no code change.** The finding is that `fuelCollection` cannot be re-pointed after
+deploy. That is deliberate, and the reason it is deliberate got *stronger* rather than weaker
+in the last week.
+
+**A settable fuel input is a drain lever.** The Furnace custodies the protocol's deposited
+Based and Dark stock. Whoever could re-point the fuel could point it at a collection they can
+mint for free and forge the entire stock out. A 48-hour timelock mitigates that — it is the
+same notice every other economic parameter here gets — but the thing at risk is precisely what
+this contract holds, which is a worse trade than the flexibility is worth.
+
+**And the reason anybody wanted a setter has evaporated.** It was that the fuel address was TBD
+from another workstream, so a deploy would have had to guess. Chiplets is a known ERC-721
+address now; there is nothing to guess.
+
+**The migration route is a redeploy**, and it is cheap because the Furnace holds nothing that
+cannot be moved deliberately: `withdrawStock` empties the output queue from the tail, and both
+paths are already reviewed. Documented in DEPLOY step 8 so it is not rediscovered under
+pressure. Note the asymmetry with `queueRecipeChange`, which *can* change what a forge costs —
+the difference is that a recipe change moves an amount inside a fixed collection, while
+re-pointing the collection changes what the word "fuel" means.
+
+---
+
+#### SEC-FUR-003 — one dead token bricked a recipe
+
+**VALID, and the sharpest finding of the batch.** `forge` hands out `stock[cursor]` and the
+cursor only advances inside `forge`. If that token becomes untransferable — a paused
+collection, a compliance freeze, a broken migration — every forge against the collection
+reverts, forever, and every healthy token behind it is unreachable.
+
+**There was no lever at all**, which is what makes it a Medium rather than an annoyance:
+`withdrawStock` takes the tail by design, and `rescueStrayNFT` explicitly refuses anything in
+the live queue. Both refusals are correct in isolation; together they left no way out.
+
+**Demonstrated before it was fixed.** `test_PROOF_FUR003_aStuckHeadWedgesTheQueueForever`
+passed on `launch-candidate-13`: a frozen head, both admin paths refusing, and two different
+users unable to forge.
+
+**`queueStockSkip` → 48h → `executeStockSkip`** advances past the token without dispensing it.
+It stays owned by the Furnace, because the reason it is being skipped is that it cannot be
+sent anywhere; if it ever becomes transferable again `rescueStrayNFT` can move it, since the
+cursor has passed it and it is no longer live stock.
+
+**The token id is pinned at queue time, and that is the whole safety argument.** The contract's
+headline claim is that the admin cannot jump the queue, and a generic "skip whatever is at the
+head in 48 hours" would have quietly repealed it. Pinning makes the announcement specific —
+*we intend to skip token X* — and execution reverts `SkipTargetMoved` if X is no longer the
+head. A healthy token that arrives at the head during the wait cannot be skipped by an
+already-queued change, and a skip cannot be left queued as a standing right to jump the queue
+later. Asserted by `test_FUR003_aQueuedSkipCannotBeAimedAtADifferentToken`.
+
+Same class as the Anvil's L-3, and resolved the same way: the head is a promise, so breaking it
+costs notice.
+
+---
+
+#### SEC-FUR-004 — the head is public, so it is front-runnable
+
+**VALID.** `nextOutput` makes the queue's head readable, which is the point — it is what makes
+this a queue rather than a lottery. But between reading it and landing a transaction anyone can
+forge and move it on, and the caller burns their fuel and their $CHIP for a token they did not
+choose. Cheaply griefable too: anyone who wants a specific Noun to go to somebody else only has
+to forge once, first.
+
+**`forge(recipeId, fuelIds, expectedTokenId)` is all-or-nothing.** A mismatch reverts before
+anything is consumed — asserted by checking the caller still holds every fuel token and their
+full $CHIP balance afterwards.
+
+**The unchecked overload is kept deliberately.** "Give me the next one, I do not mind which" is
+a real and common intent, and forcing every caller to name a token would make an ordinary forge
+fail whenever anybody else forged first — trading a rare unwanted token for a frequent failed
+transaction. Opt-in is the right shape.
+
+---
+
+#### SEC-FUR-005 — ascending inputs
+
+**VALID, FIXED.** The duplicate check was a nested loop over `fuelIds`. Bounded by
+`MAX_FUEL_COST` at 100 it was never a denial of service — 4,950 comparisons at the very worst —
+so this is genuinely Low. But sorting is free for the caller, it makes the check one comparison
+per element, and *strictly ascending* implies *distinct*, so two rules collapse into one.
+
+**`DuplicateFuelToken` was kept for the adjacent case.** Submitting the same token twice is the
+mistake a caller is overwhelmingly most likely to make, and "you sent the same token twice" is
+a better thing to read than "not ascending". A non-adjacent repeat is caught by the ordering
+rule one comparison earlier, which is the same rejection with a different name; the existing
+duplicate test was updated to say so rather than deleted.
+
+**This is a breaking change for the site.** `fuelIds` must be sorted before submission.
+
+---
+
+#### The zero-CHIP recipe guard — **NOT DECIDED, AND NOT GUARDED**
+
+The question was whether a zero-CHIP forge is intended, with the guard conditional on the
+answer. **I cannot confirm intent from the codebase, and the evidence is thin in both
+directions**, so the guard is not in — reporting what I found instead of picking for you.
+
+**For "intended":** DEPLOY has carried one sentence saying `chipCost` may be zero since the
+Furnace was written, and `forge` has an explicit `if (r.chipCost != 0)` branch rather than
+falling into a zero-value transfer.
+
+**Against:** that sentence calls the result a "Lils-only" recipe — vocabulary retired two tags
+ago, so it has not been re-read in a while. There was **no test** exercising a zero-CHIP forge
+until this batch added one. The contract's own title is *"Burn a fuel NFT and $CHIP to forge"*.
+And $CHIP burn is a protocol-wide economic sink, not a Furnace detail.
+
+**Why not guarded anyway.** The two errors are not symmetric. If zero-CHIP is unintended and
+ships unguarded, a mis-keyed `queueRecipeChange(id, cost, 0)` makes forging CHIP-free with 48
+hours of public notice, and is fixed by queueing a correction. If zero-CHIP *is* intended and I
+guard it, the configuration becomes unreachable and the fix is a redeploy, since `_setRecipe`
+runs in the constructor. **Not guarding is the recoverable direction**, so that is where it
+sits until somebody who owns the economics answers.
+
+`test_openQuestion_aZeroChipRecipeForgesOnFuelAlone` asserts the current behaviour so the
+affordance is visible and deliberate rather than incidental. If the answer is "forging must
+always burn CHIP", the guard is one line in `_setRecipe` and that test inverts. **OPEN_ITEMS 24.**
+
+---
+
 ### External review — Bankr, batch 8: ClaimRouter.sol — **the core eleven are done**
 
 Against `launch-candidate-12`. No criticals or highs; every core invariant came back safe.
@@ -1526,7 +1683,8 @@ on every build.
 | `launch-candidate-10` | **Batch 6: H-01, H-02, M-01, M-02, M-03, L-01–L-04.** SEC-POT-002 finally closed on POLTreasury too | Superseded |
 | `launch-candidate-11` | **Batch 7 (Anvil): M-1, M-2, L-1, L-2, L-3**; I-1 documented | Superseded |
 | `launch-candidate-12` | Full B20 registry config with real feeds; Chiplets is a plain ERC-721. No `src/` logic change | Superseded |
-| `launch-candidate-13` | **Batch 8 (ClaimRouter): SEC-RTR-001, -002, -004**; -003 documented. **Core audit complete** | **Current** |
+| `launch-candidate-13` | **Batch 8 (ClaimRouter): SEC-RTR-001, -002, -004**; -003 documented. **Core audit complete** | Superseded |
+| `launch-candidate-14` | **Batch 9 (Furnace): SEC-FUR-003, -004, -005**; -001 not applicable, -002 accepted; zero-CHIP guard open | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read

@@ -15,7 +15,7 @@ should be read.
 
 ```bash
 git clone <repo> chipworks-contracts && cd chipworks-contracts
-git checkout launch-candidate-13
+git checkout launch-candidate-14
 git submodule update --init --recursive     # forge-std, openzeppelin-contracts
 
 cp .env.example .env                        # then set BASE_RPC_URL
@@ -31,13 +31,13 @@ tag from `-3` onwards carries the review package with it — `REVIEW_PACKAGE.md`
 and regenerated `review/flattened/` sources — so the current candidate is the only thing to
 check out.
 
-**Reference `launch-candidate-13`.** Review is iterative rather than a single frozen pass:
+**Reference `launch-candidate-14`.** Review is iterative rather than a single frozen pass:
 findings arrive in batches, each batch is triaged in `TRIAGE.md` and lands in the next
 candidate, and the tag numbering is honest history — no tag is ever moved or deleted, so you
 can always diff the tree you read against the tree that shipped:
 
 ```bash
-git diff launch-candidate-12 launch-candidate-13 -- src/
+git diff launch-candidate-13 launch-candidate-14 -- src/
 ```
 
 `review-1` and `launch-candidate-1` still exist and still resolve; they are simply eight
@@ -131,7 +131,7 @@ is short.
 | Contract | LOC | Bytes | What it does |
 |---|---:|---:|---|
 | `anvil/Anvil.sol` | 340 | 10,075 | The shop. FIFO shelf of Nouns at a fixed ETH price, plus a +25% snipe. **Takes public money**, so review it before the other two here. The shelf's slot bookkeeping was rewritten in `launch-candidate-11` (batch 7 M-1/M-2); the invariant to attack is one live slot per token. |
-| `furnace/Furnace.sol` | 210 | 7,711 | Burn Lils + $CHIP to forge a Based or Dark Noun from deposited stock. |
+| `furnace/Furnace.sol` | 532 | 9,324 | Burn fuel NFTs + $CHIP to forge a Based or Dark Noun from deposited stock. Fuel is **Chiplets, a plain ERC-721**. Outside the money path. |
 | `StockRegistry.sol` | 232 | 8,971 | Which stocks are buyable, where, and the depth gate. Holds nothing. |
 | `ClaimRouter.sol` | 264 | 3309 | Batches many `ChipClaims.claimFor` calls into one transaction. **Never holds anything** — `claimFor` credits its `owner` argument, never `msg.sender`. Batch capped at 100; the sweep is multisig-only since batch 8. |
 

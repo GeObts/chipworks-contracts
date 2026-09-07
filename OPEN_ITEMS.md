@@ -647,3 +647,37 @@ alongside whatever else lands next in those files.
 the timelock semantics stay identical across the protocol rather than drifting per contract.
 Note that `ChipActivation`, `Furnace` and `ChipClaims` also queue changes with no expiry; the
 grace-period question is protocol-wide even though only the Anvil answers it today.
+
+---
+
+## 24. NEW: is a zero-CHIP Furnace recipe intended?
+
+**An open product decision, deliberately left open rather than guessed at.** External review
+batch 9 asked whether `chipCost == 0` should be rejected. It is currently allowed.
+
+**What a zero-CHIP recipe does:** forging burns the fuel NFTs and no $CHIP at all. The output
+Noun still leaves the Furnace. `totalChipBurned` stops moving, and the Furnace contributes
+nothing to the $CHIP sink for as long as the recipe stands.
+
+**The evidence for it being deliberate is one sentence in DEPLOY**, which has said `chipCost`
+may be zero since the Furnace was first written, plus an explicit `if (r.chipCost != 0)` branch
+in `forge`. **The evidence against** is that the same sentence describes the result as a
+"Lils-only" recipe — vocabulary retired in `launch-candidate-9` — that nothing tested the path
+until batch 9 added a test, and that the contract's own title is *"Burn a fuel NFT and $CHIP to
+forge"*.
+
+**Left unguarded because that is the recoverable direction.** A mis-keyed zero ships with 48
+hours of public notice and is fixed by queueing a correction. A wrongly-added guard makes a
+legitimate configuration unreachable and costs a redeploy, because `_setRecipe` also runs in
+the constructor.
+
+**To close this**, answer one question: *must every forge burn $CHIP?*
+
+- **Yes** → add `if (r.chipCost == 0) revert BadConfig();` to `_setRecipe`, and mirror it in
+  `queueRecipeChange`. Invert `test_openQuestion_aZeroChipRecipeForgesOnFuelAlone`. One line
+  each, and it must land before the Furnace deploys.
+- **No** → delete this item, fix the "Lils-only" wording in DEPLOY, and keep the test as the
+  record that the affordance is intended.
+
+Worth noticing that the launch recipes both carry a real `chipCost`, so this is about what a
+future `queueRecipeChange` is permitted to do, not about the deploy.

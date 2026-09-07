@@ -6,6 +6,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {Furnace} from "../../src/furnace/Furnace.sol";
@@ -193,10 +194,14 @@ contract FurnaceTest is Test {
         dup[1] = 2;
         dup[2] = 3;
         dup[3] = 4;
-        dup[4] = 1; // repeat
+        dup[4] = 1; // repeat, and out of order
 
+        // Since batch 9 the inputs must be strictly ascending, so a NON-ADJACENT repeat is
+        // caught by the ordering rule rather than by an equality check — it is the same
+        // rejection reached one comparison earlier. The adjacent case keeps
+        // `DuplicateFuelToken`; see `test_FUR005_anAdjacentDuplicateStillReadsAsADuplicate`.
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Furnace.DuplicateFuelToken.selector, uint256(1)));
+        vm.expectRevert(abi.encodeWithSelector(Furnace.FuelIdsNotAscending.selector, uint256(4), uint256(1)));
         furnace.forge(BASED_RECIPE, dup);
     }
 
@@ -697,6 +702,258 @@ contract FurnaceTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Furnace.RecipeIsPaused.selector, DARK_RECIPE));
         furnace.forge(DARK_RECIPE, darkIds);
     }
+
+    /* ------------------------------------------------------------------ */
+    /*            EXTERNAL REVIEW — BANKR BATCH 9: Furnace.sol              */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice SEC-FUR-003. One untransferable token at the head reverts every forge against
+    ///         that collection, and everything behind it is unreachable.
+    ///
+    /// @dev The wedge itself is not prevented — it cannot be, since the Furnace cannot make
+    ///      somebody else's collection transferable. What changed is that there is now a way
+    ///      out of it. Before `launch-candidate-14` there was none: `withdrawStock` takes the
+    ///      tail and `rescueStrayNFT` refuses live stock, so one dead token bricked a recipe
+    ///      permanently.
+    function test_FUR003_aStuckHeadWedgesTheQueueUntilItIsSkipped() public {
+        FreezableNoun out = _freezableRecipe();
+        out.freeze(500); // the head
+
+        uint256[] memory f = _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+        vm.prank(alice);
+        vm.expectRevert(bytes("FROZEN"));
+        furnace.forge(BASED_RECIPE, f);
+
+        // The multisig announces the skip and waits.
+        vm.prank(multisig);
+        furnace.queueStockSkip(address(out));
+        assertEq(furnace.pendingSkip(address(out)).tokenId, 500);
+
+        vm.prank(multisig);
+        vm.expectPartialRevert(Furnace.TimelockNotElapsed.selector);
+        furnace.executeStockSkip(address(out));
+
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        furnace.executeStockSkip(address(out));
+
+        // The stuck token is out of the queue and still here; forging resumes behind it.
+        assertEq(out.ownerOf(500), address(furnace), "not dispensed, because it cannot be");
+        (bool available, uint256 head) = furnace.nextOutput(BASED_RECIPE);
+        assertTrue(available);
+        assertEq(head, 501, "the queue moved on");
+
+        vm.prank(alice);
+        assertEq(furnace.forge(BASED_RECIPE, f), 501, "the recipe works again");
+    }
+
+    /// @notice The skip pins the token id, so a queued skip cannot be turned on a healthy
+    ///         token that reaches the head during the 48 hours. This is what stops it being
+    ///         the queue-jumping lever the contract says does not exist.
+    function test_FUR003_aQueuedSkipCannotBeAimedAtADifferentToken() public {
+        FreezableNoun out = _freezableRecipe();
+
+        vm.prank(multisig);
+        furnace.queueStockSkip(address(out)); // pins 500
+
+        // Somebody forges 500 away normally; 501 is now the head.
+        uint256[] memory f = _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+        vm.prank(alice);
+        assertEq(furnace.forge(BASED_RECIPE, f), 500);
+
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(Furnace.SkipTargetMoved.selector, uint256(501), uint256(500)));
+        furnace.executeStockSkip(address(out));
+
+        (, uint256 head) = furnace.nextOutput(BASED_RECIPE);
+        assertEq(head, 501, "the healthy head is untouched");
+    }
+
+    /// @notice A skip can be cancelled, is multisig-only, and needs something to skip.
+    function test_FUR003_theSkipIsGovernedLikeEveryOtherQueuedChange() public {
+        FreezableNoun out = _freezableRecipe();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        furnace.queueStockSkip(address(out));
+
+        vm.startPrank(multisig);
+        furnace.queueStockSkip(address(out));
+        furnace.cancelStockSkip(address(out));
+        assertFalse(furnace.pendingSkip(address(out)).queued);
+
+        vm.expectRevert(abi.encodeWithSelector(Furnace.NothingSkipQueued.selector, address(out)));
+        furnace.executeStockSkip(address(out));
+
+        // Nothing in the queue: nothing to announce.
+        vm.expectRevert(abi.encodeWithSelector(Furnace.NotEnoughStock.selector, uint256(1), uint256(0)));
+        furnace.queueStockSkip(makeAddr("emptyCollection"));
+        vm.stopPrank();
+    }
+
+    /// @notice Once skipped the token is no longer live stock, so if it ever becomes
+    ///         transferable again the ordinary stray-recovery path can move it.
+    function test_FUR003_askippedTokenBecomesRecoverableIfItEverUnfreezes() public {
+        FreezableNoun out = _freezableRecipe();
+        out.freeze(500);
+
+        vm.prank(multisig);
+        furnace.queueStockSkip(address(out));
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        furnace.executeStockSkip(address(out));
+
+        // Still frozen: recovery fails on the collection's own rule, not on ours.
+        vm.prank(multisig);
+        vm.expectRevert(bytes("FROZEN"));
+        furnace.rescueStrayNFT(address(out), 500, multisig);
+
+        out.unfreeze(500);
+        vm.prank(multisig);
+        furnace.rescueStrayNFT(address(out), 500, multisig);
+        assertEq(out.ownerOf(500), multisig, "home at last");
+    }
+
+    /// @notice SEC-FUR-004. The head is public, so between reading it and landing a
+    ///         transaction anyone can move it on — deliberately, if they want a specific Noun
+    ///         to go to somebody else.
+    function test_FUR004_anExpectedForgeRefusesTheWrongTokenAndBurnsNothing() public {
+        uint256[] memory af = _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+        uint256[] memory bf = _fuel(bob, 50, BASED_LILS, BASED_CHIP);
+
+        (, uint256 alicesTarget) = furnace.nextOutput(BASED_RECIPE);
+        assertEq(alicesTarget, 100);
+
+        vm.prank(bob); // bob lands first
+        furnace.forge(BASED_RECIPE, bf);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Furnace.UnexpectedOutput.selector, uint256(101), uint256(100)));
+        furnace.forge(BASED_RECIPE, af, alicesTarget);
+
+        // All-or-nothing: her fuel and her CHIP are untouched.
+        for (uint256 i; i < af.length; ++i) {
+            assertEq(lil.ownerOf(af[i]), alice, "fuel not burned");
+        }
+        assertEq(chip.balanceOf(alice), BASED_CHIP, "CHIP not burned");
+        assertEq(based.ownerOf(101), address(furnace), "and she took nothing");
+    }
+
+    /// @notice The expected form succeeds when the head is what the caller was promised.
+    function test_FUR004_anExpectedForgeSucceedsOnAMatch() public {
+        uint256[] memory af = _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+        (, uint256 head) = furnace.nextOutput(BASED_RECIPE);
+
+        vm.prank(alice);
+        assertEq(furnace.forge(BASED_RECIPE, af, head), head);
+        assertEq(based.ownerOf(head), alice);
+    }
+
+    /// @notice "Give me the next one, I do not mind which" is still a first-class intent. If
+    ///         every forge had to name a token, an ordinary one would fail whenever anybody
+    ///         else forged first.
+    function test_FUR004_theUncheckedFormStillWorks() public {
+        uint256[] memory af = _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+        uint256[] memory bf = _fuel(bob, 50, BASED_LILS, BASED_CHIP);
+
+        vm.prank(bob);
+        furnace.forge(BASED_RECIPE, bf);
+        vm.prank(alice);
+        assertEq(furnace.forge(BASED_RECIPE, af), 101, "took the next one without complaint");
+    }
+
+    /// @notice SEC-FUR-005. Strictly ascending is now the rule, which makes the distinctness
+    ///         check a single comparison per element instead of a nested loop.
+    function test_FUR005_fuelIdsMustBeStrictlyAscending() public {
+        _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+
+        uint256[] memory descending = new uint256[](BASED_LILS);
+        for (uint256 i; i < BASED_LILS; ++i) {
+            descending[i] = BASED_LILS - i;
+        }
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Furnace.FuelIdsNotAscending.selector, uint256(5), uint256(4)));
+        furnace.forge(BASED_RECIPE, descending);
+    }
+
+    /// @notice An adjacent duplicate keeps the error it always had, because "you sent the
+    ///         same token twice" is a better thing to read than "not ascending".
+    function test_FUR005_anAdjacentDuplicateStillReadsAsADuplicate() public {
+        _fuel(alice, 1, BASED_LILS, BASED_CHIP);
+
+        uint256[] memory dup = new uint256[](BASED_LILS);
+        dup[0] = 1;
+        dup[1] = 2;
+        dup[2] = 2; // repeat, adjacent
+        dup[3] = 3;
+        dup[4] = 4;
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Furnace.DuplicateFuelToken.selector, uint256(2)));
+        furnace.forge(BASED_RECIPE, dup);
+    }
+
+    /// @notice The full 100-token recipe still forges, so the ordering rule holds at the
+    ///         boundary `MAX_FUEL_COST` allows.
+    function test_FUR005_aMaximumSizeRecipeStillForges() public {
+        vm.startPrank(multisig);
+        furnace.queueRecipeChange(BASED_RECIPE, 100, 0);
+        vm.warp(block.timestamp + 48 hours);
+        furnace.executeRecipeChange(BASED_RECIPE);
+        vm.stopPrank();
+
+        uint256[] memory ids = _fuel(alice, 1_000, 100, 0);
+        vm.prank(alice);
+        assertEq(furnace.forge(BASED_RECIPE, ids), 100);
+        assertEq(furnace.totalFuelBurned(), 100);
+    }
+
+    /// @notice OPEN PRODUCT QUESTION, not a fix: a recipe with `chipCost == 0` forges on fuel
+    ///         alone. Asserted so the affordance is visible and deliberate rather than
+    ///         incidental — see TRIAGE batch 9 and OPEN_ITEMS 24. If forging must always burn
+    ///         $CHIP, the guard is one line in `_setRecipe` and this test inverts.
+    function test_openQuestion_aZeroChipRecipeForgesOnFuelAlone() public {
+        vm.startPrank(multisig);
+        furnace.queueRecipeChange(BASED_RECIPE, BASED_LILS, 0);
+        vm.warp(block.timestamp + 48 hours);
+        furnace.executeRecipeChange(BASED_RECIPE);
+        vm.stopPrank();
+
+        uint256[] memory ids = _fuel(alice, 1, BASED_LILS, 0);
+        vm.prank(alice);
+        furnace.forge(BASED_RECIPE, ids);
+
+        assertEq(furnace.totalChipBurned(), 0, "no CHIP sink on this path");
+        assertEq(based.ownerOf(100), alice);
+    }
+
+    /// @dev A Based recipe pointed at a collection whose tokens can be frozen, seeded 500-502.
+    function _freezableRecipe() internal returns (FreezableNoun out) {
+        out = new FreezableNoun("Freezable Based", "FBASED");
+        furnace = new Furnace(
+            multisig,
+            address(chip),
+            address(lil),
+            Furnace.Recipe({
+                exists: true, paused: false, outputCollection: address(out), fuelCost: BASED_LILS, chipCost: BASED_CHIP
+            }),
+            Furnace.Recipe({
+                exists: true, paused: false, outputCollection: address(dark), fuelCost: DARK_LILS, chipCost: DARK_CHIP
+            })
+        );
+
+        uint256[] memory ids = new uint256[](3);
+        for (uint256 i; i < 3; ++i) {
+            ids[i] = 500 + i;
+            out.mint(multisig, ids[i]);
+        }
+        vm.startPrank(multisig);
+        out.setApprovalForAll(address(furnace), true);
+        furnace.depositStock(address(out), ids);
+        vm.stopPrank();
+    }
 }
 
 /// @dev A fee-on-transfer token whose tax goes somewhere OTHER than the burn address, so a
@@ -751,5 +1008,31 @@ contract ForgeReenterer is IERC721Receiver {
             try furnace.forge(0, _second) {} catch {}
         }
         return IERC721Receiver.onERC721Received.selector;
+    }
+}
+
+/// @notice An output collection that can render one token id untransferable — a paused
+///         collection, a compliance freeze, a broken migration. The Furnace cannot prevent
+///         this; SEC-FUR-003 is about being able to recover from it.
+contract FreezableNoun is ERC721 {
+    mapping(uint256 => bool) public frozen;
+
+    constructor(string memory n, string memory s) ERC721(n, s) {}
+
+    function mint(address to, uint256 tokenId) external {
+        _mint(to, tokenId);
+    }
+
+    function freeze(uint256 tokenId) external {
+        frozen[tokenId] = true;
+    }
+
+    function unfreeze(uint256 tokenId) external {
+        frozen[tokenId] = false;
+    }
+
+    function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
+        require(!frozen[tokenId], "FROZEN");
+        return super._update(to, tokenId, auth);
     }
 }

@@ -51,7 +51,7 @@ paths, or a paid endpoint, avoids it.
 
 Runtime sizes, all inside the 24,000-byte budget the size guard enforces (EIP-170 is 24,576):
 POLTreasury 23,032 · ChipRounds 20,377 · NounLoans 15,566 · ChipClaims 14,678 ·
-Pot 11,337 · Anvil 10,075 · ChipActivation 10,023 · StockRegistry 8,971 · Furnace 7,711 ·
+Pot 11,337 · Anvil 10,075 · ChipActivation 10,023 · Furnace 9,324 · StockRegistry 8,971 ·
 FeeSplitter 6,069 · ClaimRouter 3309 · ClutchVaultAdapter 3,151.
 
 **POLTreasury is now the tightest at 968 bytes of headroom** and has taken ChipRounds' place
@@ -70,7 +70,7 @@ removal loop cost more than the budget had spare. The set is reconstructible fro
 | `POLTreasury.sol` | 785 | **yes, protocol assets** | Slipstream POL positions, gauge staking, income routing. **Read this one first** — see §1.5 |
 | `StockRegistry.sol` | 232 | no | Which stocks are buyable, where, and the depth gate |
 | `anvil/Anvil.sol` | 340 | **yes, shelved Nouns** | Buy a Noun at a fixed ETH price. FIFO Box + snipe. **Buy side only** |
-| `furnace/Furnace.sol` | 210 | **yes, deposited output NFTs** | Burn fuel NFTs + $CHIP to forge a Noun. **Outside the money path** |
+| `furnace/Furnace.sol` | 532 | **yes, deposited output NFTs** | Burn fuel NFTs + $CHIP to forge a Noun. **Outside the money path** |
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
 | `FeeSplitter.sol` | 178 | transiently, **plus ETH escrow** | Three-way split of every inflow: Pot / ops / POL |
 | `Pot.sol` | 103 | **yes, round budget** | Holds round budget, converts inflows to USDC |
@@ -544,6 +544,12 @@ Four properties to attack, each of which is structural rather than policy:
   *inside* `forge`, so the contract holds neither a Lil nor a $CHIP between transactions.
   There is no admin function that could reach them because there is nothing to reach.
   Confirm that: is there any ordering where an input lands on the contract and stays?
+- **FIFO, and the admin cannot jump the queue** — with exactly one announced exception. A
+  token that cannot be transferred at all used to wedge the whole queue with no way past it
+  (batch 9 SEC-FUR-003); `queueStockSkip` → 48h → `executeStockSkip` now advances past it. The
+  skip PINS the token id at queue time, so it cannot be aimed at a healthy token that reaches
+  the head during the wait. **Attack that pinning** — it is the only thing separating a
+  recovery hatch from a queue-jumping lever.
 - **FIFO, and the admin cannot jump the queue.** `forge` takes `_stock[c][forgedFrom[c]]`;
   `withdrawStock` pops from the **tail**. The claim is that the multisig can shrink the pool
   but can never take the specific token the next forger is about to get. Check the boundary
