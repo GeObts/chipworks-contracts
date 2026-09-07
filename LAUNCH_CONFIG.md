@@ -375,6 +375,51 @@ activation and every forge.
 
 ---
 
+## 6.6 🔴 REQUIRED AT LAUNCH: hand $CHIP ownership to the Burner
+
+**Ordering matters and it is one-way-ish.** The Burner must exist before the token is handed
+to it, and the hand-off can only happen after Bankr's launch has put ownership in our hands.
+
+```
+1. Deploy ChipBurner(MULTISIG, CHIP)                        # before launch is fine
+2. Bankr launches $CHIP                                     # ownership lands with us
+3. chip.transferOwnership(<ChipBurner>)                     # THE STEP
+4. chip.owner() == <ChipBurner>                             # verify
+```
+
+**Verify the token's ABI before step 3, not after.** `ChipBurner` encodes three signatures by
+string — `burn(uint256)`, `updateTokenURI(string)`, `transferOwnership(address)`. A mismatch
+would not be discovered until the first burn, by which point the token is already owned by a
+contract that cannot drive it.
+
+```
+cast code <CHIP> --rpc-url $BASE_RPC_URL | grep -c 42966c68     # burn(uint256)
+cast sig "updateTokenURI(string)"                                # cross-check against the
+cast sig "transferOwnership(address)"                            # verified token source
+```
+
+**Then prove it end to end, once, with a small amount:**
+
+```
+chip.transfer(<ChipBurner>, 1e18)
+burner.burnAll()                       # permissionless, anyone
+chip.totalSupply()                     # must have FALLEN by 1e18 - a real burn
+burner.totalBurned()                   # == 1e18
+```
+
+**What the Burner deliberately cannot do.** It has no `transfer`, no sweep, no rescue and no
+generic call: $CHIP that arrives can only ever leave by being destroyed, and the multisig
+cannot move it either. `mintInflation`, `updateMintRate` and `lockPool`/`unlockPool` are **not
+exposed** — a permissionless burner that can also mint is a contradiction. If any of them is
+ever genuinely needed, `transferTokenOwnership` moves the token to a new wrapper, visibly and
+deliberately. That escape hatch is why leaving them out is safe.
+
+**Until step 3 lands, `burnAll()` reverts** — the token's `burn` is owner-gated. App burn paths
+that send $CHIP to the Burner before then will simply accumulate a balance that gets destroyed
+on the first successful call. Nothing is lost; the burn is just deferred.
+
+---
+
 ## 7. 🔴 THE ONE THAT FAILS SILENTLY
 
 > **`chipActivation.setCustodian(nounLoans, true)` — DO NOT SIGN OFF WITHOUT THIS RETURNING

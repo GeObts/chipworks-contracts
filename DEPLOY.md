@@ -776,12 +776,36 @@ matter; it is listed last because it depends on `$CHIP` existing.
 | `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
 | `chipToken_` | `$CHIP` | Burned alongside the fuel. Must exist first. |
 | `fuelCollection_` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | The collection consumed as fuel. Verified: real ERC-721, exposes `burn(uint256)`, so forging **truly reduces its supply**. No longer a blocker. |
-| `basedRecipe` | `{outputCollection: BASED_NOUNS, fuelCost: 25, chipCost}` | Recipe id 0, `FORGE_BASED`. **25 Chiplets + $CHIP → 1 Based Noun.** |
+| `basedRecipe` | `{outputCollection: BASED_NOUNS, fuelCost: 25, chipCost: <placeholder>}` | Recipe id 0, `FORGE_BASED`. **25 Chiplets locked**; the $CHIP portion is set at launch — see the note below. |
 | `darkRecipe` | `{outputCollection: DARK_NOUNS, fuelCost: _TBD_, chipCost}` | Recipe id 1, `FORGE_DARK`. **The Chiplet count for a DarkNOUN is NOT decided** — do not guess it; the constructor refuses zero, so this genuinely blocks the Furnace deploy until somebody chooses. |
 
 Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
-their value in calldata is ignored. `fuelCost` must be in `1..100` (`MAX_FUEL_COST`) — 25 is well inside it — or the
-constructor reverts. **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
+their value in calldata is ignored. `fuelCost` must be in `1..100` (`MAX_FUEL_COST`) — 25 is well
+inside it — or the constructor reverts.
+
+> ### ⚠️ THE $CHIP PORTION CANNOT BE LEFT UNSET AT DEPLOY, AND THAT COSTS 48 HOURS
+>
+> `chipletsPerBased = 25` satisfies the **fuel** zero-check, so the Chiplet count no longer
+> blocks the deploy. But there is a **second** zero-check: `_setRecipe` refuses `chipCost == 0`
+> as well, added in `launch-candidate-15` on the decision that **every forge must burn $CHIP**.
+> A free forge is a sink we do not want.
+>
+> So the Furnace cannot be deployed with the $CHIP amount blank. The sequence is:
+>
+> 1. Deploy with a deliberate **placeholder** `chipCost` — high enough that nobody would
+>    forge at it by accident, and recorded in LAUNCH_CONFIG as a placeholder.
+> 2. **Pause both recipes immediately** (`setPaused(0, true)`, `setPaused(1, true)`) so nobody
+>    can forge at the placeholder at all. Pausing is not timelocked, so this is instant.
+> 3. At launch, once the token price is observed: `queueRecipeChange(0, 25, <real chipCost>)`
+>    → **48 hours** → `executeRecipeChange(0)`, then unpause.
+>
+> **Plan the 48 hours.** This is the same timelock every other economic parameter gets, and it
+> is deliberate — but it means the real forge price cannot land on launch day unless it was
+> queued two days earlier. Queue it against the observed price as soon as that price exists.
+>
+> The **DarkNOUN** recipe has the same constraint on both counts: its Chiplet count is still
+> undecided and `fuelCost` may not be zero either, so recipe 1 also needs a placeholder plus a
+> pause until somebody chooses. **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
 refused by both the constructor and `queueRecipeChange` (`BadConfig`). Every forge burns $CHIP;
 that was decided in response to external review batch 9, on the grounds that a free forge is a
 sink the protocol does not want and an abuse vector.
