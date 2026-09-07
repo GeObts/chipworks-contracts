@@ -11,11 +11,75 @@ should be read.
 
 ---
 
+## 0. Audit status — the numbers, unambiguously
+
+**Read this before quoting anything from this document.** It was written against
+`launch-candidate-1` and has been amended since; the counts below are the ones that are true
+at `launch-candidate-19` and they supersede any figure elsewhere in this file.
+
+| Question | Answer |
+|---|---|
+| Deployable contracts in scope | **11** (12 including the retired `ClutchVaultAdapter`) |
+| Deployable contracts **externally reviewed** | **10** |
+| Not reviewed | **`StockRegistry`** — see below. It is the 11th. |
+| Source files reviewed | 11 — the ten above plus `base/ConversionRoutes.sol`, an abstract base reviewed with `Pot` in batch 2 |
+| External review batches | 9, plus one static-analysis pass and a POLTreasury re-review |
+| Findings triaged | **49** external, **168** static analysis |
+| **Highs found** | **6** |
+| Highs fixed with a test | **5** |
+| Highs accepted with written reasoning | **1** — `SEC-ACT-001`, triaged PARTIAL: exposure documented and tested, the proposed fix disputed |
+| Current tag | `launch-candidate-19` |
+| Deployable tag | `launch-candidate-19` |
+
+**Where the reports live: in `TRIAGE.md`, and nowhere else.** There is no `/reports` directory
+and there never has been. Every finding has a full entry there with its reasoning, including
+the six we disputed. The reviewers' original artifacts were relayed as messages rather than
+committed as files — and one of them, the `ChipClaims` lows, **never arrived at all** (see
+below). If you want the primary documents, ask Bankr for them; this repo has the triage, not
+the source reports.
+
+### The six Highs, named
+
+| ID | Contract | Disposition |
+|---|---|---|
+| `EXT-C-H-1` | ChipClaims | FIXED — 48h timelock on retarget; the `claimFor` half disputed |
+| `SEC-POT-001` | Pot / ConversionRoutes | FIXED — router must belong to the expected factory |
+| `SEC-FEE-001` | FeeSplitter | FIXED — ETH escrow fallback |
+| `SEC-ACT-001` | ChipActivation | **ACCEPTED** — premise refined, exposure documented and tested |
+| `H-01` | POLTreasury | FIXED — gauge verified against Aerodrome's Voter |
+| `H-02` | POLTreasury | FIXED — token allowlist, derived pool, Chainlink band |
+
+**The two POLTreasury Highs were the most serious of the audit.** Both let a leaked manager
+session key take the entire POL book in one block, both were demonstrated working against
+`launch-candidate-9` before being fixed, and a re-review confirmed the fix is enforced on
+chain rather than by key hygiene.
+
+### `StockRegistry` has never been reviewed, and there are no `SEC-STK` findings
+
+There was never a StockRegistry batch. It appears in the log only incidentally. It holds no
+user funds and is not in the custody path, which is why it kept sliding down the queue — but it
+decides **which stock is tradeable, on which venue, and at what depth**, and `ChipRounds` reads
+all of that on every buy. It is the largest un-reviewed surface in the repo. **OPEN_ITEMS 25a.**
+
+### The `ChipClaims` lows were never received
+
+Batch 1 delivered `EXT-C-H-1`, `-M-1` and `-M-2` as a relayed summary; the report artifact never
+arrived, so `EXT-C-L-1` through `-L-4` and the informationals **have never been read**. They are
+marked PENDING in TRIAGE rather than quietly dropped. **OPEN_ITEMS 25b.**
+
+### If you are publishing this
+
+Say "10 of 11 contracts externally reviewed; StockRegistry is not yet reviewed" and "6 Highs
+found, 5 fixed with tests, 1 accepted with published reasoning". Both are checkable against
+TRIAGE. Do not say "fully audited" — two things are outstanding and they are named above.
+
+---
+
 ## 1. Check out and run
 
 ```bash
 git clone <repo> chipworks-contracts && cd chipworks-contracts
-git checkout launch-candidate-14
+git checkout launch-candidate-19
 git submodule update --init --recursive     # forge-std, openzeppelin-contracts
 
 cp .env.example .env                        # then set BASE_RPC_URL
@@ -31,7 +95,7 @@ tag from `-3` onwards carries the review package with it — `REVIEW_PACKAGE.md`
 and regenerated `review/flattened/` sources — so the current candidate is the only thing to
 check out.
 
-**Reference `launch-candidate-14`.** It is the deployable tag and the only one carrying every fix — `launch-candidate-13` predates the Furnace batch. The audit-status summary, the full tally and the two remaining gaps are at the top of `TRIAGE.md`; **`StockRegistry` has never been externally reviewed and is the largest un-reviewed surface here.** Review is iterative rather than a single frozen pass:
+**Reference `launch-candidate-19`.** It is the deployable tag and the only one carrying every fix. The audit-status summary, the full tally and the two remaining gaps are at the top of `TRIAGE.md`; **`StockRegistry` has never been externally reviewed and is the largest un-reviewed surface here.** Review is iterative rather than a single frozen pass:
 findings arrive in batches, each batch is triaged in `TRIAGE.md` and lands in the next
 candidate, and the tag numbering is honest history — no tag is ever moved or deleted, so you
 can always diff the tree you read against the tree that shipped:
@@ -92,7 +156,7 @@ identical runtime sizes** to the in-repo build (compare `forge build --sizes` ag
 
 ---
 
-## 2. The eleven contracts
+## 2. The eleven deployable contracts (ten of them reviewed)
 
 Grouped by how much a bug in each one costs. **Review time should be spent roughly in this
 order.**

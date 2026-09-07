@@ -150,11 +150,20 @@ stock-buy half is what landed here.
 
 ---
 
-## Audit status — **complete for eleven of twelve contracts, with two gaps named**
+## Audit status — **10 of 11 deployable contracts reviewed, with two gaps named**
 
 Nine external batches, one static-analysis pass, and a re-review of the contract that produced
-the only two Highs. This section is the index and the tally; every finding below it keeps its
-full entry, including the ones we disagreed with.
+the two most serious Highs. This section is the index and the tally; every finding below it
+keeps its full entry, including the ones we disagreed with.
+
+**The counts, stated once so they cannot drift.** **10 of the 11 deployable contracts have been
+externally reviewed** — `StockRegistry` is the one that has not. Counting source files rather
+than deployables gives 11, because `base/ConversionRoutes.sol` is an abstract base reviewed
+with `Pot` in batch 2; an earlier revision of this heading said "eleven of twelve" without
+saying which eleven, which was ambiguous enough to be read as "StockRegistry was reviewed". It
+was not. **Six Highs were found**, five fixed with a test and one accepted with written
+reasoning. There is no `/reports` directory: the triage below is the record, and the reviewers'
+original artifacts were relayed as messages rather than committed.
 
 ### POLTreasury re-review — **both HIGHs confirmed closed**
 

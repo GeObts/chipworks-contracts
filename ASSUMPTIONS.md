@@ -708,41 +708,67 @@ recorded once, here.
 
 ---
 
-### A-22 · No B20 stock has an Aerodrome Slipstream pool — **swept on chain 2026-09-06**
+### A-22 · B20 stocks trade on Aerodrome CL — **CORRECTED 2026-09-07, the original was wrong**
 
-**This one contradicts a briefing, so it is written with the method attached.**
+**The original A-22 said there are no Aerodrome pools for any B20 stock. That was wrong, and
+the way it was wrong is worth keeping.**
 
-The stock-registry expansion was specified as adding TSLA, AMZN, MSFT, MSTR, SNDK and SPCX
-"all with live Aerodrome Slipstream pools". They do not have any. Neither do the four already
-registered, and neither do the three being added disabled.
+The sweep was real and its control passed: `getPool` on factory
+`0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A` resolved WETH/USDC at tick spacing 100 in the same
+run, so a zero for the B20 pairs meant "no pool" rather than "bad call". Every one of those
+zeros was correct. **The error was assuming that factory was the only Aerodrome CL factory.**
 
-Swept with `test/fork/B20PoolDiscovery.t.sol` against latest Base, for **all thirteen** B20
-tickers:
+There are two, and both are Aerodrome:
 
-| Venue | Probed | Found |
+| | Factory A `0x5e7BB1…809A` | Factory B `0xf8f2eB…061Ef` |
 |---|---|---|
-| Aerodrome Slipstream (CL) `0x5e7BB1…809A` | vs USDC **and** vs WETH, tick spacings 1, 2, 5, 10, 25, 50, 100, 200, 500, 2000 | **nothing, for any ticker** |
-| Aerodrome basic AMM `0x420DD3…40Da` | vs USDC (v and s) and vs WETH | AAPL and NVDA only, both **vAMM**, ~$4.9k and ~$4.2k |
-| Uniswap v3 `0x33128a…FDfD` | vs USDC, fees 100/500/2500/3000/10000 | every pool with real depth |
+| `voter()` | `0x16613524…480A5` | **the same** |
+| `owner()` | `0xE6A41fE6…32075` | **the same** |
+| `factoryRegistry()` | `0x5C3F18F0…37C0` | **the same** |
+| `poolImplementation()` | `0xeC8E5342…5831` | `0xc7708985…B665` — different |
+| B20 stock pools | **none** | **all of them**, tick spacing 10, fee 500 |
+| Slipstream NPM reports | **this one** | not this one |
 
-**The control matters.** The same `getPool` call on the same Slipstream factory resolves
-WETH/USDC at tick spacing 100 in the same test run, so a zero is "there is no pool", not "we
-are calling it wrong". `test_noB20StockHasASlipstreamPool` asserts both halves and will start
-failing the day a Slipstream pool appears — which is the point of writing it as an assertion
-rather than a note.
+Same Voter, same owner, same factory registry, different pool implementation. Factory B is a
+newer Aerodrome CL factory, and it is where the B20 liquidity is.
 
-**Where the belief probably came from.** AAPL and NVDA really do have Aerodrome pools, and a
-router or aggregator UI would happily route a stock buy through Aerodrome for them. But they
-are **basic vAMM pools, not concentrated-liquidity ones**, and they are the two smallest
-venues either token trades on. `Venue.Slipstream` verifies against the CL factory and
-correctly refuses them; `Venue.UniswapV3` is where the depth is.
+**A control proves the call works. It does not prove you are calling the right contract.** That
+is the lesson, and it is why this entry keeps the wrong version's reasoning rather than
+overwriting it.
 
-**Consequence for the registry.** Every B20 stock is registered as `Venue.UniswapV3`, with the
-deepest USDC pool for that ticker. `test_slipstreamVenueCannotBeFakedForAB20` proves the
-registry cannot be told otherwise: passing `Venue.Slipstream` with a ticker's real Uniswap
-pool reverts `PoolNotFoundInFactory`, because the CL factory has never heard of it.
+### Measured depth, both sides, at the Chainlink marks
 
-**This does not close the Slipstream path.** `ChipRounds` encodes both venue shapes and
-`StockRegistry` verifies both factories, so the day a B20 Slipstream pool appears with real
-depth it is a `setVenue` call and nothing else. See A-16, which said the same thing about the
-conversion side and is still correct.
+`test/fork/AerodromeFactoryCheck.t.sol` reads the USDC side in-fork and the stock side over raw
+RPC (B20 tokens are precompiles, A-15), and prices the stock side at its live feed.
+
+| Ticker | USDC side | Stock side | **TVL** |
+|---|---:|---:|---:|
+| NVDA | $1,640,788 | $845,095 | **$2,485,883** |
+| AAPL | $951,435 | $773,150 | **$1,724,585** |
+| GOOGL | $868,502 | $753,452 | **$1,621,954** |
+| META | $615,830 | $588,126 | **$1,203,956** |
+| SNDK | $97,987 | $87,243 | **$185,230** |
+| SPCX | $104,987 | $78,020 | **$183,007** |
+| AMZN | $87,400 | $64,216 | **$151,616** |
+| TSLA | $80,367 | $69,212 | **$149,579** |
+| MSFT | $59,326 | $84,479 | **$143,805** |
+| MSTR | $49,899 | $49,306 | **$99,205** |
+
+**These are 7–16x lower than the figures supplied from the Aerodrome UI** (which gave NVDA
+$20.9M, GOOGL $12.9M, SPCX $2.9M). The UI is not showing pool TVL — most likely concentrated
+`liquidity`, a virtual quantity much larger than the tokens actually in the contract.
+`StockRegistry.poolLiquidityUsd` measures balances, so the table above is what the depth gate
+and the impact trim will see. **Do not size parameters from the UI number.**
+
+Even so, this changes the launch completely: against the old wrong-factory Uniswap figures only
+GOOGL and SPCX cleared a $25,000 threshold. **All ten of these clear it**, the smallest by four
+times.
+
+### Still to settle before any of it is registered
+
+**The Slipstream SwapRouter at `0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5` reports
+`factory() == 0x5e7BB1…809A` — factory A.** It cannot reach factory-B pools. Registering these
+stocks as `Venue.Slipstream` and pointing `ChipRounds` at that router would produce buys that
+revert every time. A router bound to factory B must be identified and verified before the venue
+switch. `POLTreasury` also derives its factory from the Slipstream NPM, which reports factory A,
+so POL positions and stock buys would otherwise sit on different factories.
