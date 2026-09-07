@@ -72,6 +72,11 @@ contract MultiplierIndifferenceTest is ChipRewardsBase {
 
         router.setRate(address(usdc), address(msftc), 1e8, MSFT_USD * 1e6);
         msftc.mint(address(router), 1_000_000e8);
+
+        // Depth for the impact trim. A rebasing token is the interesting case here: the
+        // pool's balance rebases with everything else, so measured depth moves with the
+        // multiplier — which is exactly the indifference this suite is checking.
+        _seedPoolDepth(address(msftc), pool, MSFT_USD, STOCK_DEC);
     }
 
     /// @dev One Noun, all weight on MSFTc, one finalized round.

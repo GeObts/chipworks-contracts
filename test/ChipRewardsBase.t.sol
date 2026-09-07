@@ -135,6 +135,36 @@ abstract contract ChipRewardsBase is Test {
             vm.prank(multisig);
             registry.setEnabled(toks[i], true);
         }
+        _fundPools();
+    }
+
+    /// @dev Give each registered pool real balances, so `poolLiquidityUsd` measures something.
+    ///
+    ///      Needed since the depth-aware impact trim landed: `settleStock` sizes every buy
+    ///      from `registry.poolLiquidityUsd(stock)` and refuses to buy at all when depth reads
+    ///      zero. Before the trim these pool addresses were empty placeholders that only had
+    ///      to exist in the factory; now they have to hold something. Deep on purpose — $10m
+    ///      a side pair — so the trim never binds in suites that are testing something else.
+    ///      `UncappedRoundsTest` is where thin pools are the subject.
+    function _fundPools() internal {
+        _fundPool(address(nvda), NVDA_USD);
+        _fundPool(address(googl), GOOGL_USD);
+        _fundPool(address(aapl), AAPL_USD);
+    }
+
+    /// @dev Same job for a stock a derived suite registers itself, whatever its token type.
+    ///      Low-level `mint` so it works for MockERC20 and every HostileTokens variant alike.
+    function _seedPoolDepth(address stock, address pool, uint256 priceUsd, uint8 dec) internal {
+        usdc.mint(pool, 5_000_000e6);
+        (bool ok,) =
+            stock.call(abi.encodeWithSignature("mint(address,uint256)", pool, (5_000_000 / priceUsd) * (10 ** dec)));
+        require(ok, "seed pool: mint failed");
+    }
+
+    function _fundPool(address stock, uint256 priceUsd) internal {
+        address pool = registry.getStock(stock).pool;
+        usdc.mint(pool, 5_000_000e6);
+        MockERC20(stock).mint(pool, (5_000_000 / priceUsd) * 1e8);
     }
 
     function _wire() internal {

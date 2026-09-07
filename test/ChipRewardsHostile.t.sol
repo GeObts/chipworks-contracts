@@ -440,6 +440,8 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
         registry.setEnabled(address(fot), true);
         vm.stopPrank();
 
+        _seedPoolDepth(address(fot), pool, 200, STOCK_DEC);
+
         router.setRate(address(usdc), address(fot), 1e8, 200 * 1e6);
         fot.mint(address(router), 1_000_000e8);
     }

@@ -113,6 +113,49 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     mapping(address collection => uint32 bps) public collectionBaseBps;
     mapping(address stock => uint32 bps) internal _maxSlippageBpsOverride;
 
+    /// @notice Largest share of a stock's MEASURED POOL DEPTH one buy may spend, in bps.
+    ///
+    /// @dev THIS IS THE BOUND THAT SCALES. `maxSlippageBps` is a fixed percentage: it decides
+    ///      whether a fill is acceptable, and its value does not move when the round gets
+    ///      bigger. That is what made the old `maxRoundBudget` load-bearing for EXT-R-L-1 and
+    ///      SEC-POT-002 — a sandwicher's take is bounded by the slippage tolerance and grows
+    ///      linearly with the slice, so the cap was the only thing keeping the attack
+    ///      uneconomic. Both findings named "dynamic slippage derived from measured pool
+    ///      depth" as the precondition for lifting it. This is that.
+    ///
+    ///      A buy now spends at most `poolLiquidityUsd(stock) * maxImpactBps / BPS`, so the
+    ///      exposure per buy is a function of the pool, not of the round. Doubling the round
+    ///      does not double what an attacker can extract from any single stock; it spreads
+    ///      the same bounded buys over more rounds.
+    ///
+    ///      WHY THE DEFAULT IS DELIBERATELY SMALL. For a constant-product pool holding equal
+    ///      value each side, spending `k` bps of total TVL moves the price by roughly `2k`
+    ///      bps, and moves SPOT by roughly `2k` bps afterwards. The default of 25 bps
+    ///      therefore costs about 0.5% on the fill and leaves the pool about 0.5% richer than
+    ///      the mark — inside the 2% `maxSlippageBps` tolerance with room to spare, which is
+    ///      what makes the trimmed buy actually EXECUTE rather than trim and still revert.
+    ///
+    ///      That headroom is not decoration. A buy sized at the bound moves the pool AWAY
+    ///      from the Chainlink mark, so the next round's buy starts from a worse price. At 50
+    ///      bps two consecutive rounds against a thin pool push it past the tolerance and the
+    ///      second one fails — measured, not theorised. Arbitrage restores the peg between
+    ///      rounds in practice, but the default should not depend on that being prompt.
+    ///
+    ///      AND `poolLiquidityUsd` IS HEADLINE TVL, NOT TRADEABLE DEPTH. Uniswap v3 and
+    ///      Slipstream are concentrated; the amount buyable near spot is a fraction of the
+    ///      figure this reads. The bound is therefore conservative by construction, and it
+    ///      should stay that way — see `StockRegistry.poolLiquidityUsd`.
+    uint32 public defaultMaxImpactBps;
+
+    mapping(address stock => uint32 bps) internal _maxImpactBpsOverride;
+
+    /// @notice Hard ceiling on any impact bound. A compromised multisig cannot widen the
+    ///         trim past the point where it stops bounding anything.
+    uint32 public constant MAX_IMPACT_CEILING_BPS = 500;
+
+    /// @notice Gas cap on the depth probe. Bounds a precompile that consumes everything.
+    uint256 public constant DEPTH_PROBE_GAS = 120_000;
+
     /* ----------------------------- state ------------------------------ */
 
     uint256 public roundCount;
@@ -132,6 +175,9 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /* ----------------------------- events ----------------------------- */
 
     event RoundOpened(uint256 indexed roundId, uint256 budget, address indexed opener);
+    /// @notice A slice was larger than its stock's pool could absorb; `spent` was bought and
+    ///         `slice - spent` returns to the Pot at finalize.
+    event SliceTrimmed(uint256 indexed roundId, address indexed stock, uint256 slice, uint256 spent);
     event WeightsContributed(uint256 indexed roundId, address indexed collection, uint256 count, uint256 weightAdded);
     event AccumulationClosed(uint256 indexed roundId, uint256 totalWeight);
     event StockBought(uint256 indexed roundId, address indexed stock, uint256 spent, uint256 received);
@@ -203,6 +249,7 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         roundDuration = 24 hours;
         accumulationWindow = 2 hours;
         defaultMaxSlippageBps = 200; // 2%
+        defaultMaxImpactBps = 25; // 0.25% of measured pool depth per buy
         splitChangeFeeChip = splitChangeFeeChip_;
     }
 
@@ -285,6 +332,19 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit ConfigUpdated("defaultMaxSlippageBps", bps);
     }
 
+    /// @notice Per-stock impact bound. Zero clears the override back to the default.
+    function setMaxImpactBps(address stock, uint32 bps) external onlyOwner {
+        if (bps > MAX_IMPACT_CEILING_BPS) revert BadConfig();
+        _maxImpactBpsOverride[stock] = bps;
+        emit ConfigUpdated(bytes32(uint256(uint160(stock))), bps);
+    }
+
+    function setDefaultMaxImpactBps(uint32 bps) external onlyOwner {
+        if (bps == 0 || bps > MAX_IMPACT_CEILING_BPS) revert BadConfig();
+        defaultMaxImpactBps = bps;
+        emit ConfigUpdated("defaultMaxImpactBps", bps);
+    }
+
     /// @notice Skip any stock whose feed is older than `v` seconds, carrying its budget.
     ///         Zero switches the check off entirely.
     ///
@@ -321,6 +381,20 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     function maxSlippageBps(address stock) public view returns (uint32) {
         uint32 o = _maxSlippageBpsOverride[stock];
         return o == 0 ? defaultMaxSlippageBps : o;
+    }
+
+    /// @notice Effective impact bound for a stock: its override, else the default.
+    function maxImpactBps(address stock) public view returns (uint32) {
+        uint32 o = _maxImpactBpsOverride[stock];
+        return o == 0 ? defaultMaxImpactBps : o;
+    }
+
+    /// @notice The most one buy of `stock` may spend right now, in quote units.
+    /// @dev Exposed so a keeper can see why a round trimmed, and so the site can show a
+    ///      stock's per-round ceiling. Returns 0 when depth cannot be read, which is the
+    ///      same thing {settleStock} treats as "do not buy".
+    function maxSpendFor(address stock) public view returns (uint256) {
+        return _maxSpendFor(stock);
     }
 
     /* ------------------------------------------------------------------ */
@@ -560,13 +634,29 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
             return;
         }
 
-        (bool executed, uint256 received, uint256 quoteSpent, bytes memory reason) = _buy(stock, slice);
+        // THE TRIM. Spend at most what this stock's pool can absorb inside its impact
+        // bound; whatever is left of the slice is simply not spent, and `finalizeRound`
+        // returns it to the Pot with the rest of the unspent budget. There is deliberately
+        // NO per-stock earmark: the remainder re-enters the general Pot and is re-split by
+        // the next round's weights. Earmarking would be new money-path storage for a
+        // marginal gain, and holders who keep their splits get it back anyway.
+        uint256 ceiling = _maxSpendFor(stock);
+        if (ceiling == 0) {
+            stockSkipped[roundId][stock] = true;
+            emit StockSkipped(roundId, stock, slice, "no depth");
+            return;
+        }
+
+        uint256 spend = slice > ceiling ? ceiling : slice;
+        if (spend < slice) emit SliceTrimmed(roundId, stock, slice, spend);
+
+        (bool executed, uint256 received, uint256 quoteSpent, bytes memory reason) = _buy(stock, spend);
 
         // Not executed means the swap reverted atomically: nothing left the contract, so the
         // slice is untouched and carries to the next round.
         if (!executed) {
             stockSkipped[roundId][stock] = true;
-            emit StockSkipped(roundId, stock, slice, reason);
+            emit StockSkipped(roundId, stock, spend, reason);
             return;
         }
 
@@ -707,6 +797,26 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         uint256 spendUsd = (spendAmount * 1e18) / (10 ** registry.quoteDecimals());
         uint256 expectedOut = (spendUsd * (10 ** dec)) / price1e18;
         return (expectedOut * (BPS - maxSlippageBps(stock))) / BPS;
+    }
+
+    /// @dev The most one buy of `stock` may spend, in quote units, from its measured pool
+    ///      depth and its impact bound.
+    ///
+    ///      FAILS CLOSED. `poolLiquidityUsd` reads the stock's balance in its pool, and a B20
+    ///      stock is a node-native precompile (ASSUMPTIONS A-15/A-17) — a call that cannot be
+    ///      answered must not be read as "unlimited". A gas-capped staticcall that fails, or
+    ///      a pool with no measurable depth, both return zero, and {settleStock} treats zero
+    ///      as "do not buy this stock at all this round".
+    function _maxSpendFor(address stock) internal view returns (uint256) {
+        (bool ok, bytes memory ret) =
+            address(registry).staticcall{gas: DEPTH_PROBE_GAS}(abi.encodeCall(IStockRegistry.poolLiquidityUsd, (stock)));
+        if (!ok || ret.length < 32) return 0;
+
+        uint256 depthUsd = abi.decode(ret, (uint256)); // 18dp USD
+        if (depthUsd == 0) return 0;
+
+        // depth (18dp USD) x impact bps -> quote units.
+        return (depthUsd * maxImpactBps(stock) * (10 ** registry.quoteDecimals())) / BPS / 1e18;
     }
 
     /// @dev Buys `stock` with up to `spendAmount` of quote token, bounded by the Chainlink

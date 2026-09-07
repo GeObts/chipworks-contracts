@@ -446,7 +446,7 @@ pins that.
 
 ---
 
-## 17. NEW: fixed 2% slippage is a cap-raise precondition
+## 17. RESOLVED (superseded by item 26): fixed 2% slippage is a cap-raise precondition
 
 External review (TRIAGE EXT-R-L-1). `defaultMaxSlippageBps` is 2%, flat, per stock, and the
 buy is a single `exactInputSingle` on a public mempool. At launch-cap budgets that is fine —
@@ -471,7 +471,7 @@ for.
 
 ---
 
-## 18. NEW: permissionless `convert` is MEV-exposed at scale
+## 18. RESOLVED: permissionless `convert` is MEV-exposed at scale
 
 External review batch 2 (TRIAGE SEC-POT-002). `Pot.convert` is permissionless and executes
 against whatever the pool says when it lands, bounded only by the Chainlink haircut. At
@@ -714,38 +714,29 @@ withdrawn. If the artifact is genuinely gone, the honest resolution is a fresh p
 
 ---
 
-## 26. NEW: there is no `maxImpactBps`, and building one closes three things at once
+## 26. RESOLVED: the depth-aware impact trim — and with it, items 17 and 18
 
-**A gap found while removing the round cap.** The brief for that change assumed `ChipRounds`
-carries "the Chainlink-bounded min-out + maxImpactBps". Only the min-out exists.
+**Closed in `launch-candidate-16`.** `ChipRounds` now sizes every per-stock buy from measured
+pool depth: a buy spends at most `poolLiquidityUsd(stock) * maxImpactBps / BPS`, defaulting to
+25 bps with a per-stock override and a hard `MAX_IMPACT_CEILING_BPS` of 500.
 
-**What exists:** `_minOutFor` computes a Chainlink-derived `amountOutMinimum` and hands it to
-the router. A buy that cannot clear it reverts inside the router, `_buy` reports
-`executed == false`, and the whole slice is skipped and carried. **All-or-nothing.**
+**This is the work items 17 and 18 both deferred**, and they said it should be solved once
+rather than twice. It was: the stock-buy path now has depth-derived sizing, which is what
+EXT-R-L-1 asked for, and it is the deferred half of SEC-POT-002. Both are re-triaged as FIXED
+in TRIAGE rather than accepted-with-a-cap.
 
-**What does not exist:** anything that reduces the spend to a size the pool can absorb. There
-is no `maxImpactBps`, no depth lookup in the buy path, and no partial fill. A stock whose
-slice is too large for its pool buys **nothing**, not "as much as is safe".
+**Three consequences worth keeping in mind:**
 
-**Why it matters more now.** With the cap in place slices were small enough that this rarely
-bit. Uncapped, and against the pool depth measured in ASSUMPTIONS A-22 — everything but GOOGL
-and SPCX under $14k — a large round will skip most names rather than fill them. The
-distribution ceiling stops being a parameter and becomes liquidity.
+1. **The round cap could then come off** without reopening either finding — that was its
+   written precondition, and it is now met.
+2. **Thin names distribute instead of skipping.** Before the trim, a slice too large for its
+   pool bought nothing at all. Against the depth measured in A-22 that would have meant large
+   rounds skipping most of the B20 set.
+3. **Throughput per stock is now set by liquidity, not by a parameter.** At 25 bps a $130k pool
+   takes ~$325 a round. That is the honest ceiling of the current market, and raising
+   `maxImpactBps` does not raise it safely — it just moves the cost from "carried to the next
+   round" to "paid to a sandwicher". The way to distribute more is deeper pools.
 
-**The shape of the fix.** `StockRegistry.poolLiquidityUsd(stock)` already exists and is already
-used by the depth gate. A per-stock `maxImpactBps` would cap the spend at
-`poolLiquidityUsd * maxImpactBps / BPS` converted to quote units, buy that much, and let the
-remainder flow out through the existing unspent→Pot path at finalize. That reuses audited
-machinery and adds no new accounting.
-
-**One design question to settle first.** The brief says "carry the remainder to the next round
-**for that stock**". The mechanism above carries it to the **Pot**, where the next round
-re-splits it by that round's weights — which lands back on the same stock only to the extent
-holders keep the same splits. Earmarking per stock across rounds is new money-path storage and
-a materially bigger change. Worth deciding deliberately rather than discovering.
-
-**This is also the deferred half of two accepted findings.** EXT-R-L-1 and SEC-POT-002 both
-named "dynamic slippage derived from measured pool depth" as their precondition, and both said
-it should be solved once rather than twice. A depth-aware impact bound in the buy path is that
-work. Building it closes OPEN_ITEMS 17, 18 and 26 together and removes the reason the round cap
-existed.
+**Carry is to the Pot, not earmarked per stock** — the remainder leaves through the existing
+unspent→Pot path and is re-split next round. No new money-path storage, which was the design
+question flagged when this item was opened.
