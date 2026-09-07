@@ -20,7 +20,7 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `LOAN_TREASURY` | _TBD_ | Where liquidated NounLoans collateral goes. May be the Safe. |
 | ~~`CLUTCH_VAULT_*`~~ | — | **Gone.** Chipworks runs its own activation vault; see step 4. |
 | `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. **A normal family collection: 0.5x earner, never burned.** |
-| `CHIPLETS` | **_TBD_** | The collection the Furnace consumes AND the 4th earning collection. **Deployed through OpenSea's drop flow — `ERC721SeaDrop`/`ERC721A`, not a contract in this repo.** Our contracts hold only its address. Was going to be Lil Based Nouns, then a DN404 hybrid; it is neither. See step 8. |
+| `CHIPLETS` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | **VERIFIED ON CHAIN 2026-09-07.** The collection the Furnace consumes AND the 4th earning collection. Not a contract in this repo. `name()` = `CHIPLETS`, `symbol()` = `CHIPP`, `supportsInterface(0x80ac58cd)` = **true**, `burn(uint256)` selector **present**, `owner()` = `0xcd2f7B22…FCEFa`. `totalSupply()` was **0** at the time of checking — the drop had not minted. See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
 | `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead` and **`totalSupply` will not fall**. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). See BURN_VISIBILITY.md. |
@@ -775,12 +775,12 @@ matter; it is listed last because it depends on `$CHIP` existing.
 |---|---|---|
 | `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
 | `chipToken_` | `$CHIP` | Burned alongside the fuel. Must exist first. |
-| `fuelCollection_` | **`CHIPLETS` — TBD** | The collection consumed as fuel. A plain ERC-721. Blocks the Furnace deploy until the Chiplets address exists — and that is now the *only* thing blocking it, since there is no hybrid-token integration work left. |
-| `basedRecipe` | `{outputCollection: BASED_NOUNS, lilCost, chipCost}` | Recipe id 0, `FORGE_BASED`. |
-| `darkRecipe` | `{outputCollection: DARK_NOUNS, lilCost, chipCost}` | Recipe id 1, `FORGE_DARK`. |
+| `fuelCollection_` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | The collection consumed as fuel. Verified: real ERC-721, exposes `burn(uint256)`, so forging **truly reduces its supply**. No longer a blocker. |
+| `basedRecipe` | `{outputCollection: BASED_NOUNS, fuelCost: 25, chipCost}` | Recipe id 0, `FORGE_BASED`. **25 Chiplets + $CHIP → 1 Based Noun.** |
+| `darkRecipe` | `{outputCollection: DARK_NOUNS, fuelCost: _TBD_, chipCost}` | Recipe id 1, `FORGE_DARK`. **The Chiplet count for a DarkNOUN is NOT decided** — do not guess it; the constructor refuses zero, so this genuinely blocks the Furnace deploy until somebody chooses. |
 
 Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
-their value in calldata is ignored. `lilCost` must be in `1..100` (`MAX_LIL_COST`) or the
+their value in calldata is ignored. `fuelCost` must be in `1..100` (`MAX_FUEL_COST`) — 25 is well inside it — or the
 constructor reverts. **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
 refused by both the constructor and `queueRecipeChange` (`BadConfig`). Every forge burns $CHIP;
 that was decided in response to external review batch 9, on the grounds that a free forge is a
@@ -822,7 +822,7 @@ user is about to forge out from under them. Deposit in the order you want tokens
 **Changing prices — 48h timelock, two transactions:**
 
 ```
-queueRecipeChange(recipeId, lilCost, chipCost)     // emits RecipeChangeQueued(.., executableAt)
+queueRecipeChange(recipeId, fuelCost, chipCost)    // emits RecipeChangeQueued(.., executableAt)
 ... wait 48h ...
 executeRecipeChange(recipeId)                       // emits RecipeChangeExecuted
 ```

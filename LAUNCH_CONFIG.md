@@ -331,7 +331,10 @@ which is the entire point of the change. Nothing else catches it.
 **Check one — the selector is in the deployed bytecode.**
 
 ```
-cast code <CHIPLETS> --rpc-url $BASE_RPC_URL | grep -c 42966c68     # burn(uint256), expect >= 1
+cast code 0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33 --rpc-url $BASE_RPC_URL | grep -c 42966c68
+# expect >= 1. ALREADY CHECKED 2026-09-07 and it returned 1, alongside:
+#   name() = "CHIPLETS", symbol() = "CHIPP", supportsInterface(0x80ac58cd) = true
+#   totalSupply() = 0        <- the drop had not minted yet; re-check after it does
 ```
 
 OpenSea's `ERC721SeaDrop` and `ERC721SeaDropCloneable` both expose

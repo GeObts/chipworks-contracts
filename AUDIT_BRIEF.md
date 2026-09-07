@@ -609,7 +609,7 @@ Four properties to attack, each of which is structural rather than policy:
   consumed. Check the case where $CHIP's `balanceOf(0xdead)` is itself manipulable.
 
 Also worth a look: duplicate detection in `lilIds` is an O(n²) inner loop bounded by
-`MAX_LIL_COST = 100`; recipe cost changes are behind a 48h timelock with events at queue and
+`MAX_FUEL_COST = 100`; recipe cost changes are behind a 48h timelock with events at queue and
 execute, while **pausing is deliberately immediate** because halting a recipe is a safety
 action; and an NFT that arrives via `safeTransferFrom` is accepted but never registered as
 stock, so it cannot silently become someone's output.
