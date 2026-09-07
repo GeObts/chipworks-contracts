@@ -102,6 +102,122 @@ needed to be checkable.**
 
 ---
 
+### External review — Bankr, batch 8: ClaimRouter.sol — **the core eleven are done**
+
+Against `launch-candidate-12`. No criticals or highs; every core invariant came back safe.
+**This closes the eleven-contract audit**, which is worth recording as a milestone rather than
+just another batch: every contract that handles money or custody has now had an independent
+pass, and the findings arrived in roughly descending order of severity across the eight
+batches, which is what you want to see.
+
+| ID | Finding | Theirs | Ours (capped / uncapped) | Verdict | Disposition |
+|---|---|---|---|---|---|
+| SEC-RTR-001 | `sweepTo` is permissionless and its NatSpec says otherwise | Low | Low / Low | **VALID** | **FIXED** — `onlyOwner`, and the comment rewritten |
+| SEC-RTR-002 | Raw call ignores a `false` return, so `Swept` can lie | Low | Low / Low | **VALID** | **FIXED** — books the measured delta |
+| SEC-RTR-003 | EIP-150 can mark valid legs failed on low gas | Info | Info / Info | **VALID** | **ACCEPTED** — caller concern, SITE_CLAIM_API.md |
+| SEC-RTR-004 | Unbounded batch | Low | Low / Low | **VALID** | **FIXED** — `MAX_CLAIMS = 100` |
+
+---
+
+#### SEC-RTR-001 — the comment was the finding
+
+**VALID, and the interesting half is which of the two things was wrong.** `sweepTo` was
+permissionless, which on its own is arguable. What is not arguable is the NatSpec sitting
+directly above it:
+
+> *"It sends to `to` rather than to `msg.sender`, so it can rescue a specific user's stranded
+> tokens without the caller being able to take them."*
+
+A caller passes its own address as `to`. The sentence describes a protection that does not
+exist and never did, and a reviewer reading it would reasonably stop looking. The test suite
+had absorbed the same idea — `test_sweepToRescuesStrandedTokens` was written from a
+`goodSamaritan` address with a comment saying "never to themselves by default", where *by
+default* was carrying the whole lie.
+
+**Fixed with the modifier, not the wording, and the reasoning is not "the multisig is more
+trusted".** Permissionless recovery only beats multisig recovery if the person who lost the
+tokens can be sure of winning the race to reclaim them, and they cannot — anyone watching the
+mempool takes it first. A public bounty on accidental deposits is worse for the victim than a
+multisig that can send them back.
+
+It also settles an inconsistency: `Anvil.recoverExcess`, `POLTreasury.recoverExcess` and
+`Furnace.recoverNFT` are all owner-only. There is now **one rule for accidental deposits across
+the protocol** instead of an exception here that a reviewer has to hold in their head.
+
+Nothing is centralised by this. No normal path puts a token on the router — `claimFor` credits
+its `owner` argument and never `msg.sender`, so the router is never the claimant, which
+`test_routerHoldsNothingAfterwards` has always asserted.
+
+**Demonstrated before it was fixed:** `test_PROOF_RTR001_anyoneSweepsStrandedTokensToThemselves`
+passed on `launch-candidate-12` with a `thief` address taking 77 CHIP.
+
+---
+
+#### SEC-RTR-002 — an event that lies is worse than no event
+
+**VALID.** `Swept` was emitted on `okXfer`, which is "the call did not revert". The ERC-20 spec
+permits returning `false` instead, and real tokens do it. The router then announced a transfer
+that had not happened.
+
+Low severity in money terms — nothing is lost, the tokens are still there and still
+recoverable — and higher than it looks in operational terms, because an indexer, a support
+ticket and an incident timeline are all built on these events being true.
+
+**Fixed by booking the measured delta rather than the return value**, which is the rule
+`ConversionRoutes` and `ChipRounds` already follow for every value that moves in this protocol:
+*book what MOVED, never what was intended*. That is strictly stronger than the boolean check
+the finding asked for, since a token can return `true` and still move nothing.
+
+**One precision worth stating, because the first draft of the comment overstated it.** The
+amount booked is what left the ROUTER, not what landed at `to`. For a fee-on-transfer token
+those differ and the event reports the larger figure — asserted deliberately in
+`test_RTR002_theEventBooksTheMeasuredAmountNotTheRequestedOne`. That is the honest reading of a
+sweep, since the router is saying what it gave up; measuring the recipient instead would mean
+trusting a second balance on an address we know nothing about.
+
+**Demonstrated before it was fixed:** `test_PROOF_RTR002_aLyingTokenEmitsAFalseSwept` passed
+with `Swept` emitted while the balance had not moved a wei.
+
+---
+
+#### SEC-RTR-003 — the one the contract cannot fix
+
+**VALID, ACCEPTED, and documented rather than coded — with the reasoning, because "frontend
+concern" is exactly the disposition that gets abused.**
+
+Each leg is dispatched with `call{gas: legGasLimit}`, and EIP-150 gives a subcall at most 63/64
+of the gas remaining at that moment. Send too little overall and later legs get less than their
+budget, fail for that reason alone, and are reported as `LegFailed`. **A valid credit shown to
+its owner as broken.**
+
+The credit is untouched and stays claimable, so the cost is gas and confidence rather than
+money. And the two on-chain fixes are both worse than the problem:
+
+- **Revert on low gas** — throws away the legs that already succeeded. The user pays for a
+  reverted transaction instead of keeping partial value.
+- **Break out of the loop early** — silently does less than the caller asked for, and returns a
+  success. That is the same class of dishonesty as SEC-RTR-002.
+
+So it is the caller's job, and the contract's job is to make the number computable: `MAX_CLAIMS`
+bounds the array and `legGasLimit` is readable on chain, so an SDK never hardcodes it
+(`test_RTR003_theGasFormulaInputsAreReadable`). **`SITE_CLAIM_API.md` carries the formula** —
+`claims.length × (legGasLimit + 30_000)` — plus what `LegFailed` means, why not to retry a whole
+batch, and the instruction to batch in tens rather than at the cap.
+
+---
+
+#### SEC-RTR-004 — a bounded batch is what makes the formula writable
+
+**VALID, FIXED.** `MAX_CLAIMS = 100`, reverting `TooManyClaims(requested, max)`.
+
+**Being honest about what the cap does and does not do.** It does not make a large batch safe:
+at the launch `legGasLimit` of 1,000,000, a hundred legs asks for more gas than a Base block
+will reserve, so the practical limit is set by SEC-RTR-003's formula and is much lower. What the
+cap does is turn the worst case from an open question into a knowable number — which is the
+precondition for writing the gas formula down at all. The site is told to batch in tens.
+
+---
+
 ### External review — Bankr, batch 7: Anvil.sol
 
 Against `launch-candidate-10`. No criticals or highs. **Two mediums that were both live bugs
@@ -1408,7 +1524,9 @@ on every build.
 | `launch-candidate-8` | SEC-LN-002, SEC-LN-003; SEC-LN-001 and SEC-LN-004 documented | Superseded |
 | `launch-candidate-9` | Contribution-time snapshot described accurately everywhere; Lils stop being Furnace fuel | Superseded |
 | `launch-candidate-10` | **Batch 6: H-01, H-02, M-01, M-02, M-03, L-01–L-04.** SEC-POT-002 finally closed on POLTreasury too | Superseded |
-| `launch-candidate-11` | **Batch 7 (Anvil): M-1, M-2, L-1, L-2, L-3**; I-1 documented | **Current** |
+| `launch-candidate-11` | **Batch 7 (Anvil): M-1, M-2, L-1, L-2, L-3**; I-1 documented | Superseded |
+| `launch-candidate-12` | Full B20 registry config with real feeds; Chiplets is a plain ERC-721. No `src/` logic change | Superseded |
+| `launch-candidate-13` | **Batch 8 (ClaimRouter): SEC-RTR-001, -002, -004**; -003 documented. **Core audit complete** | **Current** |
 
 The review package needed its own tag because it was written after the code was frozen, and
 tags in this repo are never moved. A reviewer checks out `review-1`; the contracts they read

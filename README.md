@@ -30,6 +30,7 @@ Start here:
 | [OPEN_ITEMS.md](OPEN_ITEMS.md) | What is still unresolved |
 | [LAUNCH_CONFIG.md](LAUNCH_CONFIG.md) | **The runbook.** Locked launch parameters merged with the deploy sequence — start here on the day |
 | [DEPLOY.md](DEPLOY.md) | Deploy order, constructor arguments, verified addresses, and why each is wired that way |
+| [SITE_CLAIM_API.md](SITE_CLAIM_API.md) · [SITE_LOAN_API.md](SITE_LOAN_API.md) | What the site must get right: the claim-batch gas formula, and the loan deadline UX |
 | [B20_DOCS.md](B20_DOCS.md) | Base's tokenized-stock documentation, filed verbatim — the source the B20 reconciliation in ASSUMPTIONS is checked against |
 | [CLUTCH_RECON.md](CLUTCH_RECON.md) · [CLUTCH_LICENSES.md](CLUTCH_LICENSES.md) | Why Chipworks runs its own activation vault instead of depending on Clutch |
 

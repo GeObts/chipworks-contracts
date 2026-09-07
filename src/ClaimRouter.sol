@@ -38,8 +38,12 @@ import {IChipRewardsClaimable} from "./interfaces/IChipRewardsClaimable.sol";
 ///         nothing worked rather than silently paying gas for a no-op.
 ///
 ///      2. THE ROUTER NEVER HOLDS ANYTHING. `claimFor` pays the owner directly, so the
-///         router is never the claimant. {sweepTo} remains as a permissionless safety valve
-///         for anything that lands here by accident; it is not part of any normal path.
+///         router is never the claimant — see `ChipClaims._claim`, which credits the `owner`
+///         argument and never `msg.sender`. {sweepTo} exists only for something that arrives
+///         here by accident, and it is **multisig-only**. External review SEC-RTR-001 found
+///         it permissionless while its own comment claimed a caller could not take what it
+///         moved; both halves of that are fixed below, and the comment mattered as much as
+///         the modifier.
 ///
 ///      3. GAS IS BOUNDED PER LEG. A token that fails with an invalid opcode consumes every
 ///         wei of gas handed to it (ASSUMPTIONS A-17). Without a per-leg cap one hostile
@@ -50,6 +54,22 @@ import {IChipRewardsClaimable} from "./interfaces/IChipRewardsClaimable.sol";
 ///      works around it: while claims are shut every leg fails with `ClaimsClosed`, and
 ///      {claimWindowStatus} exists so the site can grey out the button instead of letting
 ///      people burn gas on a call that cannot succeed.
+///
+///      A NOTE THE CALLER HAS TO GET RIGHT, AND THE CONTRACT CANNOT (SEC-RTR-003).
+///
+///      Each leg is given `legGasLimit`, but EIP-150 hands a subcall at most 63/64 of the gas
+///      remaining at that moment. Send too little gas overall and the later legs receive less
+///      than their budget, fail for that reason alone, and are recorded as `LegFailed` — a
+///      **valid credit reported as failed**. The credit itself is untouched and stays
+///      claimable, so nothing is lost but the caller's gas and their confidence in the
+///      readout.
+///
+///      This cannot be fixed here without making it worse. Reverting on low gas would throw
+///      away the legs that already succeeded, and stopping early would silently do less than
+///      was asked. So it is the caller's job: **estimate `claims.length × (legGasLimit +
+///      30_000)`** and send at least that. `MAX_CLAIMS` bounds the array so that number stays
+///      computable, and `legGasLimit` is readable on chain so an SDK never has to hardcode
+///      it. See SITE_CLAIM_API.md.
 contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -62,6 +82,16 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     /// @notice ChipClaims — the ledger. `claimFor` lives there, not on the engine.
     IChipRewardsClaimable public rewards;
 
+    /// @notice Largest batch {claimEverything} will accept.
+    /// @dev External review SEC-RTR-004. The array was unbounded, so the only thing stopping
+    ///      a caller building a batch that cannot fit in a block was the caller. A cap does
+    ///      not make a big batch cheap — at `legGasLimit` of 1,000,000 even 100 legs is more
+    ///      than a Base block can reserve — but it makes the worst case a knowable number
+    ///      instead of an open question, and it is what lets the gas formula above be
+    ///      written down at all. **The practical limit is lower and gas-driven**; the site
+    ///      should batch in tens, not hundreds.
+    uint256 public constant MAX_CLAIMS = 100;
+
     /// @notice Gas handed to each individual leg.
     uint256 public legGasLimit;
 
@@ -73,6 +103,8 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
 
     error ZeroAddress();
     error NothingRequested();
+    /// @notice More than {MAX_CLAIMS} credits in one batch. SEC-RTR-004.
+    error TooManyClaims(uint256 requested, uint256 max);
     error EverythingFailed();
     error BadGasLimit();
 
@@ -109,8 +141,12 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
     ///                who must be the owner of the credit; a credit belonging to somebody
     ///                else simply fails its leg.
     /// @return succeeded How many legs paid out.
+    /// @dev Send `claims_.length * (legGasLimit + 30_000)` gas or better. A leg starved of
+    ///      gas is recorded as failed even though the credit is fine — see the note on this
+    ///      contract, SEC-RTR-003.
     function claimEverything(ChipClaim[] calldata claims_) external nonReentrant returns (uint256 succeeded) {
         if (claims_.length == 0) revert NothingRequested();
+        if (claims_.length > MAX_CLAIMS) revert TooManyClaims(claims_.length, MAX_CLAIMS);
 
         address owner = msg.sender;
         uint256 failed;
@@ -139,13 +175,29 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
         nextOpenAt = rewards.nextWindowOpensAt();
     }
 
-    /// @notice Forward tokens sitting on the router to `to`. Permissionless safety valve.
+    /// @notice Forward tokens sitting on the router to `to`. **Multisig only.**
+    ///
     /// @dev The router is not supposed to hold a balance at any point — `claimFor` pays the
     ///      owner directly and the router is never the claimant — so this exists only for
-    ///      something that arrived by accident. It sends to `to` rather than to
-    ///      `msg.sender`, so it can rescue a specific user's stranded tokens without the
-    ///      caller being able to take them.
-    function sweepTo(address to, address[] calldata tokens) external nonReentrant {
+    ///      something that arrived by accident.
+    ///
+    ///      SEC-RTR-001: THIS USED TO BE PERMISSIONLESS, AND THE COMMENT ABOVE IT WAS FALSE.
+    ///      It said sending to `to` rather than `msg.sender` meant a caller could not take
+    ///      what it moved. A caller passes its own address as `to`; that is the whole of it.
+    ///      Anything stranded here was a public bounty, and the person who lost it would
+    ///      almost certainly lose the race to recover it.
+    ///
+    ///      Fixed by making it owner-only rather than by rewording. Permissionless recovery
+    ///      is only better than multisig recovery if the victim can be sure of winning, and
+    ///      they cannot; owner-only means the multisig can return a misdirected transfer to
+    ///      the person who actually made it. It also matches every other rescue in this repo
+    ///      — `Anvil.recoverExcess`, `POLTreasury.recoverExcess`, `Furnace.recoverNFT` — so
+    ///      there is now one rule for accidental deposits across the protocol rather than an
+    ///      exception here that a reviewer has to hold in their head.
+    ///
+    ///      There is nothing to trust the multisig with that it does not already have: no
+    ///      normal path puts a token on this contract.
+    function sweepTo(address to, address[] calldata tokens) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         _sweep(to, tokens);
     }
@@ -164,19 +216,49 @@ contract ClaimRouter is Ownable2Step, ReentrancyGuard {
 
     /// @dev Each token is swept independently and a failure is skipped, so one frozen token
     ///      cannot strand the others.
+    ///
+    ///      SEC-RTR-002: `Swept` USED TO MEAN "THE CALL DID NOT REVERT". A token that returns
+    ///      `false` instead of reverting — the ERC-20 spec permits it and real tokens do it —
+    ///      produced an event saying a balance had moved when it had not. An event that lies
+    ///      is worse than no event: it is what an indexer, a support ticket and an incident
+    ///      timeline are all built on.
+    ///
+    ///      Fixed by booking the measured delta rather than the return value, which is the
+    ///      same rule `ConversionRoutes` and `ChipRounds` already follow for every value that
+    ///      moves in this protocol. It is stronger than the boolean check the finding asked
+    ///      for, because a token can return `true` and still move nothing.
+    ///
+    ///      Precisely: the amount booked is what left THIS CONTRACT, not what landed at
+    ///      `to`. For a fee-on-transfer token those differ and the event reports the larger
+    ///      figure. That is the honest reading of a sweep — the router is saying what it gave
+    ///      up — and measuring the recipient instead would mean trusting a second balance on
+    ///      an address we know nothing about. `Swept` is not emitted at all when nothing left.
     function _sweep(address to, address[] calldata tokens) internal {
         for (uint256 i; i < tokens.length; ++i) {
             address token = tokens[i];
             if (token == address(0)) continue;
 
-            (bool okBal, bytes memory balRet) =
-                token.staticcall{gas: legGasLimit}(abi.encodeCall(IERC20.balanceOf, (address(this))));
-            if (!okBal || balRet.length < 32) continue;
-            uint256 amount = abi.decode(balRet, (uint256));
-            if (amount == 0) continue;
+            uint256 before = _balanceOfSelf(token);
+            if (before == 0) continue;
 
-            (bool okXfer,) = token.call{gas: legGasLimit}(abi.encodeCall(IERC20.transfer, (to, amount)));
-            if (okXfer) emit Swept(to, token, amount);
+            (bool okXfer,) = token.call{gas: legGasLimit}(abi.encodeCall(IERC20.transfer, (to, before)));
+            if (!okXfer) continue;
+
+            uint256 remaining = _balanceOfSelf(token);
+            // A token whose balance grew, or which stopped answering, is not one to book.
+            if (remaining >= before) continue;
+
+            emit Swept(to, token, before - remaining);
         }
+    }
+
+    /// @dev Gas-capped, and returns zero rather than reverting for anything that will not
+    ///      answer — a token that cannot be read is one this loop skips, not one that stops
+    ///      the sweep. Per ASSUMPTIONS A-17.
+    function _balanceOfSelf(address token) internal view returns (uint256) {
+        (bool ok, bytes memory ret) =
+            token.staticcall{gas: legGasLimit}(abi.encodeCall(IERC20.balanceOf, (address(this))));
+        if (!ok || ret.length < 32) return 0;
+        return abi.decode(ret, (uint256));
     }
 }

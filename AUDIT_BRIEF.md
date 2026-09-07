@@ -52,7 +52,7 @@ paths, or a paid endpoint, avoids it.
 Runtime sizes, all inside the 24,000-byte budget the size guard enforces (EIP-170 is 24,576):
 POLTreasury 23,032 · ChipRounds 20,377 · NounLoans 15,566 · ChipClaims 14,678 ·
 Pot 11,337 · Anvil 10,075 · ChipActivation 10,023 · StockRegistry 8,971 · Furnace 7,711 ·
-FeeSplitter 6,069 · ClaimRouter 3,149 · ClutchVaultAdapter 3,151.
+FeeSplitter 6,069 · ClaimRouter 3309 · ClutchVaultAdapter 3,151.
 
 **POLTreasury is now the tightest at 968 bytes of headroom** and has taken ChipRounds' place
 as the one to watch. It grew by roughly 7,800 bytes in `launch-candidate-10` closing the two
@@ -74,7 +74,7 @@ removal loop cost more than the budget had spare. The set is reconstructible fro
 | `base/ConversionRoutes.sol` | 163 | n/a (abstract) | Chainlink-bounded swap machinery, shared by Pot and POLTreasury |
 | `FeeSplitter.sol` | 178 | transiently, **plus ETH escrow** | Three-way split of every inflow: Pot / ops / POL |
 | `Pot.sol` | 103 | **yes, round budget** | Holds round budget, converts inflows to USDC |
-| `ClaimRouter.sol` | 84 | **never** | Batches many Chipworks claims into one transaction |
+| `ClaimRouter.sol` | 264 | **never** | Batches many Chipworks claims into one transaction. Sweep is multisig-only |
 | `adapters/ClutchVaultAdapter.sol` | 76 | no | **RETIRED, not deployed.** The old Clutch seam, kept as an alternative implementation |
 
 Money flows: fee sources → `FeeSplitter` → `Pot` (+ ops, + POL) → `Pot.convert()` → round

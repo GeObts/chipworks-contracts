@@ -8,6 +8,8 @@ import {ChipClaims} from "../src/ChipClaims.sol";
 import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
+import {LyingToken, FeeOnTransferToken} from "./mocks/HostileTokens.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 /// @notice The router after the Clutch leg was dropped.
 ///
@@ -19,7 +21,9 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 ///
 ///      What is deliberately still here: leg independence, per-leg gas bounding, "routing is
 ///      never worse than direct", the credit surviving a failed leg, the claim window gate
-///      not being bypassed, and the permissionless sweep as a safety valve.
+///      not being bypassed, and the sweep as a safety valve — which external review batch 8
+///      made multisig-only, because a permissionless one was a race the victim of an
+///      accidental transfer would usually lose.
 contract ClaimRouterTest is ChipRewardsBase {
     ClaimRouter internal router_;
 
@@ -242,12 +246,12 @@ contract ClaimRouterTest is ChipRewardsBase {
     /*                        THE SAFETY VALVE                              */
     /* ------------------------------------------------------------------ */
 
-    /// @notice The router should never hold a balance. If something arrives anyway, anyone
-    ///         can push it out — but only to the address they name, never to themselves by
-    ///         default.
+    /// @notice The router should never hold a balance. If something arrives anyway the
+    ///         multisig can return it to whoever sent it — and nobody else can move it.
+    ///         External review SEC-RTR-001 turned this from a public bounty into a rescue.
     function test_sweepToRescuesStrandedTokens() public {
         chip.mint(address(router_), 77 ether);
-        vm.prank(makeAddr("goodSamaritan"));
+        vm.prank(multisig);
         router_.sweepTo(alice, _one(address(chip)));
         assertEq(chip.balanceOf(alice), 77 ether);
         assertEq(chip.balanceOf(address(router_)), 0);
@@ -259,6 +263,7 @@ contract ClaimRouterTest is ChipRewardsBase {
         aapl.mint(address(router_), 5e8);
         aapl.setBlacklisted(address(router_), true);
 
+        vm.prank(multisig);
         router_.sweepTo(alice, _two(address(aapl), address(chip)));
 
         assertEq(chip.balanceOf(alice), 10 ether, "the healthy token moved");
@@ -266,6 +271,7 @@ contract ClaimRouterTest is ChipRewardsBase {
     }
 
     function test_sweepToRejectsZeroAddress() public {
+        vm.prank(multisig);
         vm.expectRevert(ClaimRouter.ZeroAddress.selector);
         router_.sweepTo(address(0), _one(address(chip)));
     }
@@ -350,6 +356,138 @@ contract ClaimRouterTest is ChipRewardsBase {
         (bool shut, uint64 next) = router_.claimWindowStatus();
         assertFalse(shut);
         assertEq(next, claims.windowAnchor() + 7 days);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*          EXTERNAL REVIEW — BANKR BATCH 8: ClaimRouter.sol            */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice SEC-RTR-001. The sweep was permissionless while its own comment claimed a
+    ///         caller could not take what it moved. A caller passes its own address.
+    function test_RTR001_theSweepIsMultisigOnly() public {
+        address thief = makeAddr("thief");
+        chip.mint(address(router_), 77 ether);
+
+        vm.prank(thief);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, thief));
+        router_.sweepTo(thief, _one(address(chip)));
+
+        assertEq(chip.balanceOf(thief), 0, "nothing taken");
+        assertEq(chip.balanceOf(address(router_)), 77 ether, "and nothing moved");
+    }
+
+    /// @notice ...and the multisig can still return a misdirected transfer to whoever made
+    ///         it, which is the whole reason the function exists.
+    function test_RTR001_theMultisigStillRecoversAccidentalDeposits() public {
+        chip.mint(address(router_), 77 ether);
+
+        vm.prank(multisig);
+        router_.sweepTo(alice, _one(address(chip)));
+
+        assertEq(chip.balanceOf(alice), 77 ether, "returned to the person who lost it");
+        assertEq(chip.balanceOf(address(router_)), 0);
+    }
+
+    /// @notice SEC-RTR-002. `Swept` used to mean "the call did not revert". A token that
+    ///         returns false rather than reverting produced an event saying a balance had
+    ///         moved when it had not.
+    function test_RTR002_aLyingTokenEmitsNoSweptEvent() public {
+        LyingToken liar = new LyingToken("Liar", "LIE", 18);
+        liar.mint(address(router_), 500 ether);
+        liar.setLying(true);
+
+        vm.recordLogs();
+        vm.prank(multisig);
+        router_.sweepTo(alice, _one(address(liar)));
+
+        assertEq(_countSwept(vm.getRecordedLogs()), 0, "nothing moved, so nothing is claimed");
+        assertEq(liar.balanceOf(alice), 0);
+        assertEq(liar.balanceOf(address(router_)), 500 ether, "still here, still recoverable");
+    }
+
+    /// @notice And the honest token in the same batch is still swept, so the check filters
+    ///         rather than blocks.
+    function test_RTR002_aLiarDoesNotStopAnHonestTokenBesideIt() public {
+        LyingToken liar = new LyingToken("Liar", "LIE", 18);
+        liar.mint(address(router_), 500 ether);
+        liar.setLying(true);
+        chip.mint(address(router_), 12 ether);
+
+        vm.prank(multisig);
+        router_.sweepTo(alice, _two(address(liar), address(chip)));
+
+        assertEq(chip.balanceOf(alice), 12 ether, "the honest one moved");
+        assertEq(liar.balanceOf(address(router_)), 500 ether, "the liar did not");
+    }
+
+    /// @notice The event books what MOVED, not what was asked for. A fee-on-transfer token
+    ///         succeeds, returns true, and still delivers less — the boolean check the
+    ///         finding asked for would have reported the full amount.
+    function test_RTR002_theEventBooksTheMeasuredAmountNotTheRequestedOne() public {
+        FeeOnTransferToken taxed = new FeeOnTransferToken("Taxed", "TAX", 18, 1_000); // 10%
+        taxed.mint(address(router_), 100 ether);
+
+        vm.recordLogs();
+        vm.prank(multisig);
+        router_.sweepTo(alice, _one(address(taxed)));
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 booked;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] == keccak256("Swept(address,address,uint256)")) {
+                booked = abi.decode(logs[i].data, (uint256));
+            }
+        }
+
+        assertEq(taxed.balanceOf(alice), 90 ether, "the tax was taken");
+        assertEq(booked, 100 ether, "the event books what LEFT the router, not what landed");
+        assertEq(taxed.balanceOf(address(router_)), 0);
+    }
+
+    /// @notice SEC-RTR-004. The batch is bounded, so the gas formula the site needs is a
+    ///         computable number rather than an open question.
+    function test_RTR004_theBatchIsCapped() public {
+        uint256 id = _setup();
+
+        ClaimRouter.ChipClaim[] memory tooMany = new ClaimRouter.ChipClaim[](router_.MAX_CLAIMS() + 1);
+        for (uint256 i; i < tooMany.length; ++i) {
+            tooMany[i] = ClaimRouter.ChipClaim({roundId: id, stock: address(nvda)});
+        }
+
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ClaimRouter.TooManyClaims.selector, router_.MAX_CLAIMS() + 1, router_.MAX_CLAIMS())
+        );
+        router_.claimEverything(tooMany);
+    }
+
+    /// @notice A batch at exactly the cap is accepted, so the limit is the documented number
+    ///         and not one below it.
+    function test_RTR004_exactlyTheCapIsAccepted() public {
+        uint256 id = _setup();
+
+        ClaimRouter.ChipClaim[] memory atCap = new ClaimRouter.ChipClaim[](router_.MAX_CLAIMS());
+        atCap[0] = ClaimRouter.ChipClaim({roundId: id, stock: address(nvda)});
+        for (uint256 i = 1; i < atCap.length; ++i) {
+            atCap[i] = ClaimRouter.ChipClaim({roundId: id, stock: address(nvda)}); // duplicates fail their legs
+        }
+
+        vm.prank(alice);
+        uint256 ok = router_.claimEverything(atCap);
+        assertEq(ok, 1, "the first paid, the duplicates failed their own legs");
+    }
+
+    /// @notice SEC-RTR-003 is a caller concern, but the number the caller needs must be
+    ///         readable on chain rather than hardcoded in an SDK.
+    function test_RTR003_theGasFormulaInputsAreReadable() public view {
+        assertEq(router_.legGasLimit(), 1_000_000);
+        assertEq(router_.MAX_CLAIMS(), 100);
+    }
+
+    function _countSwept(Vm.Log[] memory logs) internal pure returns (uint256 n) {
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] == keccak256("Swept(address,address,uint256)")) ++n;
+        }
     }
 }
 
