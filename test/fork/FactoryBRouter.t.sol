@@ -17,7 +17,7 @@ import {EtchableERC20} from "../mocks/EtchableERC20.sol";
 ///
 ///      Rather than trust a deployment list, the answer was derived from the chain: read the
 ///      `Swap` events on the NVDA/USDC pool, tally the senders, and probe each one for
-///      `factory()`. Exactly one answered with factory B, and its code is 19,819 bytes — the
+///      `factory()`. Exactly one answered with factory B, and its code is 9,908 bytes — the
 ///      same size as the factory-A router. Same contract, different constructor argument.
 ///
 ///      **This suite is what turns that inference into a fact.** It runs a real

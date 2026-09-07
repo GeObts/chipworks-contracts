@@ -31,7 +31,7 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
     function setUp() public override {
         super.setUp();
 
-        activation = new ChipActivation(multisig, address(chip), TIER_TABLE);
+        activation = new ChipActivation(multisig, address(chip), 0x000000000000000000000000000000000000dEaD, TIER_TABLE);
         _price(address(basedNouns));
         _price(address(darkNouns));
 

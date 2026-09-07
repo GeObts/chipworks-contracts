@@ -27,6 +27,10 @@ contract BaseAddressesForkTest is Test {
     address internal constant WETH = 0x4200000000000000000000000000000000000006;
 
     address internal constant SLIPSTREAM_NPM = 0x827922686190790b37229fd06084350E74485b72;
+    /// @dev Aerodrome CL factory **A**. Deliberately the one this suite probes: the finding
+    ///      below is about this factory specifically, not about Aerodrome. Factory B
+    ///      (`0xf8f2eB…061Ef`), where the B20 pools actually are, is covered by
+    ///      `AerodromeFactoryCheck.t.sol` and `B20RegistryConfig.t.sol`.
     address internal constant SLIPSTREAM_FACTORY = 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A;
     address internal constant UNIV3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
     address internal constant AERO_V2_FACTORY = 0x420DD381b31aEf6683db6B902084cB0FFECe40Da;
@@ -98,12 +102,24 @@ contract BaseAddressesForkTest is Test {
     }
 
     /* ------------------------------------------------------------------ */
-    /*        FINDING 2: the liquidity is not where the spec says          */
+    /*     FINDING 2: the liquidity is not on the factory we first checked  */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Spec section 5 buys on Aerodrome Slipstream. No Slipstream pool
-    ///         exists for any launch stock, against USDC or WETH, at any tick spacing.
-    function test_noSlipstreamPoolsExistForAnyLaunchStock() public view {
+    /// @notice No pool exists on Aerodrome CL factory **A** for any launch stock, against
+    ///         USDC or WETH, at any tick spacing.
+    ///
+    /// @dev **THIS FINDING WAS ORIGINALLY OVER-READ, AND THE TEST IS KEPT TO SHOW HOW.** It
+    ///      was recorded as "the liquidity is not on Aerodrome Slipstream" and the launch was
+    ///      configured for Uniswap v3 on the strength of it. Every zero below is correct and
+    ///      the control at the end proves the call works — but there are **two** Aerodrome CL
+    ///      factories, and the B20 pools are all on the other one, `0xf8f2eB…061Ef`, at tick
+    ///      spacing 10. The stocks now register as `Venue.Slipstream` against factory B.
+    ///
+    ///      A control proves the call works. It does not prove you are calling the right
+    ///      contract. ASSUMPTIONS A-22 carries the correction; this assertion stays because
+    ///      it is still true of factory A and because the day it stops being true is worth
+    ///      knowing about.
+    function test_noSlipstreamPoolsExistOnFactoryAForAnyLaunchStock() public view {
         address[4] memory stocks = [NVDA, GOOGL, AAPL, META];
         int24[5] memory spacings = [int24(1), int24(50), int24(100), int24(200), int24(2000)];
         for (uint256 i; i < stocks.length; ++i) {

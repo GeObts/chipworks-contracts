@@ -28,11 +28,12 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///          `burn(uint256)`, so {forge} calls it on tokens the user has approved us for. That
 ///          emits `Transfer(owner, 0, tokenId)` and **decrements `totalSupply`** — the
 ///          collection visibly shrinks. See {_consumeFuel}.
-///        - **$CHIP:** Bankr's Doppler token exposes **no `burn`**, so a transfer to `0xdead`
-///          is the only burn available and `totalSupply` will NOT drop. That is a limitation
-///          of a contract we do not own, not a shortcut here. {totalChipBurned} is the
-///          running sum, and effective supply is `totalSupply - balanceOf(0xdead)`; see
-///          `ChipActivation.effectiveChipSupply` and the note in README. There is no admin function that could reach them because there is
+///        - **$CHIP:** sent to {chipBurnTarget}, the `ChipBurner`, which owns the token and
+///          can call its owner-gated `burn` - so `totalSupply` **does** drop. This used to be
+///          a transfer to `0xdead` with the supply left untouched; the token has no *public*
+///          `burn`, which was read as having none at all. {totalChipBurned} is the running
+///          sum of what this contract routed there; see `ChipBurner.totalBurned` for what has
+///          actually been destroyed and `ChipActivation.effectiveChipSupply` for circulating. There is no admin function that could reach them because there is
 ///      nothing to reach: the balance is always zero between transactions. `withdrawStock`
 ///      touches only deposited OUTPUT NFTs.
 ///
@@ -65,6 +66,27 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///         so nothing can be recovered from it.
     /// @dev The canonical dead address, the one Basescan labels as a burn address.
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
+
+    /// @notice Where $CHIP burns are SENT. The {ChipBurner} at launch.
+    ///
+    /// @dev NOT THE SAME ADDRESS AS {BURN_ADDRESS}, AND THE DIFFERENCE MATTERS.
+    ///      `BURN_ADDRESS` is `0xdead` and stays that way: it is where an NFT goes when its
+    ///      collection exposes no `burn`, and an NFT sent to the Burner would be **stranded
+    ///      forever** — the Burner handles $CHIP and has no ERC-721 surface at all.
+    ///
+    ///      $CHIP is different because Bankr's Doppler token has only an owner-gated `burn`.
+    ///      Sending it to `0xdead` left it unreachable but still inside `totalSupply`, so every
+    ///      aggregator overstated circulating supply. Pointing this at the {ChipBurner} — which
+    ///      owns the token — turns those burns into real ones: `totalSupply` falls on chain.
+    ///
+    ///      IMMUTABLE ON PURPOSE. It was briefly a settable address on `ChipRounds` with no
+    ///      validation at all, which meant a documented burn could have been pointed anywhere
+    ///      and quietly become revenue. Set once, at deploy, or not at all.
+    ///
+    ///      A deployment may legitimately point this at `0xdead` — that is what the protocol
+    ///      did before the Burner existed, and it still works — but then burns are dead-held
+    ///      rather than destroyed. LAUNCH_CONFIG requires the Burner.
+    address public immutable chipBurnTarget;
 
     /// @notice Gas allowed for the fuel collection's own `burn`. Generous — an
     ///         ERC721Enumerable burn is several SSTOREs — but bounded, per ASSUMPTIONS A-17.
@@ -214,12 +236,17 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     constructor(
         address multisig,
         address chipToken_,
+        address chipBurnTarget_,
         address fuelCollection_,
         Recipe memory basedRecipe,
         Recipe memory darkRecipe
     ) Ownable(multisig) {
-        if (multisig == address(0) || chipToken_ == address(0) || fuelCollection_ == address(0)) revert ZeroAddress();
+        if (
+            multisig == address(0) || chipToken_ == address(0) || fuelCollection_ == address(0)
+                || chipBurnTarget_ == address(0)
+        ) revert ZeroAddress();
         chipToken = IERC20(chipToken_);
+        chipBurnTarget = chipBurnTarget_;
         fuelCollection = IERC721(fuelCollection_);
 
         _setRecipe(FORGE_BASED, basedRecipe);
@@ -345,9 +372,9 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
         // Measure what actually reached the burn address. A $CHIP that taxes transfers or
         // lies about them would otherwise let a forge through under-paid. Failing closed is
         // the right direction: the forge reverts, nothing is consumed.
-        uint256 before = chipToken.balanceOf(BURN_ADDRESS);
-        chipToken.safeTransferFrom(msg.sender, BURN_ADDRESS, r.chipCost);
-        uint256 delivered = chipToken.balanceOf(BURN_ADDRESS) - before;
+        uint256 before = chipToken.balanceOf(chipBurnTarget);
+        chipToken.safeTransferFrom(msg.sender, chipBurnTarget, r.chipCost);
+        uint256 delivered = chipToken.balanceOf(chipBurnTarget) - before;
         if (delivered < r.chipCost) revert ChipBurnShortfall(delivered, r.chipCost);
 
         // ---- interactions: hand over the output, last ----

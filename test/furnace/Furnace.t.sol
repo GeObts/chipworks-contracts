@@ -56,6 +56,7 @@ contract FurnaceTest is Test {
         furnace = new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(lil),
             Furnace.Recipe({
                 exists: true,
@@ -436,6 +437,7 @@ contract FurnaceTest is Test {
         f = new Furnace(
             multisig,
             chipAddr,
+            0x000000000000000000000000000000000000dEaD,
             address(lil),
             Furnace.Recipe({
                 exists: true,
@@ -630,6 +632,7 @@ contract FurnaceTest is Test {
         Furnace f = new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(otherFuel),
             Furnace.Recipe({
                 exists: true,
@@ -931,6 +934,7 @@ contract FurnaceTest is Test {
         new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(lil),
             Furnace.Recipe({
                 exists: true, paused: false, outputCollection: address(based), fuelCost: BASED_LILS, chipCost: 0
@@ -947,6 +951,7 @@ contract FurnaceTest is Test {
         furnace = new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(lil),
             Furnace.Recipe({
                 exists: true, paused: false, outputCollection: address(out), fuelCost: BASED_LILS, chipCost: BASED_CHIP

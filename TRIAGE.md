@@ -107,7 +107,11 @@ larger buys the same amount of the same thin stock.
 Before the trim, a slice too large for its pool bought **nothing** — the router refused the
 whole thing on `amountOutMinimum` and the entire slice carried. With the cap on, slices were
 small enough that this rarely bit. Uncapped it would have meant large rounds skipping most of
-the B20 set, because ASSUMPTIONS A-22 measured everything but GOOGL and SPCX under $14k.
+the B20 set, because A-22 originally measured everything but GOOGL and SPCX under $14k — against
+the wrong Aerodrome factory. On factory B, where the B20 liquidity actually is, all ten pools
+clear $100k and four clear $1M, so the trim now has real depth to work with. The reasoning
+below stands either way: it is about what happens when a slice outgrows its pool, not about how
+deep the pools happen to be.
 
 Now a thin name fills to its safe size and carries only the remainder.
 `test_aHalfMillionRoundAgainstRealB20Depth` runs a $500,000 round against the depths actually
@@ -280,11 +284,19 @@ So expanding the stock set changes nothing here even if the buys were on Slipstr
 `deadline`, and `StockRegistry._setVenue` already verifies a Slipstream pool against the CL
 factory. Both were built for exactly this.
 
-**As it turns out the buys are not on Slipstream anyway** — see ASSUMPTIONS A-22. There is no
-Slipstream pool for any B20 stock on Base, at any tick spacing, against USDC or WETH. Every
-one registers as `Venue.UniswapV3`. The Slipstream buy path stays in the contract because it
-is correct and because the day a B20 CL pool appears it becomes a `setVenue` call — but it is
-dead code at launch, and a reviewer should know that rather than assume it is exercised.
+**And the buys ARE on Slipstream — this entry used to say the opposite.** It said there was no
+Slipstream pool for any B20 stock at any tick spacing, that every one registered as
+`Venue.UniswapV3`, and that the Slipstream buy path was dead code at launch. That was measured
+against Aerodrome CL factory `0x5e7BB1…809A` and was true of that factory; it was not true of
+Aerodrome. There are **two** CL factories and every B20 pool is on the other one,
+`0xf8f2eB…061Ef`. See ASSUMPTIONS A-22 for the correction and the depth table.
+
+So the Slipstream path is **the** stock buy path at launch, not a spare one, and a reviewer
+should read it as live code. It is exercised end to end against the real router and a real pool
+in `test/fork/FactoryBRouter.t.sol`, and the full thirteen-ticker registry config is re-derived
+from factory B every run in `test/fork/B20RegistryConfig.t.sol`. The Uniswap path is the one
+that goes unexercised by the B20 set — it stays because `Venue` is per-stock and nothing says
+the next listing lands on the same venue.
 
 **Nothing changed in `src/`. This entry exists because the question was asked and the answer
 needed to be checkable.**

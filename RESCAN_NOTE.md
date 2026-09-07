@@ -51,8 +51,9 @@ becoming revenue. It is now the `0xdead` constant, delta-verified, and counted i
   same collection**, which is destroyed.
 - **Two burns, two kinds, both verified.** The sacrificed Chiplet is **truly burned** through
   OpenSea's `ERC721SeaDrop.burn` (ERC721A, `_burn(tokenId, true)`, operator-authorised) and its
-  absence is checked afterwards. The $CHIP goes to `0xdead` because Bankr's Doppler token has
-  no `burn` at all; it is delta-verified against the dead address's balance.
+  absence is checked afterwards. The $CHIP goes to `chipBurnTarget` — the `ChipBurner`, which
+  owns the token and calls its owner-gated `burn`, so `totalSupply` falls — and it is
+  delta-verified against that target's balance, not against `0xdead`.
 - **`isFlatRate` is one-way and pre-configuration only.** It cannot be set on a live
   collection, and a flat collection's five cost entries must be **equal**, so no hidden ladder.
 - **What to attack:** can `activateFlat` burn a token the caller does not own? (`sacrificeId`

@@ -1,8 +1,12 @@
 # BURN_VISIBILITY.md — what actually gets destroyed, and what only looks it
 
-Two contracts Chipworks burns into, neither of which it owns, and they behave differently.
-This file is the reference for the site, for the explorers, and for whoever files the burn
-address with the aggregators.
+Two things Chipworks destroys — a collection it does not own, and a token it now does — and
+they are destroyed by different mechanisms. This file is the reference for the site, for the
+explorers, and for anyone reasoning about circulating supply.
+
+**Both are real burns as of the ChipBurner.** The $CHIP half of this file used to say otherwise;
+the section below keeps that reasoning rather than overwriting it, because the way it was wrong
+is the useful part.
 
 ---
 
@@ -59,57 +63,108 @@ tell the two apart on chain.
 
 ---
 
-## $CHIP — NOT a real burn, and that is Bankr's limitation
+## $CHIP — a REAL burn, through the ChipBurner
 
-**Bankr's Doppler token exposes no `burn`.** Confirmed in their documentation. So every $CHIP
-burn in this protocol is a transfer to:
+**This section used to say the opposite, and the reasoning it used to carry is worth keeping.**
+It said $CHIP burns could never be real because Bankr's Doppler token exposes no `burn`, so
+every burn was a transfer to `0xdead`: unreachable, but still inside `totalSupply`. The premise
+was half right. The token has no *public* `burn` — it has an **owner-gated** one, and ownership
+lands with us at launch. A contract we own can call it.
+
+That contract is **`ChipBurner`** (`src/ChipBurner.sol`), and it is the token's owner. Every app
+burn path sends $CHIP there; `burnAll()` destroys the balance and **`totalSupply` falls**.
 
 ```
-0x000000000000000000000000000000000000dEaD
+app burn path ──transferFrom──> ChipBurner ──burn()──> gone, totalSupply falls
 ```
 
-the canonical address Basescan labels as a burn address. **`totalSupply()` does not fall.** The
-tokens are unreachable — nobody holds that key — but they are still counted by anything reading
-`totalSupply` naively.
+### The two addresses, which are NOT interchangeable
 
-**This is not a Chipworks bug and it is not fixable from our side.** It is a property of a
-contract we do not own.
+This is the one thing to get right when reading the contracts:
+
+| | Goes to | Why |
+|---|---|---|
+| **$CHIP** | `chipBurnTarget` — the `ChipBurner` | It owns the token and can genuinely destroy it |
+| **NFTs** | `BURN_ADDRESS` — `0x…dEaD` | Only when the collection exposes no `burn` of its own |
+
+**An NFT sent to the Burner would be stranded forever.** It has no ERC-721 surface at all — no
+`onERC721Received`, no rescue, and no owner able to move it. So `BURN_ADDRESS` stays `0xdead` on
+all three contracts and `chipBurnTarget` is a **separate immutable field**. A single "burn
+address" for both would have been the obvious simplification and it would have quietly destroyed
+NFTs in a way nobody could undo. `test/BurnRouting.t.sol` is what keeps them apart.
+
+**`chipBurnTarget` is immutable, on purpose.** It was briefly a settable address on `ChipRounds`
+with no validation at all, which meant a documented burn could have been pointed anywhere and
+quietly become revenue. It is now set once, at deploy, with a zero-check, and there is no setter
+on any of the three contracts — asserted by `test_theBurnTargetCannotBeChanged`.
 
 ### Every burn path, and its counter
 
 | Path | Contract | Counter |
 |---|---|---|
 | Activate a Noun | `ChipActivation` | `totalChipBurned` |
+| Activate a flat-rate token (Chiplets) | `ChipActivation` | `totalChipBurned` |
 | Upgrade a tier | `ChipActivation` | `totalChipBurned` |
 | Forge, $CHIP portion | `Furnace` | `totalChipBurned` |
 | Change a split | `ChipRounds` | `totalChipBurned` |
 
-All four are **delta-verified**: the contract measures the dead address's balance before and
+All five are **delta-verified**: the contract measures the burn target's balance before and
 after and reverts `ChipBurnShortfall` if less arrived than was owed, so a token that taxes or
 lies about transfers cannot buy anything under-paid.
 
-> The `ChipRounds` split-change fee had **neither a counter nor a delta check** until this
-> work, and its burn address was a settable variable with no validation of any kind — a
-> documented burn could have been pointed anywhere. It is now the same constant as everywhere
-> else, and the lever is gone rather than validated.
+All five moved to the Burner **together**, in one change. Routing one path through it and
+leaving the others at `0xdead` would have split the accounting and made `chipBurnedToDead()`
+silently incomplete — worse than the honest limitation it replaced.
+
+> The `ChipRounds` split-change fee had **neither a counter nor a delta check** until burn
+> visibility was wired up, and its burn address was a settable variable with no validation of
+> any kind. It now takes the same immutable target as everywhere else, and the lever is gone
+> rather than validated.
+
+### Burning is permissionless, and verified by supply
+
+`burnAll()` may be called by **anyone**. It destroys the Burner's whole balance, there is no
+argument to get wrong, and no way to direct the outcome.
+
+It reads `totalSupply` **before and after** and reverts unless it actually fell. That is what
+makes `ChipBurner.totalBurned` a number the site can publish: it counts what left existence, not
+what was asked to leave. A token that silently no-ops its own burn cannot quietly turn the
+Burner into the `0xdead` address with extra steps.
+
+**$CHIP that arrives at the Burner is already gone**, whether or not anyone has called
+`burnAll()` yet. There is no `transfer`, no sweep, no rescue and no generic `call` — the only
+instruction the contract can give about its own balance is "destroy it". Not even the multisig
+can move it.
 
 ### The number to display
 
 ```solidity
-ChipActivation.effectiveChipSupply()   // totalSupply() - chip.balanceOf(0xdEaD)
-ChipActivation.chipBurnedToDead()      // chip.balanceOf(0xdEaD)
+ChipActivation.effectiveChipSupply()   // totalSupply() - everything burned
+ChipActivation.chipBurnedToDead()      // balanceOf(0xdEaD) + balanceOf(chipBurnTarget)
 ```
 
-**`effectiveChipSupply` subtracts the dead address's BALANCE, not our own counters**, and that
-is deliberate. Summing the four counters above would miss a fifth contract added later, and
-would miss anyone who burned $CHIP by sending it to `0xdead` themselves. The balance misses
-nothing.
+**These stay correct across the burn**, which is the subtle part. $CHIP queued at the Burner but
+not yet destroyed is counted as already out of circulation — it can only ever be destroyed — and
+once `burnAll()` runs it leaves `totalSupply` as well, so the figure does not jump or
+double-count. Pinned by `test_effectiveSupplyIsRightBeforeAndAfterTheBurn`.
 
-### Required post-launch, and it will not happen by itself
+**`chipBurnedToDead` still adds the dead address's BALANCE**, and that is deliberate. Summing
+the five counters above would miss a sixth contract added later, and would miss anyone who
+burned $CHIP by sending it to `0xdead` themselves. It also still counts the historical
+`0xdead` holdings, which is why both terms are in the sum and why the name is unchanged.
 
-**File `0x000000000000000000000000000000000000dEaD` with CoinGecko and CoinMarketCap as an
-excluded burn address for $CHIP.** Until that lands, both will overstate circulating supply by
-exactly `chipBurnedToDead()`, and the overstatement grows with every activation and every
-forge. Neither aggregator infers this.
+### The aggregator filing is no longer required
+
+**This used to be a mandatory post-launch step** — file `0xdead` with CoinGecko and CMC as an
+excluded burn address, or both would overstate circulating supply forever. With real burns,
+`totalSupply` falls on its own and every aggregator picks it up with no filing at all.
+
+It is worth doing anyway **only** if $CHIP was burned to `0xdead` before the ownership hand-off
+landed — see LAUNCH_CONFIG §6.6, where `burnAll()` reverts until `chip.owner()` is the Burner.
+Anything sent to the app's burn paths in that window accumulates at the Burner and is destroyed
+on the first successful call, so the window costs nothing; only $CHIP sent directly to `0xdead`
+by a holder stays counted. Check `chipBurnedToDead()` against
+`chip.balanceOf(chipBurnTarget)` after launch: if the difference is zero, there is nothing to
+file.
 
 The site should show effective supply, not `totalSupply`, and should say which it is showing.

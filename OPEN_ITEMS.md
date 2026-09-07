@@ -562,6 +562,13 @@ the Furnace already burns plain ERC-721s with `ownerOf` then `transferFrom` to `
 The integration is now: put the Chiplets address in `fuelCollection_`, set `fuelCost` per
 recipe, deploy. No adapter, no seam.
 
+**The counts are settled: 25 Chiplets for a Based Noun, 50 for a DarkNOUN.** The Dark figure
+was the last thing outstanding here. Twice the Based count, matching the 2.0x collection base a
+DarkNOUN earns at, so the forge ratio and the earning ratio agree rather than quietly pulling
+against each other. DEPLOY.md step 8 and LAUNCH_CONFIG §6 carry them. The `chipCost` on both
+recipes is still discovered from the observed launch price and still costs a 48-hour timelock,
+which is the only part of the recipe that is not decided.
+
 
 ---
 
@@ -743,31 +750,49 @@ question flagged when this item was opened.
 
 ---
 
-## 27. NEW: there is no $CHIP "Burner" contract, and one cannot help
+## 27. RESOLVED: the $CHIP Burner exists, and the burns are real
 
 **Asked for during the Chiplet-earning work**: whether the $CHIP Burner is built yet, or still
 pending a Bankr ownership-authority answer, with the Chiplet-activation burn to route through
 it "same as all other $CHIP burns".
 
-**There is no Burner contract, no other path routes through one, and no such dependency has
-ever been recorded here.** Searched `src/`, `test/` and every document: the only match is a
-test function name. Nothing was dropped — it was never raised in this repo.
+**The answer this item originally gave was wrong, and the way it was wrong is the point.** It
+said a Burner of ours could not create a true burn because a burn needs a function on the TOKEN
+and Bankr's Doppler $CHIP exposes none. The premise was half right: the token has no *public*
+`burn`, but it has an **owner-gated** one, and ownership lands with us at launch. "No public
+burn" was read as "no burn". A contract we own can call it.
 
-**And a Burner of ours could not create a true burn anyway.** A burn needs a function on the
-TOKEN. Bankr's Doppler $CHIP exposes none — established in `launch-candidate-17` and approved
-at `-18`, and the reason `effectiveChipSupply()` and the CoinGecko/CMC filing exist at all. A
-contract we deploy cannot add one. Delegated authority only helps if the token already has a
-privileged burn path to delegate; if it has no burn function, there is nothing to be granted.
+**`src/ChipBurner.sol` is that contract**, and it is built. It becomes the token's owner at
+launch, and every app burn path sends $CHIP to it instead of to `0xdead`. `burnAll()` is
+permissionless, verifies the burn by reading `totalSupply` before and after, and **`totalSupply`
+genuinely falls**.
 
-**So every $CHIP burn — all five paths — is a `transferFrom` to `0x…dEaD`, counted, and
-delta-verified.** The Chiplet activation does the same as the other four. That is not a
-placeholder pending the Burner; it is the only mechanism the token supports.
+**All five paths moved together, in one change**, which is what this item asked for when it was
+still open:
 
-**If Bankr answers that a privileged burn DOES exist**, the change is protocol-wide and should
-land as one tag: all five paths move together, `effectiveChipSupply` becomes redundant, and the
-aggregator filing becomes unnecessary. **Do not route one path through a Burner and leave four
-at `0xdead`** — that would split the accounting and make `chipBurnedToDead()` silently
-incomplete, which is worse than the current honest limitation.
+| Path | Contract |
+|---|---|
+| Activate a Noun | `ChipActivation` |
+| Activate a flat-rate token (Chiplets) | `ChipActivation` |
+| Upgrade a tier | `ChipActivation` |
+| Forge, $CHIP portion | `Furnace` |
+| Change a split | `ChipRounds` |
 
-**To close this:** get a yes/no from Bankr on whether $CHIP has any privileged burn or mint
-authority they can delegate. If no, delete this item and the question is settled permanently.
+The destination is `chipBurnTarget`, an **immutable** constructor argument on all three
+contracts with a zero-check and no setter anywhere. Routing one path through the Burner and
+leaving four at `0xdead` would have split the accounting and made `chipBurnedToDead()` silently
+incomplete — the failure this item explicitly warned against, and it was avoided.
+
+**`0xdead` is still correct for NFTs, and the two are separate fields.** `BURN_ADDRESS` stays
+`0xdead` on all three contracts: it is where an NFT goes when its collection exposes no `burn`,
+and an NFT sent to the Burner would be **stranded forever** — the Burner has no ERC-721 surface.
+`test/BurnRouting.t.sol` exists to keep them apart.
+
+**What did not become redundant.** `effectiveChipSupply()` still earns its place: it counts
+$CHIP queued at the Burner as already out of circulation, so the published figure does not jump
+when a keeper happens to call `burnAll()`. The **aggregator filing** is what became unnecessary
+— see BURN_VISIBILITY.md, which now carries the one case where it is still worth doing.
+
+**Remaining work is operational, not code**: LAUNCH_CONFIG §6.6 carries the ownership hand-off,
+including the ABI check that must happen **before** it. Until `chip.owner()` is the Burner,
+`burnAll()` reverts and burns simply accumulate — nothing is lost, the burn is deferred.

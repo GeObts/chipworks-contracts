@@ -40,7 +40,7 @@ contract ChipletEarningTest is Test {
         chiplets = new SeaDropLikeChiplets();
 
         uint32[5] memory tiers = [uint32(10_000), 12_500, 16_000, 20_000, 33_300];
-        activation = new ChipActivation(multisig, address(chip), tiers);
+        activation = new ChipActivation(multisig, address(chip), 0x000000000000000000000000000000000000dEaD, tiers);
 
         // Flat-rate is declared BEFORE the collection is configured, then the one price goes
         // through the same 48-hour path as any other cost.

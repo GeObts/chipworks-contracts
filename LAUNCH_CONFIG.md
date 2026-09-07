@@ -29,6 +29,7 @@ Three things gate everything else. Read this before booking a launch date.
 | Blocker | Duration | What it blocks |
 |---|---|---|
 | **$CHIP must launch first** | — | 4 contracts take it as a constructor argument |
+| **ChipBurner must exist first** | — | ChipActivation, ChipRounds and the Furnace take it as an **immutable** argument |
 | **Price discovery: 24–48h observed** | 1–2 days | The entire cost table (§4). ChipActivation cannot deploy before it |
 | **48h timelocks** | 2 days each, parallel | Pricing each collection in ChipActivation; NounLoans terms |
 
@@ -37,12 +38,19 @@ observed price, so the timelock cannot start until price discovery finishes. Rea
 
 ```
 Day 0     $CHIP launches. Initial buy inside the window (§3).
+          Deploy ChipBurner, then chip.transferOwnership(ChipBurner) (§6.6).
 Day 1–2   Observe. Do NOT compute the table from day-0 volatility.
 Day 2     Compute the cost table (§4). Deploy ChipActivation. Queue costs for
           all three collections. Queue NounLoans terms. Queue Anvil prices.
+          Queue both Furnace recipe prices (25 / 50 Chiplets).
 Day 4     Execute all queued config. Deploy the rest. Wire. Verify.
 Day 5     First round.
 ```
+
+**The Burner is deployed before it is given the token.** `ChipBurner(MULTISIG, CHIP)` needs
+only the token's address, so it can go out the moment $CHIP exists; the `transferOwnership`
+hand-off is separate and is what §6.6 gates. Doing both on day 0 keeps the three contracts that
+take its address unblocked.
 
 Anything that can be deployed before $CHIP exists — FeeSplitter, StockRegistry, Pot,
 POLTreasury — can be done on day 0 to shorten the tail.
@@ -200,11 +208,24 @@ owner() == MULTISIG ; opsBps() == 2000 ; potBps() == 8000
 send 0.001 ETH, distributeETH(), confirm the 80/20 landing
 ```
 
-**2. StockRegistry** — `(MULTISIG, USDC, UNI_FACTORY, SLIPSTREAM_FACTORY)`
+**2. StockRegistry** — `(MULTISIG, USDC, UNI_FACTORY, SLIPSTREAM_FACTORY_B)` where
+`SLIPSTREAM_FACTORY_B` is **`0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef`**.
+
+> 🔴 **THIS IS THE ONE ADDRESS THAT CANNOT BE CORRECTED LATER.** There are two Aerodrome CL
+> factories and every B20 stock pool is on this one. The older, better-known
+> `0x5e7BB1…809A` (factory A) resolves **none** of them, and `slipstreamFactory` is
+> **immutable** — a registry deployed against factory A cannot register a single stock as
+> `Venue.Slipstream` and has to be redeployed. It does at least fail loudly
+> (`PoolNotFoundInFactory`) rather than silently. ASSUMPTIONS A-22.
+
 Register all **thirteen** B20 stocks disabled (addresses and feeds: ASSUMPTIONS A-13/A-18).
+Ten register as `Venue.Slipstream` at **tick spacing 10**; COIN, CRCL and INTC have no pool
+anywhere and register as `Venue.None`.
 ```
 stockCount() == 13 ; enabledTokens().length == 0
+getStock(NVDAc).venue == Slipstream ; getStock(NVDAc).tickSpacing == 10
 setEnabled(CRCLc, true)  -> reverts PoolNotSet     # no market yet
+liquidityReport()        # ten clearing $25k, the deepest four over $1M
 ```
 
 **3. Pot** — `(MULTISIG, USDC, UNIV3_FACTORY)`, then `setConversionConfig`, `setRoute(AERO)`
@@ -238,7 +259,7 @@ markAndPoolPrice(NVDAc, <pool>) -> two numbers inside the band
 
 ### After $CHIP, after price discovery
 
-**4. ChipActivation** — `(MULTISIG, CHIP, [10000, 12500, 16000, 20000, 33300])`
+**4. ChipActivation** — `(MULTISIG, CHIP, ChipBurner, [10000, 12500, 16000, 20000, 33300])`
 Then `queueCosts` x3 with the §4 table → **48h** → `executeCosts` x3.
 ```
 allTierBps() == [10000,12500,16000,20000,33300]
@@ -255,13 +276,24 @@ window's day of the week, permanently.** Pick it deliberately.
 setClaimSchedule(604800, 172800) ; setCreditExpiry(2592000)
 ```
 
-**5b. ChipRounds** — `(MULTISIG, registry, Pot, ChipActivation, ChipClaims, 5_000e18)`
+**5b. ChipRounds** — `(MULTISIG, registry, Pot, ChipActivation, ChipClaims, 5_000e18,
+ChipBurner)`
 ```
 setRoundParams(86400, 7200, 100e6, 1_000e6)   # LAUNCH CAPS
 setCollectionBaseBps(LIL, 5000) / (BASED, 10000) / (DARK, 20000)
 setHoldbackBps(1500) ; setDefaultMaxSlippageBps(200) ; setMaxFeedAge(432000)
-setRouters(...) ; setChip(CHIP, 0xdead)
+setChip(CHIP)                                 # ONE argument - the burn target is immutable
+setRouters(0x2626664c2603336E57B271c5C0b26F421741e481,
+           0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F)
+slipstreamRouter() == 0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F
 ```
+
+> 🔴 **THE SLIPSTREAM ROUTER MUST BE THE FACTORY-B ONE.** `0x698Cb2…A92F` is bound to factory
+> B and is the only router that can reach a B20 pool. The better-known `0xBE6D8f…18a5` serves
+> factory A: point `ChipRounds` at it and **every stock buy reverts**, on every round, for
+> every ticker. Unlike the registry this one is fixable with a single `setRouters` call — but
+> the symptom is a round that buys nothing, which reads like a depth problem rather than a
+> wiring one. Both directions are proved in `test/fork/FactoryBRouter.t.sol`.
 
 > **⚠️ WIRING CHECK — `claims.setRounds(rounds)`**
 > Until this is called, **every round reverts at the first `contributeWeights`**, because the
@@ -276,12 +308,20 @@ setRouters(...) ; setChip(CHIP, 0xdead)
 **7. ClaimRouter** — `(MULTISIG, **ChipClaims**, 1000000)`. Points at the ledger, not the
 engine. One leg; the Clutch leg is gone.
 
-**8. Furnace** — `(MULTISIG, CHIP, LIL_NOUNS, basedRecipe, darkRecipe)` with the §4 amounts.
+**8. Furnace** — `(MULTISIG, CHIP, ChipBurner, CHIPLETS, basedRecipe, darkRecipe)`.
+
+The fuel is **Chiplets**, not Lils — Lils reverted to an ordinary 0.5x family collection and
+are never burned (OPEN_ITEMS 20). The Chiplet counts are **25 for a Based Noun, 50 for a
+DarkNOUN**, twice the Based count to match the 2.0x base a DarkNOUN earns at. The `chipCost` on
+both recipes is a **placeholder at deploy** — it cannot be zero — so pause both immediately and
+queue the real prices against the observed §4 price.
 ```
 approve + depositStock(BASED_NOUNS, ids)
-setPaused(1, true)                      # Dark recipe OFF at launch
-recipe(1).paused == true
+setPaused(0, true) ; setPaused(1, true)   # BOTH off at launch, placeholder prices
+recipe(0).fuelCost == 25 ; recipe(1).fuelCost == 50
 forge(1, ids) -> reverts RecipeIsPaused
+# then, once the price is observed:
+queueRecipeChange(0, 25, <real>) ; queueRecipeChange(1, 50, <real>)  -> 48h -> execute, unpause
 ```
 
 **9. NounLoans** — `(MULTISIG, CHIP, FeeSplitter, LOAN_TREASURY, **ChipActivation**, terms)`
@@ -359,19 +399,22 @@ before announcing anything about supply.
 chiplets.totalSupply()                                             # must have fallen by 1
 ```
 
-**And the $CHIP side, which is the opposite case.** $CHIP **cannot** be truly burned — Bankr's
-Doppler token has no `burn` — so `chip.totalSupply()` will NOT move and that is correct. What
-must be true instead:
+**And the $CHIP side, which is now the same case.** This section used to say $CHIP could never
+be truly burned. It can: the token's `burn` is owner-gated rather than absent, and the
+`ChipBurner` owns it. Once §6.6 has landed, `chip.totalSupply()` **does** fall.
 
 ```
-chipActivation.chipBurnedToDead() == chip.balanceOf(0x...dEaD)     # by definition
-chipActivation.effectiveChipSupply() == chip.totalSupply() - chip.balanceOf(0x...dEaD)
+chipActivation.chipBurnedToDead() == chip.balanceOf(0x...dEaD) + chip.balanceOf(<ChipBurner>)
+chipActivation.effectiveChipSupply() == chip.totalSupply() - chipActivation.chipBurnedToDead()
+
+# and the end-to-end one, after any app burn:
+burner.burnAll() ; chip.totalSupply()          # must have FALLEN by what was burned
 ```
 
-The site must display `effectiveChipSupply()`, and `0x000000000000000000000000000000000000dEaD`
-must be filed with CoinGecko and CoinMarketCap as an excluded burn address post-launch. See
-BURN_VISIBILITY.md. **Neither aggregator infers this**, and the overstatement grows with every
-activation and every forge.
+The site should still display `effectiveChipSupply()` — it counts $CHIP queued at the Burner as
+already out of circulation, so the number does not step down at the arbitrary moment a keeper
+calls `burnAll()`. **The CoinGecko/CMC filing is no longer required**; see BURN_VISIBILITY.md
+for the one case where it is still worth doing.
 
 ---
 

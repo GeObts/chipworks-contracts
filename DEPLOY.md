@@ -23,20 +23,23 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `CHIPLETS` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | **VERIFIED ON CHAIN 2026-09-07.** The collection the Furnace consumes AND the 4th earning collection. Not a contract in this repo. `name()` = `CHIPLETS`, `symbol()` = `CHIPP`, `supportsInterface(0x80ac58cd)` = **true**, `burn(uint256)` selector **present**, `owner()` = `0xcd2f7B22…FCEFa`. `totalSupply()` was **0** at the time of checking — the drop had not minted. See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
-| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead` and **`totalSupply` will not fall**. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). See BURN_VISIBILITY.md. |
+| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. Its `burn` is **owner-gated**, and at launch the owner becomes `ChipBurner` (step 0), so **`totalSupply` does fall** — burns are real. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). See BURN_VISIBILITY.md. |
 
-> ### 🔴 POST-LAUNCH, AND NOTHING WILL DO IT FOR YOU
+> ### 🔴 AT LAUNCH, AND NOTHING WILL DO IT FOR YOU
 >
-> **File `0x000000000000000000000000000000000000dEaD` with CoinGecko and CoinMarketCap as an
-> excluded burn address for $CHIP.** Bankr's token has no `burn`, so burned $CHIP stays in
-> `totalSupply` forever. Until the filing lands, both aggregators overstate circulating supply
-> by exactly `ChipActivation.chipBurnedToDead()`, and the gap widens with every activation and
-> every forge.
+> **`chip.transferOwnership(<ChipBurner>)`.** This is what makes $CHIP burns real. Until it
+> lands, `burnAll()` reverts and every burned $CHIP simply accumulates at the Burner — nothing
+> is lost, but `totalSupply` does not fall and the aggregators overstate circulating supply.
+> LAUNCH_CONFIG §6.6 carries the sequence and the **ABI check that must happen first**.
 >
-> The site must show `ChipActivation.effectiveChipSupply()` — `totalSupply` minus the dead
-> balance — and say that is what it is showing. **Chiplets is the opposite case**: it is
-> `ERC721Burnable`, the Furnace calls `burn`, and its supply genuinely falls. BURN_VISIBILITY.md
-> has both.
+> **The CoinGecko/CMC filing this note used to demand is no longer required.** It was mandatory
+> when every burn was a transfer to `0xdead` and `totalSupply` could never move. With a real
+> burn the aggregators pick the fall up on their own. File `0xdead` only if $CHIP was burned
+> there before the hand-off landed — see BURN_VISIBILITY.md, which carries the one-line check.
+>
+> The site should still show `ChipActivation.effectiveChipSupply()` and say that is what it is
+> showing: it counts $CHIP queued at the Burner as already gone, so the published figure does
+> not step down whenever a keeper calls `burnAll()`.
 
 **Furnace forging needs a user approval step.** `chiplets.setApprovalForAll(furnace, true)`
 before `forge`, exactly like a marketplace listing. The Furnace has no burn role and cannot be
@@ -209,7 +212,8 @@ call, needs no action from the borrower, and is retroactive — but nothing will
 Only these actually bind. Everything else can move.
 
 ```
-$CHIP ────────────────> 4 ChipActivation, 8 Furnace, 9 NounLoans, 5b ChipRounds (fee)
+$CHIP ────────────────> 0 ChipBurner, 4 ChipActivation, 8 Furnace, 9 NounLoans, 5b ChipRounds (fee)
+0 ChipBurner ─────────> 4 ChipActivation, 5b ChipRounds, 8 Furnace   🔴 immutable in all three
 2 StockRegistry ──────> 5a ChipClaims, 5b ChipRounds
 3 Pot ────────────────> 5b ChipRounds
 4 ChipActivation ─────> 5b ChipRounds
@@ -223,11 +227,58 @@ $CHIP ────────────────> 4 ChipActivation, 8 Furn
 `POLTreasury.setRewards` also takes **ChipClaims**, because compound credits are notified by
 the ledger. Both are easy to get backwards and neither fails loudly.
 
+**`ChipBurner` (0) is the one new hard edge**, and it is unforgiving in a way the others are
+not: `chipBurnTarget` is `immutable` on ChipActivation, ChipRounds and the Furnace, so if the
+Burner's address is wrong at deploy there is no setter to fix it — all three redeploy. It is
+also the only step whose own dependency, `$CHIP`, is a Bankr artifact rather than ours.
+
 ---
 
 ## Order
 
 Deploy in this order. Each step lists what it needs from earlier steps.
+
+### 0. ChipBurner — **built**
+
+Needs: `MULTISIG`, `$CHIP`.
+
+**Deploy this before ChipActivation, ChipRounds and the Furnace, because all three take its
+address as an immutable constructor argument.** It is the only new dependency in the deploy
+graph, and the only one that is genuinely one-way: get it wrong and three contracts have to be
+redeployed.
+
+| Arg | Value | Meaning |
+|---|---|---|
+| `multisig` | `MULTISIG` | The admin owner. May use the two pass-throughs; **may never move a single $CHIP**. |
+| `chipToken_` | `CHIP` | Immutable. The token this wrapper owns and burns. |
+
+**What it is for.** Bankr's Doppler $CHIP has no public `burn`, only an owner-gated one. Every
+$CHIP "burn" in this protocol used to be a transfer to `0xdead`: unreachable, but still inside
+`totalSupply`, so every aggregator overstated circulating supply and the gap grew with every
+activation. Making this contract the token's **owner** turns those into real burns —
+`totalSupply` falls, on chain, everywhere.
+
+**Burning is permissionless.** Anyone may call `burnAll()`; it destroys this contract's whole
+balance and nothing else, and it verifies the burn by reading `totalSupply` before and after
+rather than trusting a return value. `totalBurned` therefore counts what left existence, not
+what was asked to leave.
+
+**It is structurally burn-only.** No `transfer`, no sweep, no rescue, no generic `call`. $CHIP
+that arrives here is gone; the only question is when somebody calls `burnAll()`. `mintInflation`
+and `updateMintRate` are deliberately **not** exposed — a permissionless burner that can also
+mint is a contradiction. `transferTokenOwnership` is the escape hatch if any of that is ever
+genuinely needed, and it is what stops this being a permanent trap.
+
+**The ownership hand-off is a launch-day step, not a deploy step.** The token's ownership only
+lands with us when Bankr launches, so `chip.transferOwnership(<ChipBurner>)` happens then — see
+LAUNCH_CONFIG §6.6, which also carries the ABI check that must happen **before** the hand-off.
+Until it lands `burnAll()` reverts and the app's burn paths simply accumulate a balance here.
+Nothing is lost; the burn is deferred.
+
+> **`0xdead` is still the right value for one thing: NFTs.** The Burner has no ERC-721 surface
+> at all, so a Noun or a Chiplet sent to it would be **stranded forever**. `BURN_ADDRESS` stays
+> `0xdead` on all three contracts and `chipBurnTarget` is a separate field. They are not
+> interchangeable, and `test/BurnRouting.t.sol` is what keeps them apart.
 
 ### 1. FeeSplitter — **built**
 
@@ -280,7 +331,7 @@ Constructor arguments:
 | `multisig` | `MULTISIG` | Owner. |
 | `quoteToken_` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | USDC on Base (verified, 6 dp). |
 | `uniswapV3Factory_` | `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` | Verifies Uniswap v3 pools. |
-| `slipstreamFactory_` | `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A` | Verifies Aerodrome Slipstream pools. |
+| `slipstreamFactory_` | `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` | Verifies Aerodrome Slipstream pools. **FACTORY B, and this is the one that matters** — there are two Aerodrome CL factories and every B20 stock pool is on this one. The older `0x5e7BB1…809A` (factory A) resolves none of them, and `slipstreamFactory` is **immutable**, so a registry deployed against factory A cannot register a single stock and must be redeployed. ASSUMPTIONS A-22. |
 
 Then register all nine stocks **disabled**, four with pools and five without:
 
@@ -425,6 +476,7 @@ Needs: `MULTISIG`, `$CHIP`. Deploy before ChipRounds.
 |---|---|
 | `multisig` | `MULTISIG` |
 | `chipToken_` | `CHIP` |
+| `chipBurnTarget_` | **`ChipBurner` from step 0** — where activation and upgrade $CHIP is sent. Immutable, non-zero. Not `0xdead`: see step 0. |
 | `tierBps_` | `[10000, 12500, 16000, 20000, 33300]` (1.00 / 1.25 / 1.60 / 2.00 / 3.33) |
 
 **No collection can be activated until it is priced**, and pricing is the same call that
@@ -522,6 +574,7 @@ Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ChipActivation`, **`ChipClaims`**.
 | `source_` | **ChipActivation** from step 4 |
 | `claims_` | ChipClaims from step 5a |
 | `splitChangeFeeChip_` | `5000e18` (5,000 CHIP) |
+| `chipBurnTarget_` | **`ChipBurner` from step 0** — where the split-change fee is sent. Immutable, non-zero. |
 
 Then configure, all from the multisig:
 
@@ -532,9 +585,9 @@ Then configure, all from the multisig:
 | `setCollectionBaseBps(LIL_NOUNS, 5000)` | Lil = 0.5x |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |
-| `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02; Slipstream router |
+| `setRouters(uniswapRouter, slipstreamRouter)` | `0x2626664c2603336E57B271c5C0b26F421741e481` (Uniswap v3 SwapRouter02) and **`0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F`** — the Slipstream router bound to **factory B**. The better-known `0xBE6D8f…18a5` serves factory A and **every B20 buy through it reverts**; proved both ways in `test/fork/FactoryBRouter.t.sol`. |
 | `setPolTreasury(polTreasury)` | after step 6 — receives the holdback |
-| `setChip(chipToken, 0x…dead)` | after the $CHIP launch |
+| `setChip(chipToken)` | after the $CHIP launch. **One argument** — the burn destination is `chipBurnTarget`, a constructor argument, and there is deliberately no setter for it. |
 | `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |
 | `setDefaultMaxSlippageBps(200)` | 2% around the Chainlink mark |
 | `setMaxFeedAge(432000)` | **120 hours.** Skip a stock whose feed has frozen; its slice carries |
@@ -589,51 +642,68 @@ Post-deploy checks:
 - `rounds.activationSource()` is ChipActivation
 - open a tiny test round end to end on a fork before funding the real Pot
 
-### The full B20 set — registry config, derived from chain 2026-09-06
+### The full B20 set — registry config, derived from chain 2026-09-07
 
-All thirteen tickers register. **Every one is `Venue.UniswapV3`**, not Slipstream — see
-ASSUMPTIONS A-22, which is the sweep proving no B20 stock has a Slipstream pool on Base at any
-tick spacing, against USDC or WETH. `test/fork/B20RegistryConfig.t.sol` re-derives every pool
-below from the live factory on each run, so this table cannot silently go stale.
+**THIS TABLE WAS REPLACED. The venue is Aerodrome Slipstream, not Uniswap v3.**
+
+The previous version of this section registered all ten tradeable tickers as `Venue.UniswapV3`
+and said no B20 stock had a Slipstream pool at any tick spacing. That was measured against
+Aerodrome CL factory `0x5e7BB1…809A` and it was true of *that factory* — there are **two**
+Aerodrome CL factories and every B20 pool is on the other one, `0xf8f2eB…061Ef`. ASSUMPTIONS
+A-22 carries the correction, the identifying probes, and the router that reaches it.
+
+All thirteen tickers register: ten as `Venue.Slipstream` at **tick spacing 10** (fee 500), and
+COIN, CRCL and INTC as `Venue.None` because they have no pool on either factory or on Uniswap.
+`test/fork/B20RegistryConfig.t.sol` re-derives every pool below from factory B on each run, and
+asks each pool what factory it thinks it belongs to, so this table cannot silently go stale.
 
 Depth is `poolLiquidityUsd` — both sides, stock valued at its Chainlink mark. Measured
-2026-09-06 at the latest block.
+2026-09-07 at the latest block.
 
-| Ticker | Token | Chainlink feed | Venue | Pool | Fee | Depth USD |
-|---|---|---|---|---|---|---|
-| GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | UniV3 | `0x1f52F46BaC657564c31122b12b43A459E09273C8` | 10000 | **129,959** |
-| SPCX | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` | UniV3 | `0x127a12FC0953ab2ab89558c67Ba6D597D7140431` | 10000 | **40,844** |
-| MSFT | `0xB200000000000000000000Ab99cFa739E253872B` | `0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c` | UniV3 | `0xD73cBeCC0F62C7C1704332ED119514d6d84DC607` | 10000 | 13,989 |
-| NVDA | `0xb20000000000000000000078ee7ce2fE4908108C` | `0x04689a41629776563E6822F76f2e57D148d28513` | UniV3 | `0x60661b315553EB81872deEA9a66d567Cf0CCd33B` | 3000 | 12,341 |
-| AMZN | `0xb200000000000000000000d9192b6B456483C2E8` | `0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295` | UniV3 | `0x7F030e5fD657795C0937a3e8af2929Fd90DA91C7` | 10000 | 8,411 |
-| AAPL | `0xb200000000000000000000C2e324d24d7eEcd1fb` | `0x787f13dEa48Db0897CbCDD985de77809D837F988` | UniV3 | `0x97F35d1E92795327614BE000cd18cba1Be2c1931` | 3000 | 4,485 |
-| META | `0xb2000000000000000000008bC8786B856E61707C` | `0x6526aE6797A76123638b863AeE4dD27Ba4E4b27D` | UniV3 | `0x583919ec1975a1238C50e1940911894ee6912476` | 3000 | 1,482 |
-| TSLA | `0xb2000000000000000000001e800a7f5189430cD0` | `0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4` | UniV3 | `0xad6A86333C579d5Bbd150F28e74651006Fa87b3B` | 10000 | 276 |
-| MSTR | `0xb2000000000000000000004884b426556b92883d` | `0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a` | UniV3 | `0x5237817130DFc43F176A9146D3aE1Be85cBacAFb` | 10000 | **0** |
-| SNDK | `0xb200000000000000000000397293Cb8cda9a10c5` | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` | UniV3 | `0x26fa54cdfc64fAacb5364c09De7Ac2F72308052D` | 10000 | **0** |
-| COIN | `0xb200000000000000000000c85a31389D71F3ecfb` | `0x408e44f504A7371a345F03a73dDC96A4b48e8aa7` | **None** | — | — | no pool |
-| CRCL | `0xB20000000000000000000019f6E7C675b73C2e4D` | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` | **None** | — | — | no pool |
-| INTC | `0xB2000000000000000000004AFF16039bA04bdFBc` | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` | **None** | — | — | no pool |
+| Ticker | Token | Chainlink feed | Venue | Pool (factory B, ts=10) | Depth USD |
+|---|---|---|---|---|---|
+| NVDA | `0xb20000000000000000000078ee7ce2fE4908108C` | `0x04689a41629776563E6822F76f2e57D148d28513` | Slipstream | `0x853F5f1B92b16714Fe6CDA67CAad0856B83C7ab9` | **2,455,345** |
+| GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | Slipstream | `0xB1987CAD1682841b4b641d50E520777eC5Ab5542` | **1,597,689** |
+| AAPL | `0xb200000000000000000000C2e324d24d7eEcd1fb` | `0x787f13dEa48Db0897CbCDD985de77809D837F988` | Slipstream | `0xA3b1E3f9747065e2073722Ff4c9027d3eA4994F0` | **1,368,360** |
+| META | `0xb2000000000000000000008bC8786B856E61707C` | `0x6526aE6797A76123638b863AeE4dD27Ba4E4b27D` | Slipstream | `0xEAF57753BC382E0324a1D43F72E7027705a2273E` | **1,089,917** |
+| SPCX | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` | Slipstream | `0x0bf58fe0FAc935Ac69595c19B12Ba0d75E3F8c0E` | **208,271** |
+| SNDK | `0xb200000000000000000000397293Cb8cda9a10c5` | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` | Slipstream | `0x5A8236f575471e7BfCA2C8462a200c28f737246E` | **188,143** |
+| TSLA | `0xb2000000000000000000001e800a7f5189430cD0` | `0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4` | Slipstream | `0x469337fDcc5E8f38e2E4B670B04F57865D13a7BB` | **169,762** |
+| AMZN | `0xb200000000000000000000d9192b6B456483C2E8` | `0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295` | Slipstream | `0xd03Bc8C7F2FAedCe2aac81bF0444AEA08Ea06E9b` | **168,718** |
+| MSFT | `0xB200000000000000000000Ab99cFa739E253872B` | `0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c` | Slipstream | `0x7103eB3c9590d1281f7dc03b2A9EE27C39dF5D54` | **151,152** |
+| MSTR | `0xb2000000000000000000004884b426556b92883d` | `0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a` | Slipstream | `0x8b27f626ab668197000BC722A1012022CAeD10E2` | **117,519** |
+| COIN | `0xb200000000000000000000c85a31389D71F3ecfb` | `0x408e44f504A7371a345F03a73dDC96A4b48e8aa7` | **None** | — | no pool |
+| CRCL | `0xB20000000000000000000019f6E7C675b73C2e4D` | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` | **None** | — | no pool |
+| INTC | `0xB2000000000000000000004AFF16039bA04bdFBc` | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` | **None** | — | no pool |
+
+`fee` is not in this table because the Slipstream path does not read it — the pool is derived
+from the tick spacing. All ten pools are fee 500.
 
 All thirteen feeds are 8dp, live, and return sane prices — asserted by
 `test_allThirteenRegisterDisabledWithRealFeeds`, which replaces the stand-in feed the registry
 suite used while A-13 was open.
 
-**MSTR and SNDK have deployed pool contracts holding no USDC.** They register with a venue and
-are blocked by the depth gate rather than by `PoolNotSet`, which is a different failure with
-the same outcome; `test_anEmptyPoolIsAsBlockedAsAMissingOne` pins both.
+**The two empty Uniswap pools are gone from the picture.** MSTR and SNDK had deployed Uniswap
+pool contracts holding no USDC; on factory B both hold real depth on both sides. The property
+that an existing-but-empty pool is as blocked as a missing one still matters and is still
+pinned by `test_anEmptyPoolIsAsBlockedAsAMissingOne`, which now empties a live pool to show it
+rather than relying on a ticker happening to be empty.
 
 ### Which of these can actually be enabled
 
-**At a 25,000 USD threshold, two: GOOGL and SPCX.** That is not a bug in the threshold, it is
-the state of B20 secondary liquidity on Base — the whole set totals a little over 200k across
-every pool, and `poolLiquidityUsd` is headline TVL rather than tradeable depth, so what is
-buyable near spot is a fraction of even these numbers.
+**At a 25,000 USD threshold, ten of thirteen — everything with a pool.** The smallest, MSTR at
+$117k, clears by more than four times; the deepest four are over $1M each.
 
-Two consequences for the launch runbook:
+**This is the single biggest change the factory correction made.** Against the Uniswap pools
+only GOOGL and SPCX cleared the same threshold and the whole set totalled a little over $200k.
+The B20 secondary market on Base is roughly 35x deeper than the old table showed, because the
+old table was looking at the wrong venue.
+
+Two consequences for the launch runbook, both unchanged in substance:
 
 1. **Enable per ticker, on the day, from `liquidityReport()`.** Do not assume the table above
-   still holds — these pools are small enough that one LP leaving halves them.
+   still holds. This matters less than it did at $12k depths, but `poolLiquidityUsd` is still
+   headline TVL across both sides rather than tradeable depth near spot.
 2. **The per-buy protection is the Chainlink-derived minimum output, and it is
    all-or-nothing.** `ChipRounds._minOutFor` requires a buy to clear the stock's Chainlink
    mark less `maxSlippageBps` (2% by default); a buy that cannot is refused *in full* by the
@@ -763,7 +833,7 @@ Post-deploy checks:
 
 ### 8. Furnace — **built**
 
-Needs: `MULTISIG`, `$CHIP`, `LIL_NOUNS`, and the two output collections.
+Needs: `MULTISIG`, `$CHIP`, `ChipBurner` (step 0), `CHIPLETS`, and the two output collections.
 
 **Deploy this last, and understand that it is not part of the money path.** The Furnace
 shares no storage, no inheritance and no call path with ChipRounds, ChipClaims, Pot or
@@ -775,9 +845,10 @@ matter; it is listed last because it depends on `$CHIP` existing.
 |---|---|---|
 | `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
 | `chipToken_` | `$CHIP` | Burned alongside the fuel. Must exist first. |
+| `chipBurnTarget_` | **`ChipBurner` from step 0** | Where the forge's $CHIP goes. Immutable, non-zero. **Not** `fuelCollection_`'s destination — burned fuel still goes to `0xdead` when the collection has no `burn`. |
 | `fuelCollection_` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | The collection consumed as fuel. Verified: real ERC-721, exposes `burn(uint256)`, so forging **truly reduces its supply**. No longer a blocker. |
-| `basedRecipe` | `{outputCollection: BASED_NOUNS, fuelCost: 25, chipCost: <placeholder>}` | Recipe id 0, `FORGE_BASED`. **25 Chiplets locked**; the $CHIP portion is set at launch — see the note below. |
-| `darkRecipe` | `{outputCollection: DARK_NOUNS, fuelCost: _TBD_, chipCost}` | Recipe id 1, `FORGE_DARK`. **The Chiplet count for a DarkNOUN is NOT decided** — do not guess it; the constructor refuses zero, so this genuinely blocks the Furnace deploy until somebody chooses. |
+| `basedRecipe` | `{outputCollection: BASED_NOUNS, fuelCost: 25, chipCost: <placeholder>}` | Recipe id 0, `FORGE_BASED`. **25 Chiplets.** The $CHIP portion is set at launch — see the note below. |
+| `darkRecipe` | `{outputCollection: DARK_NOUNS, fuelCost: 50, chipCost: <placeholder>}` | Recipe id 1, `FORGE_DARK`. **50 Chiplets** — twice the Based count, matching the 2.0x collection base a DarkNOUN earns at (`setCollectionBaseBps(DARK_NOUNS, 20000)` in step 5b). The $CHIP portion is set at launch, same as recipe 0. |
 
 Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
 their value in calldata is ignored. `fuelCost` must be in `1..100` (`MAX_FUEL_COST`) — 25 is well
@@ -785,8 +856,9 @@ inside it — or the constructor reverts.
 
 > ### ⚠️ THE $CHIP PORTION CANNOT BE LEFT UNSET AT DEPLOY, AND THAT COSTS 48 HOURS
 >
-> `chipletsPerBased = 25` satisfies the **fuel** zero-check, so the Chiplet count no longer
-> blocks the deploy. But there is a **second** zero-check: `_setRecipe` refuses `chipCost == 0`
+> Both Chiplet counts are decided — **25 for a Based Noun, 50 for a DarkNOUN** — so the **fuel**
+> zero-check is satisfied and the counts no longer block the deploy. But there is a **second**
+> zero-check: `_setRecipe` refuses `chipCost == 0`
 > as well, added in `launch-candidate-15` on the decision that **every forge must burn $CHIP**.
 > A free forge is a sink we do not want.
 >
@@ -797,15 +869,16 @@ inside it — or the constructor reverts.
 > 2. **Pause both recipes immediately** (`setPaused(0, true)`, `setPaused(1, true)`) so nobody
 >    can forge at the placeholder at all. Pausing is not timelocked, so this is instant.
 > 3. At launch, once the token price is observed: `queueRecipeChange(0, 25, <real chipCost>)`
->    → **48 hours** → `executeRecipeChange(0)`, then unpause.
+>    and `queueRecipeChange(1, 50, <real chipCost>)` → **48 hours** →
+>    `executeRecipeChange(0)` and `executeRecipeChange(1)`, then unpause both.
 >
 > **Plan the 48 hours.** This is the same timelock every other economic parameter gets, and it
 > is deliberate — but it means the real forge price cannot land on launch day unless it was
 > queued two days earlier. Queue it against the observed price as soon as that price exists.
 >
-> The **DarkNOUN** recipe has the same constraint on both counts: its Chiplet count is still
-> undecided and `fuelCost` may not be zero either, so recipe 1 also needs a placeholder plus a
-> pause until somebody chooses. **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
+> The **DarkNOUN** recipe needs the same placeholder-and-pause treatment as recipe 0 — its
+> `fuelCost` of 50 is settled, but its `chipCost` is discovered at the same moment recipe 0's is.
+> **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
 refused by both the constructor and `queueRecipeChange` (`BadConfig`). Every forge burns $CHIP;
 that was decided in response to external review batch 9, on the grounds that a free forge is a
 sink the protocol does not want and an abuse vector.

@@ -99,7 +99,15 @@ abstract contract ChipRewardsBase is Test {
         pot = new Pot(multisig, address(usdc), address(uniFactory));
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
-        rounds = new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), SPLIT_FEE);
+        rounds = new ChipRounds(
+            multisig,
+            address(registry),
+            address(pot),
+            address(adapter),
+            address(claims),
+            SPLIT_FEE,
+            0x000000000000000000000000000000000000dEaD
+        );
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");

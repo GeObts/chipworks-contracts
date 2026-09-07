@@ -89,8 +89,15 @@ contract FullSystemForkTest is Test {
         registry = new StockRegistry(multisig, USDC, UNIV3_FACTORY, SLIPSTREAM_FACTORY);
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
-        rounds =
-            new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), 5_000 ether);
+        rounds = new ChipRounds(
+            multisig,
+            address(registry),
+            address(pot),
+            address(adapter),
+            address(claims),
+            5_000 ether,
+            0x000000000000000000000000000000000000dEaD
+        );
         polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter), UNIV3_FACTORY, AERO_VOTER);
         router = new ClaimRouter(multisig, address(claims), 1_000_000);
 

@@ -53,6 +53,7 @@ contract BurnVisibilityTest is Test {
         furnace = new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(chiplets),
             Furnace.Recipe({
                 exists: true, paused: false, outputCollection: address(based), fuelCost: FUEL_COST, chipCost: CHIP_COST
@@ -208,6 +209,7 @@ contract BurnVisibilityTest is Test {
         Furnace f = new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(plain),
             Furnace.Recipe({
                 exists: true, paused: false, outputCollection: address(based), fuelCost: FUEL_COST, chipCost: CHIP_COST

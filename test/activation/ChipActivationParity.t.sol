@@ -32,7 +32,7 @@ contract ChipActivationParityTest is ChipRewardsBase {
         super.setUp();
 
         // ---- the ONLY change: a different activation source behind the same interface ----
-        activation = new ChipActivation(multisig, address(chip), TIER_TABLE);
+        activation = new ChipActivation(multisig, address(chip), 0x000000000000000000000000000000000000dEaD, TIER_TABLE);
         _price(address(basedNouns));
         _price(address(darkNouns));
         _price(address(lilNouns));

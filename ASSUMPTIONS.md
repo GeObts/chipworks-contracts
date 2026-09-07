@@ -764,11 +764,54 @@ Even so, this changes the launch completely: against the old wrong-factory Unisw
 GOOGL and SPCX cleared a $25,000 threshold. **All ten of these clear it**, the smallest by four
 times.
 
-### Still to settle before any of it is registered
+### The router — **SETTLED 2026-09-07, and proved with a real buy**
 
-**The Slipstream SwapRouter at `0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5` reports
-`factory() == 0x5e7BB1…809A` — factory A.** It cannot reach factory-B pools. Registering these
-stocks as `Venue.Slipstream` and pointing `ChipRounds` at that router would produce buys that
-revert every time. A router bound to factory B must be identified and verified before the venue
-switch. `POLTreasury` also derives its factory from the Slipstream NPM, which reports factory A,
-so POL positions and stock buys would otherwise sit on different factories.
+**The Slipstream SwapRouter we already knew about, `0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5`,
+reports `factory() == 0x5e7BB1…809A` — factory A.** It cannot derive a factory-B pool address,
+so registering these stocks as `Venue.Slipstream` and pointing `ChipRounds` at that router would
+have produced buys that revert every time. That was the last thing blocking the venue switch.
+
+**The router bound to factory B is `0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F`.**
+
+It was derived from the chain rather than taken from a deployment list: read the `Swap` events
+on the NVDA/USDC pool, tally the senders, probe each one for `factory()`. Exactly one answered
+with factory B, and its code is the same 9,908 bytes as the factory-A router — the same
+contract, a different constructor argument.
+
+| | Router A `0xBE6D8f…18a5` | Router B `0x698Cb2…A92F` |
+|---|---|---|
+| `factory()` | `0x5e7BB1…809A` | `0xf8f2eB…061Ef` |
+| code size | 9,908 bytes | **the same** |
+| reaches B20 pools | **no — reverts** | **yes** |
+
+**Proved, not inferred.** `test/fork/FactoryBRouter.t.sol` runs a real `exactInputSingle`
+through router B against the live NVDA/USDC pool, in exactly the 8-field Slipstream shape
+`ChipRounds._buy` encodes: $10,000 USDC in, 43.129 NVDA out, an implied $231 against a
+Chainlink mark of $229.96. The same suite asserts that router A reverts on the same call.
+
+### What the flip actually changes
+
+Three settings, no contract change:
+
+| Where | Setting | Value |
+|---|---|---|
+| `StockRegistry` constructor | `slipstreamFactory_` | `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` |
+| `ChipRounds.setRouters` | `slip` | `0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F` |
+| `registry.addStock` | `venue` / `tickSpacing` | `Venue.Slipstream` / `10` |
+
+**`slipstreamFactory` is immutable**, so this is a deploy argument that has to be right the
+first time — a registry built on factory A cannot register a single B20 stock as Slipstream, and
+`test_aFactoryARegistryCannotRegisterTheB20Venue` is the proof it fails loudly rather than
+quietly. The whole thirteen-ticker config is re-derived from factory B every run in
+`test/fork/B20RegistryConfig.t.sol`; ten clear the $25,000 gate, three have no pool anywhere and
+register as `Venue.None`.
+
+### POL stays on factory A, on purpose
+
+`POLTreasury` derives its factory from the Slipstream NPM, which reports factory A, so **POL
+positions and stock buys sit on different Aerodrome factories**. That is correct, not a
+mismatch to fix: they are different books. POL is protocol-owned liquidity in WETH/USDC-shaped
+pairs, which exist on factory A and are what the NPM and the Voter's gauges know about; stock
+buys are one-shot swaps against B20 pools, which exist only on factory B. Nothing reads across
+the two — `POLTreasury` never consults `StockRegistry`, and `ChipRounds._buy` never touches the
+NPM. The only thing to avoid is assuming one address serves both.
