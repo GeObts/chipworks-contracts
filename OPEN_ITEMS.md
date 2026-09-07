@@ -650,37 +650,24 @@ grace-period question is protocol-wide even though only the Anvil answers it tod
 
 ---
 
-## 24. NEW: is a zero-CHIP Furnace recipe intended?
+## 24. RESOLVED: every forge must burn $CHIP
 
-**An open product decision, deliberately left open rather than guessed at.** External review
-batch 9 asked whether `chipCost == 0` should be rejected. It is currently allowed.
+**Decided 2026-09-07, closed in `launch-candidate-15`.** External review batch 9 asked whether
+`chipCost == 0` should be rejected; the answer is yes. A free forge is a sink the protocol does
+not want and an abuse vector — with `chipCost` at zero the only cost left is the fuel, a
+collection whose supply this protocol does not control.
 
-**What a zero-CHIP recipe does:** forging burns the fuel NFTs and no $CHIP at all. The output
-Noun still leaves the Furnace. `totalChipBurned` stops moving, and the Furnace contributes
-nothing to the $CHIP sink for as long as the recipe stands.
+`_setRecipe` and `queueRecipeChange` both refuse it with `BadConfig`. Guarding one and not the
+other would have left a way around: the constructor sets the launch recipes, the timelocked
+path sets every later one.
 
-**The evidence for it being deliberate is one sentence in DEPLOY**, which has said `chipCost`
-may be zero since the Furnace was first written, plus an explicit `if (r.chipCost != 0)` branch
-in `forge`. **The evidence against** is that the same sentence describes the result as a
-"Lils-only" recipe — vocabulary retired in `launch-candidate-9` — that nothing tested the path
-until batch 9 added a test, and that the contract's own title is *"Burn a fuel NFT and $CHIP to
-forge"*.
+The `if (r.chipCost != 0)` branch in `forge` went with it. Once zero is unreachable that guard
+could never be skipped, and a dead branch is a question every future reviewer has to re-answer.
 
-**Left unguarded because that is the recoverable direction.** A mis-keyed zero ships with 48
-hours of public notice and is fixed by queueing a correction. A wrongly-added guard makes a
-legitimate configuration unreachable and costs a redeploy, because `_setRecipe` also runs in
-the constructor.
-
-**To close this**, answer one question: *must every forge burn $CHIP?*
-
-- **Yes** → add `if (r.chipCost == 0) revert BadConfig();` to `_setRecipe`, and mirror it in
-  `queueRecipeChange`. Invert `test_openQuestion_aZeroChipRecipeForgesOnFuelAlone`. One line
-  each, and it must land before the Furnace deploys.
-- **No** → delete this item, fix the "Lils-only" wording in DEPLOY, and keep the test as the
-  record that the affordance is intended.
-
-Worth noticing that the launch recipes both carry a real `chipCost`, so this is about what a
-future `queueRecipeChange` is permitted to do, not about the deploy.
+`test_aZeroChipRecipeCannotBeConfiguredThroughTheTimelock` and
+`test_aZeroChipRecipeCannotBeDeployedEither` cover both paths. The old test asserting the
+opposite was inverted rather than deleted, so the log shows the affordance existed, was never
+intended, and is now closed.
 
 ---
 

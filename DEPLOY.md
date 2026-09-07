@@ -730,9 +730,10 @@ matter; it is listed last because it depends on `$CHIP` existing.
 
 Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
 their value in calldata is ignored. `lilCost` must be in `1..100` (`MAX_LIL_COST`) or the
-constructor reverts. `chipCost` may be zero, which makes a recipe **fuel-only** — whether
-that should be allowed at all is an open decision, see OPEN_ITEMS 24. Both launch recipes carry
-a real `chipCost`, so this is about what a future `queueRecipeChange` may do.
+constructor reverts. **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
+refused by both the constructor and `queueRecipeChange` (`BadConfig`). Every forge burns $CHIP;
+that was decided in response to external review batch 9, on the grounds that a free forge is a
+sink the protocol does not want and an abuse vector.
 
 **Re-pointing the fuel means a REDEPLOY.** `fuelCollection` is immutable and stays that way
 (external review SEC-FUR-002): a settable fuel input would let whoever holds it point the burn

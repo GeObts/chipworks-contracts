@@ -196,9 +196,17 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     uint8 public constant FORGE_BASED = 0;
     uint8 public constant FORGE_DARK = 1;
 
+    /// @dev EVERY FORGE MUST BURN $CHIP. External review batch 9 raised whether a
+    ///      `chipCost` of zero should be configurable; the answer is no. A free forge is a
+    ///      sink the protocol does not want and an abuse vector — the fuel is the only cost
+    ///      left, and fuel is a collection whose supply this protocol does not control.
+    ///
+    ///      Guarded here AND in {queueRecipeChange}, because guarding only the constructor
+    ///      would leave the timelocked path as a way around it.
     function _setRecipe(uint8 id, Recipe memory r) internal {
         if (r.outputCollection == address(0)) revert ZeroAddress();
         if (r.fuelCost == 0 || r.fuelCost > MAX_FUEL_COST) revert BadConfig();
+        if (r.chipCost == 0) revert BadConfig();
         _recipes[id] = Recipe({
             exists: true,
             paused: false,
@@ -296,15 +304,17 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
             fuelCollection.transferFrom(msg.sender, BURN_ADDRESS, fuelIds[i]);
         }
 
-        if (r.chipCost != 0) {
-            // Measure what actually reached the burn address. A $CHIP that taxes transfers
-            // or lies about them would otherwise let a forge through under-paid. Failing
-            // closed is the right direction: the forge reverts, nothing is consumed.
-            uint256 before = chipToken.balanceOf(BURN_ADDRESS);
-            chipToken.safeTransferFrom(msg.sender, BURN_ADDRESS, r.chipCost);
-            uint256 delivered = chipToken.balanceOf(BURN_ADDRESS) - before;
-            if (delivered < r.chipCost) revert ChipBurnShortfall(delivered, r.chipCost);
-        }
+        // Unconditional: `chipCost` cannot be zero (see {_setRecipe}), so the old
+        // `if (chipCost != 0)` guard became a branch that could never be skipped. A dead
+        // branch is a question every future reviewer has to re-answer.
+        //
+        // Measure what actually reached the burn address. A $CHIP that taxes transfers or
+        // lies about them would otherwise let a forge through under-paid. Failing closed is
+        // the right direction: the forge reverts, nothing is consumed.
+        uint256 before = chipToken.balanceOf(BURN_ADDRESS);
+        chipToken.safeTransferFrom(msg.sender, BURN_ADDRESS, r.chipCost);
+        uint256 delivered = chipToken.balanceOf(BURN_ADDRESS) - before;
+        if (delivered < r.chipCost) revert ChipBurnShortfall(delivered, r.chipCost);
 
         // ---- interactions: hand over the output, last ----
         IERC721(r.outputCollection).transferFrom(address(this), msg.sender, outputTokenId);
@@ -478,6 +488,7 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     function queueRecipeChange(uint8 recipeId, uint16 fuelCost, uint256 chipCost) external onlyOwner {
         if (!_recipes[recipeId].exists) revert BadRecipe(recipeId);
         if (fuelCost == 0 || fuelCost > MAX_FUEL_COST) revert BadConfig();
+        if (chipCost == 0) revert BadConfig(); // every forge burns $CHIP — see {_setRecipe}
 
         uint64 executableAt = uint64(block.timestamp) + RECIPE_TIMELOCK;
         _pending[recipeId] =

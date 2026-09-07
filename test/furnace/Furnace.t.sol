@@ -899,34 +899,46 @@ contract FurnaceTest is Test {
     ///         boundary `MAX_FUEL_COST` allows.
     function test_FUR005_aMaximumSizeRecipeStillForges() public {
         vm.startPrank(multisig);
-        furnace.queueRecipeChange(BASED_RECIPE, 100, 0);
+        furnace.queueRecipeChange(BASED_RECIPE, 100, 1 ether);
         vm.warp(block.timestamp + 48 hours);
         furnace.executeRecipeChange(BASED_RECIPE);
         vm.stopPrank();
 
-        uint256[] memory ids = _fuel(alice, 1_000, 100, 0);
+        uint256[] memory ids = _fuel(alice, 1_000, 100, 1 ether);
         vm.prank(alice);
         assertEq(furnace.forge(BASED_RECIPE, ids), 100);
         assertEq(furnace.totalFuelBurned(), 100);
     }
 
-    /// @notice OPEN PRODUCT QUESTION, not a fix: a recipe with `chipCost == 0` forges on fuel
-    ///         alone. Asserted so the affordance is visible and deliberate rather than
-    ///         incidental — see TRIAGE batch 9 and OPEN_ITEMS 24. If forging must always burn
-    ///         $CHIP, the guard is one line in `_setRecipe` and this test inverts.
-    function test_openQuestion_aZeroChipRecipeForgesOnFuelAlone() public {
-        vm.startPrank(multisig);
+    /// @notice DECIDED: every forge must burn $CHIP. A free forge is a sink the protocol
+    ///         does not want and an abuse vector, so `chipCost == 0` is not configurable.
+    ///         This test used to assert the opposite and is inverted deliberately — the
+    ///         affordance existed, was never intended, and is now closed. TRIAGE batch 9.
+    function test_aZeroChipRecipeCannotBeConfiguredThroughTheTimelock() public {
+        vm.prank(multisig);
+        vm.expectRevert(Furnace.BadConfig.selector);
         furnace.queueRecipeChange(BASED_RECIPE, BASED_LILS, 0);
-        vm.warp(block.timestamp + 48 hours);
-        furnace.executeRecipeChange(BASED_RECIPE);
-        vm.stopPrank();
 
-        uint256[] memory ids = _fuel(alice, 1, BASED_LILS, 0);
-        vm.prank(alice);
-        furnace.forge(BASED_RECIPE, ids);
+        // The live recipe is untouched, so nothing forges for free in the meantime.
+        (, uint256 chipCost) = furnace.costOf(BASED_RECIPE);
+        assertEq(chipCost, BASED_CHIP);
+    }
 
-        assertEq(furnace.totalChipBurned(), 0, "no CHIP sink on this path");
-        assertEq(based.ownerOf(100), alice);
+    /// @notice Guarding only the timelocked path would leave the constructor as a way
+    ///         around it, so a Furnace cannot be DEPLOYED with a free recipe either.
+    function test_aZeroChipRecipeCannotBeDeployedEither() public {
+        vm.expectRevert(Furnace.BadConfig.selector);
+        new Furnace(
+            multisig,
+            address(chip),
+            address(lil),
+            Furnace.Recipe({
+                exists: true, paused: false, outputCollection: address(based), fuelCost: BASED_LILS, chipCost: 0
+            }),
+            Furnace.Recipe({
+                exists: true, paused: false, outputCollection: address(dark), fuelCost: DARK_LILS, chipCost: DARK_CHIP
+            })
+        );
     }
 
     /// @dev A Based recipe pointed at a collection whose tokens can be frozen, seeded 500-502.

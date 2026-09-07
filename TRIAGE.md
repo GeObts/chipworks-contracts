@@ -213,7 +213,7 @@ the right reason to have deprioritised it, not an excuse for the findings being 
 | SEC-FUR-003 | An untransferable output wedges the FIFO queue with no skip | Medium | **Medium / Medium** | **VALID** | **FIXED** — 48h-timelocked, id-pinned skip |
 | SEC-FUR-004 | No `expectedTokenId`; front-running hands you an unwanted token | Medium | Low / **Medium** | **VALID** | **FIXED** — opt-in overload |
 | SEC-FUR-005 | Quadratic duplicate-input check | Low | Low / Low | **VALID** | **FIXED** — strictly ascending, O(n) |
-| — | Zero-CHIP recipe guard | — | — | **OPEN QUESTION** | Evidence below; **needs a product decision**, OPEN_ITEMS 24 |
+| — | Zero-CHIP recipe guard | — | — | **VALID** | **FIXED** — `chipCost == 0` refused on both paths |
 
 ---
 
