@@ -320,6 +320,58 @@ A live shelf will not give up its last Noun.
 
 ---
 
+## 6.5 🔴 REQUIRED PRE-LAUNCH: prove the Chiplet burn is a REAL burn
+
+**Not optional, and not a smoke test.** The Furnace and ChipActivation both fall back to a
+transfer to `0xdead` when a collection exposes no `burn`. That fallback is deliberate — it
+keeps forging and activation working against any ERC-721 — and it is **silent**. A mis-wired or
+unexpected Chiplets contract would forge and activate perfectly while never reducing supply,
+which is the entire point of the change. Nothing else catches it.
+
+**Check one — the selector is in the deployed bytecode.**
+
+```
+cast code <CHIPLETS> --rpc-url $BASE_RPC_URL | grep -c 42966c68     # burn(uint256), expect >= 1
+```
+
+OpenSea's `ERC721SeaDrop` and `ERC721SeaDropCloneable` both expose
+`burn(uint256) { _burn(tokenId, true); }`, so the expected answer is a hit. If it is zero, stop
+— the drop was deployed from a contract that cannot be truly burned from.
+
+**Check two — the counters agree after the first real forge.**
+
+```
+furnace.totalFuelTrueBurned() == furnace.totalFuelBurned()          # must be EQUAL
+```
+
+Equal means every fuel token was destroyed. If `totalFuelTrueBurned` is lower, that many
+tokens were dead-held instead and the collection's `totalSupply` did not move. Investigate
+before announcing anything about supply.
+
+**Check three — the same for the activation path.**
+
+```
+# activate one Chiplet, then read the ActivatedFlat event:
+#   sacrificeTrueBurned == true
+chiplets.totalSupply()                                             # must have fallen by 1
+```
+
+**And the $CHIP side, which is the opposite case.** $CHIP **cannot** be truly burned — Bankr's
+Doppler token has no `burn` — so `chip.totalSupply()` will NOT move and that is correct. What
+must be true instead:
+
+```
+chipActivation.chipBurnedToDead() == chip.balanceOf(0x...dEaD)     # by definition
+chipActivation.effectiveChipSupply() == chip.totalSupply() - chip.balanceOf(0x...dEaD)
+```
+
+The site must display `effectiveChipSupply()`, and `0x000000000000000000000000000000000000dEaD`
+must be filed with CoinGecko and CoinMarketCap as an excluded burn address post-launch. See
+BURN_VISIBILITY.md. **Neither aggregator infers this**, and the overstatement grows with every
+activation and every forge.
+
+---
+
 ## 7. 🔴 THE ONE THAT FAILS SILENTLY
 
 > **`chipActivation.setCustodian(nounLoans, true)` — DO NOT SIGN OFF WITHOUT THIS RETURNING

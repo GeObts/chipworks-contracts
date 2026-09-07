@@ -740,3 +740,34 @@ in TRIAGE rather than accepted-with-a-cap.
 **Carry is to the Pot, not earmarked per stock** — the remainder leaves through the existing
 unspent→Pot path and is re-split next round. No new money-path storage, which was the design
 question flagged when this item was opened.
+
+---
+
+## 27. NEW: there is no $CHIP "Burner" contract, and one cannot help
+
+**Asked for during the Chiplet-earning work**: whether the $CHIP Burner is built yet, or still
+pending a Bankr ownership-authority answer, with the Chiplet-activation burn to route through
+it "same as all other $CHIP burns".
+
+**There is no Burner contract, no other path routes through one, and no such dependency has
+ever been recorded here.** Searched `src/`, `test/` and every document: the only match is a
+test function name. Nothing was dropped — it was never raised in this repo.
+
+**And a Burner of ours could not create a true burn anyway.** A burn needs a function on the
+TOKEN. Bankr's Doppler $CHIP exposes none — established in `launch-candidate-17` and approved
+at `-18`, and the reason `effectiveChipSupply()` and the CoinGecko/CMC filing exist at all. A
+contract we deploy cannot add one. Delegated authority only helps if the token already has a
+privileged burn path to delegate; if it has no burn function, there is nothing to be granted.
+
+**So every $CHIP burn — all five paths — is a `transferFrom` to `0x…dEaD`, counted, and
+delta-verified.** The Chiplet activation does the same as the other four. That is not a
+placeholder pending the Burner; it is the only mechanism the token supports.
+
+**If Bankr answers that a privileged burn DOES exist**, the change is protocol-wide and should
+land as one tag: all five paths move together, `effectiveChipSupply` becomes redundant, and the
+aggregator filing becomes unnecessary. **Do not route one path through a Burner and leave four
+at `0xdead`** — that would split the accounting and make `chipBurnedToDead()` silently
+incomplete, which is worse than the current honest limitation.
+
+**To close this:** get a yes/no from Bankr on whether $CHIP has any privileged burn or mint
+authority they can delegate. If no, delete this item and the question is settled permanently.

@@ -105,7 +105,15 @@ below that does not depend on the token.
 | 1 | `FeeSplitter` | multisig, **pot placeholder**, ops, 2000, 2000 | `setPot(Pot)` after step 3 | — it can receive from the start, but nobody should call `distribute` before `setPot` |
 | 2 | `StockRegistry` | multisig, USDC, uni factory, slipstream factory | 13 x `addStock` (all disabled) | every stock starts **disabled**; `setEnabled` needs feed + pool + measured depth |
 | 3 | `Pot` | multisig, USDC | `setRewards(ChipRounds)` after 5b; `setConversionConfig`; `setRoute(AERO)` | `openRound` reverts while `rewards` is unset |
-| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; 🔴 `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
+| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; **`setFlatRateCollection(CHIPLETS)` BEFORE its first `executeCosts`**; 🔴 `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
+
+> **Chiplets is flat-rate and the order matters.** `setFlatRateCollection(CHIPLETS)` must run
+> **before** the collection's first `executeCosts`; it is refused on a live collection, one-way
+> by design, so a mistake here means redeploying `ChipActivation`. The five cost entries must
+> all be **equal** — a flat collection has one price and the validator refuses a ladder.
+> Activation is `activateFlat(CHIPLETS, tokenId, sacrificeId)`: a flat $CHIP amount plus one
+> OTHER Chiplet, truly burned. The site needs `chiplets.setApprovalForAll(chipActivation, true)`
+> as step one, the same as the Furnace.
 | 5a | `ChipClaims` | multisig, StockRegistry | `setRounds`, `setPolTreasury`, `setClaimSchedule`, `setCreditExpiry` | **`contributeWeights` reverts until `setRounds`** — the ledger rejects an unknown caller |
 | 5b | `ChipRounds` | multisig, registry, Pot, **ChipActivation**, ChipClaims, 🔶fee | the config table in step 5b | a round reverts at the first `contributeWeights` until 5a is wired |
 | 6 | `POLTreasury` | multisig, USDC, position manager, FeeSplitter, UniV3 factory, **Aerodrome Voter** | `setManager`, `setRewards(ChipClaims)`, POL assets **with feeds**, routes, income tokens | holds nothing until `ChipRounds.setPolTreasury` points at it |
@@ -520,6 +528,7 @@ Then configure, all from the multisig:
 | Call | Recommended value |
 |---|---|
 | `setRoundParams(duration, window, minPot, maxBudget)` | `86400, 7200, 250e6, 10000e6` |
+| `setCollectionBaseBps(CHIPLETS, 1000)` | **Chiplets = 0.1x.** This IS the 0.1x — `ChipActivation` reports a flat 1.00x and the base supplies the rate, exactly as for Lil. No code change was needed in `ChipRounds`. |
 | `setCollectionBaseBps(LIL_NOUNS, 5000)` | Lil = 0.5x |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |

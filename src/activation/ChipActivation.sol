@@ -100,6 +100,23 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     /// @notice Where activation costs go. Not a contract, so nothing is recoverable from it.
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
 
+    /// @notice The tier weight a flat-rate collection always reports: 1.00x.
+    ///
+    /// @dev **THE 0.1x FOR CHIPLETS DOES NOT LIVE HERE.** Weight is
+    ///      `tierBps x collectionBaseBps / BPS`, computed in `ChipRounds._weight`, so a
+    ///      collection's multiplier is its BASE and the tier is the holder's choice on top.
+    ///      Chiplets have no tiers, so this layer reports a flat 1.00x and `ChipRounds`
+    ///      supplies the 0.1x as `setCollectionBaseBps(chiplets, 1_000)` — exactly the way
+    ///      Lil Based Nouns get 0.5x from 5_000.
+    ///
+    ///      That is why adding Chiplets needed **no change to `ChipRounds` at all**: the
+    ///      weight formula was already collection-agnostic and the round loop already asks
+    ///      this contract rather than assuming anything about tiers.
+    uint32 public constant FLAT_TIER_BPS = 10_000;
+
+    /// @notice Gas allowed for the fuel collection's own `burn`. Bounded, per A-17.
+    uint256 public constant TOKEN_BURN_GAS = 500_000;
+
     /// @notice Gas cap on every call into a foreign collection or custodian.
     /// @dev A contract that reverts with an invalid opcode consumes every wei of gas handed
     ///      to it and would otherwise take a whole round down with it. See ASSUMPTIONS A-17.
@@ -127,6 +144,13 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
 
     /// @notice Tier index => weight in basis points (10000 = 1.00x). Non-decreasing.
     uint32[TIER_COUNT] public tierBps;
+
+    /// @notice Collections that activate at one flat rate with no tiers, and which cost a
+    ///         token OF THEIR OWN to activate as well as $CHIP. Chiplets.
+    ///
+    /// @dev Set once, at configuration time, and never afterwards: whether a collection has
+    ///      tiers is not a thing to change under holders who already paid for one.
+    mapping(address collection => bool) public isFlatRate;
 
     /// @notice Contracts allowed to hold a Noun without voiding its activation.
     mapping(address custodian => bool) public isCustodian;
@@ -169,6 +193,16 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     event TiersExecuted(uint32[TIER_COUNT] bps);
     event TiersCancelled();
     event CustodianSet(address indexed custodian, bool allowed);
+    /// @notice A flat-rate activation. `sacrificeId` was destroyed to pay for `tokenId`.
+    event ActivatedFlat(
+        address indexed collection,
+        uint256 indexed tokenId,
+        address indexed owner,
+        uint256 sacrificeId,
+        uint256 chipCost,
+        bool sacrificeTrueBurned
+    );
+    event FlatRateCollectionSet(address indexed collection);
     event Recovered(address indexed token, address indexed to, uint256 amount);
     event RecoveredNFT(address indexed collection, uint256 indexed tokenId, address indexed to);
 
@@ -183,6 +217,14 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     error NothingQueued();
     error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
     error ChipBurnShortfall(uint256 delivered, uint256 required);
+    /// @notice A tiered call on a flat-rate collection, or the reverse.
+    error WrongActivationKind(address collection);
+    /// @notice The sacrificed token must be a different one from the token being activated.
+    error CannotSacrificeItself(uint256 tokenId);
+    /// @notice The caller does not hold the token they are trying to sacrifice.
+    error NotSacrificeOwner(uint256 tokenId, address caller);
+    /// @notice The sacrifice was neither destroyed nor moved to `0xdead`.
+    error SacrificeNotConsumed(uint256 tokenId);
 
     /// @param multisig   Owner. Two-step ownership transfer.
     /// @param chipToken_ $CHIP.
@@ -215,6 +257,7 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     ///      overwritten here.
     function activate(address collection, uint256 tokenId, uint8 tier) external nonReentrant {
         if (!collectionConfigured[collection]) revert CollectionNotConfigured(collection);
+        if (isFlatRate[collection]) revert WrongActivationKind(collection);
         if (tier >= TIER_COUNT) revert BadTier(tier);
 
         address effective = _effectiveOwner(collection, tokenId);
@@ -240,11 +283,94 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
         emit Activated(collection, tokenId, effective, tier, cost);
     }
 
+    /// @notice Activate a flat-rate token by burning $CHIP **and one other token of the same
+    ///         collection**. Chiplets.
+    ///
+    /// @dev TWO BURNS, BOTH VERIFIED, AND THEY ARE NOT THE SAME KIND OF BURN.
+    ///
+    ///        - **The Chiplet is truly destroyed.** Chiplets is OpenSea's `ERC721SeaDrop`
+    ///          (ERC721A), whose `burn(uint256)` is `_burn(tokenId, true)` — an approval check
+    ///          that accepts an operator. So this contract calls it on a token the caller has
+    ///          approved us for, `totalSupply` falls, and the collection visibly shrinks.
+    ///          Same pattern as the Furnace, same approve-then-burn requirement on the site.
+    ///        - **The $CHIP is not destroyed, because it cannot be.** Bankr's Doppler token
+    ///          exposes no `burn`, so it goes to `0xdead` and `totalSupply` does not move. See
+    ///          {effectiveChipSupply} and BURN_VISIBILITY.md.
+    ///
+    ///      Both are measured rather than trusted: the $CHIP by the dead address's balance
+    ///      delta, the Chiplet by checking it no longer exists. A collection or a token that
+    ///      lies about either reverts the whole call, so an activation is never recorded
+    ///      against a burn that did not happen.
+    ///
+    ///      THE SACRIFICE MUST BE HELD OUTRIGHT. `tokenId` may sit with a registered custodian
+    ///      — that is the whole point of the custodian registry — but `sacrificeId` is being
+    ///      destroyed, so the caller must own it directly. Burning a token out of somebody
+    ///      else's custody contract is not a thing this should be able to do.
+    ///
+    ///      RESET ON TRANSFER IS FREE. Nothing here stores an "active" flag; {activation}
+    ///      recomputes from the live owner on every read, so selling a Chiplet zeroes it for
+    ///      the seller and the buyer re-activates by burning again. Identical to a Noun.
+    function activateFlat(address collection, uint256 tokenId, uint256 sacrificeId) external nonReentrant {
+        if (!collectionConfigured[collection]) revert CollectionNotConfigured(collection);
+        if (!isFlatRate[collection]) revert WrongActivationKind(collection);
+        if (tokenId == sacrificeId) revert CannotSacrificeItself(tokenId);
+
+        address effective = _effectiveOwner(collection, tokenId);
+        if (effective == address(0) || effective != msg.sender) {
+            revert NotEffectiveOwner(collection, tokenId, msg.sender);
+        }
+
+        // The sacrifice is destroyed, so it must be held outright rather than in custody.
+        if (IERC721(collection).ownerOf(sacrificeId) != msg.sender) {
+            revert NotSacrificeOwner(sacrificeId, msg.sender);
+        }
+
+        Activation storage a = _activations[collection][tokenId];
+        if (a.ownerAtActivation == effective) revert AlreadyActive(collection, tokenId);
+
+        uint256 cost = _tierCost[collection][0];
+
+        // ---- effects, before either burn ----
+        a.tier = 0;
+        a.ownerAtActivation = effective;
+        a.activatedAt = uint64(block.timestamp);
+        totalActivations += 1;
+
+        _burnChip(cost);
+        bool trueBurned = _consumeToken(collection, sacrificeId);
+
+        emit ActivatedFlat(collection, tokenId, effective, sacrificeId, cost, trueBurned);
+    }
+
+    /// @dev Destroy one token of `collection`, and verify it is gone. Mirrors the Furnace's
+    ///      `_consumeFuel`: try the collection's own `burn`, fall back to `0xdead` for a
+    ///      collection that has none, and verify the end state either way.
+    ///
+    ///      A dead-held sacrifice is still gone from the holder's point of view, but it does
+    ///      NOT reduce supply — the `sacrificeTrueBurned` flag on {ActivatedFlat} is how an
+    ///      indexer tells the two apart. Chiplets exposes `burn`, so it should always be true.
+    function _consumeToken(address collection, uint256 tokenId) internal returns (bool trueBurn) {
+        (bool ok,) = collection.call{gas: TOKEN_BURN_GAS}(abi.encodeWithSignature("burn(uint256)", tokenId));
+        if (ok && !_tokenExists(collection, tokenId)) return true;
+
+        IERC721(collection).transferFrom(msg.sender, BURN_ADDRESS, tokenId);
+        if (IERC721(collection).ownerOf(tokenId) != BURN_ADDRESS) revert SacrificeNotConsumed(tokenId);
+        return false;
+    }
+
+    function _tokenExists(address collection, uint256 tokenId) internal view returns (bool) {
+        (bool ok, bytes memory ret) =
+            collection.staticcall{gas: TOKEN_BURN_GAS}(abi.encodeCall(IERC721.ownerOf, (tokenId)));
+        return ok && ret.length >= 32 && abi.decode(ret, (address)) != address(0);
+    }
+
     /// @notice Raise a live activation to `newTier`, paying only the difference.
     /// @dev Requires a live activation held by the caller. Tiers only ever go up: a
     ///      downgrade would owe a refund out of tokens that are already burned.
     function upgrade(address collection, uint256 tokenId, uint8 newTier) external nonReentrant {
         if (!collectionConfigured[collection]) revert CollectionNotConfigured(collection);
+        // A flat rate has nothing to upgrade TO. Refused rather than silently no-op.
+        if (isFlatRate[collection]) revert WrongActivationKind(collection);
         if (newTier >= TIER_COUNT) revert BadTier(newTier);
 
         Activation storage a = _activations[collection][tokenId];
@@ -342,7 +468,7 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
         address effective = _effectiveOwner(collection, tokenId);
         if (effective == address(0) || effective != recorded) return (false, 0, address(0));
 
-        uint32 bps = tierBps[a.tier];
+        uint32 bps = isFlatRate[collection] ? FLAT_TIER_BPS : tierBps[a.tier];
         if (bps == 0) return (false, 0, address(0));
 
         return (true, bps, recorded);
@@ -475,9 +601,27 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     /// @dev Costs must be non-decreasing across tiers, so an upgrade always costs something
     ///      and the difference can never underflow. Zero is allowed, including all zeros for
     ///      a free-activation collection.
+    /// @notice Mark a collection as flat-rate before its first cost is executed. Multisig only.
+    ///
+    /// @dev Deliberately one-way and deliberately pre-configuration. Flipping a live
+    ///      collection between tiered and flat would change what existing holders' paid-for
+    ///      tiers mean, which is not a thing a setter should be able to do quietly.
+    ///
+    ///      A flat collection's cost is `_tierCost[collection][0]`, set through the same
+    ///      48-hour {queueCosts}/{executeCosts} path as any other — all five entries must be
+    ///      EQUAL, so a flat collection cannot be given a hidden tier ladder by a
+    ///      misconfiguration.
+    function setFlatRateCollection(address collection) external onlyOwner {
+        if (collection == address(0)) revert ZeroAddress();
+        if (collectionConfigured[collection]) revert BadConfig();
+        isFlatRate[collection] = true;
+        emit FlatRateCollectionSet(collection);
+    }
+
     function queueCosts(address collection, uint256[TIER_COUNT] calldata cost) external onlyOwner {
         if (collection == address(0)) revert ZeroAddress();
-        _validateCosts(cost);
+        if (isFlatRate[collection]) _validateFlatCosts(cost);
+        else _validateCosts(cost);
         uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
         _pendingCosts[collection] = PendingCosts({queued: true, executableAt: executableAt, cost: cost});
         emit CostsQueued(collection, cost, executableAt);
@@ -548,6 +692,14 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     function _validateCosts(uint256[TIER_COUNT] memory cost) internal pure {
         for (uint256 i = 1; i < TIER_COUNT; ++i) {
             if (cost[i] < cost[i - 1]) revert BadConfig();
+        }
+    }
+
+    /// @dev A flat collection has ONE price. All five entries must match, so the array cannot
+    ///      quietly encode a ladder for a collection whose activation ignores four of them.
+    function _validateFlatCosts(uint256[TIER_COUNT] memory cost) internal pure {
+        for (uint256 i = 1; i < TIER_COUNT; ++i) {
+            if (cost[i] != cost[0]) revert BadConfig();
         }
     }
 
