@@ -149,11 +149,16 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     }
 
     /// @notice Change the depth a stock must clear before it can be enabled. Multisig only.
+    /// @dev Disables an enabled stock if it no longer clears the updated gate.
     function setMinLiquidityUsd(address token, uint128 newMin) external onlyOwner {
         _requireRegistered(token);
         Stock storage s = _stocks[token];
         emit MinLiquidityUpdated(token, s.minLiquidityUsd, newMin);
         s.minLiquidityUsd = newMin;
+        if (s.enabled && !clearsMinLiquidity(token)) {
+            s.enabled = false;
+            emit EnabledUpdated(token, false);
+        }
     }
 
     /// @notice Enable or disable a stock. Multisig only.

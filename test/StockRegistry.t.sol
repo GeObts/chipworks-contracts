@@ -511,6 +511,62 @@ contract StockRegistryTest is Test {
         assertTrue(registry.isEnabled(address(nvda)));
     }
 
+    function test_setMinLiquidityUsd_disablesStockWhenNewBarIsNotMet() public {
+        _addNvda(1_000e18);
+        _fundNvdaPool();
+
+        vm.prank(multisig);
+        registry.setEnabled(address(nvda), true);
+        assertTrue(registry.isEnabled(address(nvda)));
+
+        vm.expectEmit(true, false, false, true, address(registry));
+        emit EnabledUpdated(address(nvda), false);
+        vm.prank(multisig);
+        registry.setMinLiquidityUsd(address(nvda), 20_000e18);
+
+        assertFalse(registry.clearsMinLiquidity(address(nvda)));
+        assertFalse(registry.isEnabled(address(nvda)));
+    }
+
+    function testFuzz_setMinLiquidityUsd_keepsEnabledAtOrBelowMeasuredLiquidity(uint128 newMin) public {
+        _addNvda(1_000e18);
+        _fundNvdaPool();
+        vm.prank(multisig);
+        registry.setEnabled(address(nvda), true);
+
+        newMin = uint128(bound(newMin, 0, 10_330.8e18));
+        vm.prank(multisig);
+        registry.setMinLiquidityUsd(address(nvda), newMin);
+
+        assertTrue(registry.isEnabled(address(nvda)));
+        assertTrue(registry.clearsMinLiquidity(address(nvda)));
+    }
+
+    function test_setMinLiquidityUsd_disablesStockWhenLiquidityCannotBeRead() public {
+        _addNvda(1_000e18);
+        _fundNvdaPool();
+        vm.prank(multisig);
+        registry.setEnabled(address(nvda), true);
+        nvdaFeed.setRevertOnRead(true);
+
+        vm.prank(multisig);
+        registry.setMinLiquidityUsd(address(nvda), 20_000e18);
+
+        assertEq(registry.getStock(address(nvda)).minLiquidityUsd, 20_000e18);
+        assertFalse(registry.isEnabled(address(nvda)));
+    }
+
+    function test_setMinLiquidityUsd_doesNotEnableDisabledStock() public {
+        _addNvda(20_000e18);
+        _fundNvdaPool();
+
+        vm.prank(multisig);
+        registry.setMinLiquidityUsd(address(nvda), 1_000e18);
+
+        assertTrue(registry.clearsMinLiquidity(address(nvda)));
+        assertFalse(registry.isEnabled(address(nvda)));
+    }
+
     function test_setFeed_updatesFeedAndDecimals() public {
         _addNvda(0);
         MockAggregatorV3 newFeed = new MockAggregatorV3(18, 200e18, "NVDAc / USD v2");
