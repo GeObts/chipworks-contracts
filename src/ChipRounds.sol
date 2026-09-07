@@ -86,8 +86,21 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
 
     uint64 public roundDuration;
     uint64 public accumulationWindow;
+    /// @notice Smallest pot that may open a round. The only size bound that remains.
+    /// @dev THERE IS NO MAXIMUM. A round distributes whatever the Pot holds.
+    ///
+    ///      `maxRoundBudget` existed as a pre-audit blast radius: while the contracts were
+    ///      unreviewed, a bug could only ever reach one capped round's worth of value. The
+    ///      audit is complete and the cap is gone. A floor is a different thing and stays —
+    ///      it stops a round firing on dust, where the per-stock slices round to zero and
+    ///      the round spends gas to distribute nothing.
+    ///
+    ///      **What removing the cap does NOT change: what a single buy is allowed to fill.**
+    ///      That bound is per stock, per buy, and lives in `_minOutFor` — a buy must clear
+    ///      the Chainlink mark less `maxSlippageBps` or it does not execute at all. A larger
+    ///      round makes each slice larger; it does not make a bad fill acceptable. See the
+    ///      note on {settleStock} for how a slice too large for its pool behaves now.
     uint128 public minPotToOpen;
-    uint128 public maxRoundBudget;
     uint256 public splitChangeFeeChip;
     uint32 public defaultMaxSlippageBps;
 
@@ -240,14 +253,19 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit ConfigUpdated(bytes32(uint256(uint160(collection))), bps);
     }
 
-    function setRoundParams(uint64 duration, uint64 window, uint128 minPot, uint128 maxBudget) external onlyOwner {
-        if (duration == 0 || window >= duration || maxBudget == 0) revert BadConfig();
+    /// @notice Round timing and the minimum pot to open. There is no maximum.
+    /// @dev The `maxBudget` argument was removed rather than accepted-and-ignored: a
+    ///      parameter that silently does nothing is the failure mode this repo has already
+    ///      been bitten by twice (the `setCustodian` trap, and the `callerMinOut` that
+    ///      existed but was never passed). Callers of the old four-argument form will fail to
+    ///      compile, which is the intended way to find them.
+    function setRoundParams(uint64 duration, uint64 window, uint128 minPot) external onlyOwner {
+        if (duration == 0 || window >= duration) revert BadConfig();
         roundDuration = duration;
         accumulationWindow = window;
         minPotToOpen = minPot;
-        maxRoundBudget = maxBudget;
         emit ConfigUpdated("roundDuration", duration);
-        emit ConfigUpdated("maxRoundBudget", maxBudget);
+        emit ConfigUpdated("minPotToOpen", minPot);
     }
 
     function setSplitChangeFeeChip(uint256 v) external onlyOwner {
@@ -388,8 +406,10 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         uint256 availableInPot = pot.available();
         if (availableInPot < minPotToOpen) revert PotTooSmall(availableInPot, minPotToOpen);
 
-        uint256 want = availableInPot > maxRoundBudget ? maxRoundBudget : availableInPot;
-        uint256 got = pot.pullBudget(want);
+        // The whole pot, whatever it is. `pullBudget` is what bounds this against what the
+        // Pot can actually pay, and `uint128` is what bounds it against the Round struct.
+        uint256 got = pot.pullBudget(availableInPot);
+        if (got > type(uint128).max) revert BadConfig();
 
         roundId = ++roundCount;
         _rounds[roundId] = Round({
@@ -501,6 +521,19 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /// @dev ONE CALL PER STOCK IS THE ISOLATION MECHANISM. A stock whose token is frozen,
     ///      paused or policy-blocked fails only this call; every other stock proceeds. The
     ///      failed stock is marked skipped and its slice carries back to the Pot at finalize.
+    ///
+    ///      A SLICE TOO LARGE FOR ITS POOL IS ALL-OR-NOTHING, AND THAT IS WORTH KNOWING
+    ///      PRECISELY NOW THAT ROUNDS ARE UNCAPPED. `_buy` asks the router for the whole
+    ///      slice with a Chainlink-derived `amountOutMinimum`. Against a pool too thin to
+    ///      fill it at that price the swap reverts inside the router, `_buy` reports
+    ///      `executed == false`, nothing moved, and the ENTIRE slice is marked skipped and
+    ///      carried. It does not partially fill.
+    ///
+    ///      So the guarantees a large round has are: **the round never reverts**, **no funds
+    ///      are lost**, and **the unfilled value returns to the Pot and is re-split by the
+    ///      next round**. What it does NOT have is a partial fill — a thin stock in a big
+    ///      round buys nothing rather than buying what it safely can. That is the safe
+    ///      direction, and it is a real limitation: see OPEN_ITEMS 26.
     function settleStock(uint256 roundId, address stock) external nonReentrant {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Buying) revert WrongState(roundId, r.state, RoundState.Buying);

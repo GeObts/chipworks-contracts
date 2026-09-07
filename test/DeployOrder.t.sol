@@ -347,7 +347,7 @@ contract DeployOrderTest is Test {
 
         pot.setRewards(address(rounds));
         rounds.setCollectionBaseBps(address(based), 10_000);
-        rounds.setRoundParams(24 hours, 2 hours, 250e6, 10_000e6);
+        rounds.setRoundParams(24 hours, 2 hours, 250e6);
         // deliberately NOT claims.setRounds(address(rounds))
         vm.stopPrank();
     }

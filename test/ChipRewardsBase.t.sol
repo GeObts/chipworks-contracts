@@ -73,7 +73,9 @@ abstract contract ChipRewardsBase is Test {
     uint256 internal constant AAPL_USD = 250;
 
     uint128 internal constant MIN_POT = 250e6; // $250
-    uint128 internal constant MAX_BUDGET = 10_000e6; // $10k
+    /// @dev Retained only as a convenient "a large round" figure for tests. There is no
+    ///      round cap any more; nothing in `src/` reads a maximum.
+    uint128 internal constant MAX_BUDGET = 10_000e6;
     uint256 internal constant SPLIT_FEE = 5_000 ether; // 5,000 CHIP
 
     function setUp() public virtual {
@@ -146,7 +148,7 @@ abstract contract ChipRewardsBase is Test {
         rounds.setCollectionBaseBps(address(basedNouns), 10_000); // 1.0x
         rounds.setCollectionBaseBps(address(darkNouns), 20_000); // 2.0x
         rounds.setCollectionBaseBps(address(lilNouns), 5_000); // 0.5x
-        rounds.setRoundParams(24 hours, 2 hours, MIN_POT, MAX_BUDGET);
+        rounds.setRoundParams(24 hours, 2 hours, MIN_POT);
         rounds.setRouters(address(router), address(router));
         rounds.setPolTreasury(polTreasury);
         rounds.setChip(address(chip), address(0xdead));

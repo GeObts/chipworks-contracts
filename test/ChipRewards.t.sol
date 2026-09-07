@@ -33,11 +33,21 @@ contract ChipRewardsTest is ChipRewardsBase {
         rounds.openRound();
     }
 
-    function test_openRound_capsBudgetAndLeavesRemainderForNextRound() public {
+    /// @notice A round takes the WHOLE pot. The $10k cap was the pre-audit blast radius and
+    ///         is gone; this test asserts the opposite of what it used to.
+    function test_openRound_takesTheWholePotWithNoCap() public {
         _fundPot(25_000e6);
         uint256 id = rounds.openRound();
-        assertEq(rounds.getRound(id).budget, MAX_BUDGET, "capped at $10k");
-        assertEq(pot.available(), 15_000e6, "remainder stays for the next round");
+        assertEq(rounds.getRound(id).budget, 25_000e6, "the whole pot, uncapped");
+        assertEq(pot.available(), 0, "nothing held back");
+    }
+
+    /// @notice And the floor survives, because it is a different thing: it stops a round
+    ///         firing on dust, where every per-stock slice rounds to zero.
+    function test_openRound_stillRefusesDust() public {
+        _fundPot(249e6);
+        vm.expectRevert(abi.encodeWithSelector(ChipRounds.PotTooSmall.selector, uint256(249e6), uint256(MIN_POT)));
+        rounds.openRound();
     }
 
     function test_openRound_enforces24hSpacing() public {
@@ -51,7 +61,10 @@ contract ChipRewardsTest is ChipRewardsBase {
         );
         rounds.openRound();
 
+        // The first round took the whole pot, so the second needs new funds as well as the
+        // elapsed day. Both gates are real and independent.
         vm.warp(block.timestamp + 24 hours);
+        _fundPot(5_000e6);
         rounds.openRound(); // fine now
         assertEq(rounds.roundCount(), 2);
     }

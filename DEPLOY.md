@@ -592,10 +592,19 @@ Two consequences for the launch runbook:
 
 1. **Enable per ticker, on the day, from `liquidityReport()`.** Do not assume the table above
    still holds — these pools are small enough that one LP leaving halves them.
-2. **The per-stock max-impact check in `ChipRounds` is the real protection**, not this gate.
-   The gate decides whether a stock is eligible at all; the impact check decides whether an
-   individual buy is allowed to land. Setting `minLiquidityUsd` low to get more tickers
-   enabled does not make thin pools safe to trade — it just moves the refusal later.
+2. **The per-buy protection is the Chainlink-derived minimum output, and it is
+   all-or-nothing.** `ChipRounds._minOutFor` requires a buy to clear the stock's Chainlink
+   mark less `maxSlippageBps` (2% by default); a buy that cannot is refused *in full* by the
+   router, and the whole slice carries back to the Pot. Setting `minLiquidityUsd` low to get
+   more tickers enabled does not make thin pools tradeable — it just moves the refusal from
+   the registry to the swap, where the symptom is a stock that silently never fills.
+
+   > **CORRECTION.** An earlier revision of this line claimed a "per-stock max-impact check
+   > in `ChipRounds`". **There is no such check and there never has been** — no `maxImpactBps`
+   > exists anywhere in `src/`. The sentence was written during the B20 registry work and
+   > asserted a protection that does not exist, which is exactly the failure SEC-RTR-001 was
+   > about. The real behaviour is described above and asserted in `test/UncappedRounds.t.sol`.
+   > A genuine impact cap that *trims* a buy rather than refusing it is OPEN_ITEMS 26.
 
 The three pool-less tickers **cannot be enabled at all**, at any threshold including zero,
 because `setEnabled(true)` requires a venue before it reaches the number

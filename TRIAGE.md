@@ -67,6 +67,90 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+## ⚠️ REOPENED BY THE CAP REMOVAL — EXT-R-L-1 and SEC-POT-002
+
+**Status: the round cap is removed in the working tree and NOT tagged as a launch candidate,
+because removing it reopens two findings that were accepted on the cap's existence.**
+
+The brief for this change said the cap "wasn't load-bearing for any High/Medium" and asked me
+to verify. It is load-bearing for one Low and one **Medium**, and both said so in writing at
+the time:
+
+| Finding | Severity | What its accepted disposition said |
+|---|---|---|
+| EXT-R-L-1 | Low | *"the round cap does not go above $10,000 until dynamic slippage or private routing is in place"* |
+| SEC-POT-002 | **Medium** | *"that work is the shared precondition for lifting the round cap above $10,000"* |
+
+Neither was fixed in code. Both were **accepted with the cap named as the mitigation**, and
+TRIAGE flagged the hazard explicitly when it recorded EXT-R-L-1: *"This is the first cap doing
+security work it was not designed for, which is exactly what REVIEW_PACKAGE.md §6 asks
+reviewers to surface."* This is that surfacing coming due.
+
+### The arithmetic, which is the whole argument
+
+`maxSlippageBps` is a **fixed 2%** tolerance, not a function of pool depth. A sandwicher's
+take is bounded by that 2% and scales linearly with the slice, while the defence does not move
+at all:
+
+| Round budget | Per-stock slice (4 stocks) | Extractable at the 2% bound |
+|---|---|---|
+| $10,000 (the old cap) | $2,500 | up to $50 |
+| $100,000 | $25,000 | up to $500 |
+| $500,000 | $125,000 | up to $2,500 |
+
+The gas cost of the sandwich does not change. So the cap was not arbitrary caution — it was
+what made the attack uneconomic, and it is the only reason a fixed 2% was acceptable.
+
+### It interacts badly with the real pool depth we measured
+
+ASSUMPTIONS A-22 measured every B20 pool on Base: GOOGL $130k, SPCX $41k, and **everything
+else under $14k**. A round large enough to be worth removing the cap for produces slices that
+those pools cannot fill at the mark. `test/UncappedRounds.t.sol` shows what then happens — the
+buy is refused in full and the slice carries — so the failure is safe, but the practical
+result is that big rounds simply **do not distribute** into thin names. Removing the cap does
+not make large distribution work; it makes it fail differently.
+
+### What is true, and tested, about the removal itself
+
+The safety properties the brief asked me to confirm all hold, and are now asserted rather than
+assumed (`test/UncappedRounds.t.sol`, 6 tests):
+
+- a round takes the **whole pot**, with only the floor remaining;
+- a slice larger than its pool **never reverts the round** and **never loses funds**;
+- the unfilled value **returns to the Pot in full** and is spendable by the next round;
+- a thin stock **does not stop a healthy one** in the same round.
+
+But one thing the brief assumed is **not** true, and it is the pivotal one:
+
+> **There is no `maxImpactBps`, and there never has been.** The brief describes keeping "the
+> per-stock per-buy impact/slippage bound (the Chainlink-bounded min-out + maxImpactBps)".
+> Only the first half exists. Nothing in `src/` trims a buy to a safe size — `_minOutFor`
+> makes a bad fill **revert**, it does not make a large buy **smaller**. So "fill what's safe,
+> carry the rest" is not current behaviour: a thin stock fills **nothing** and carries
+> everything.
+>
+> A `maxImpactBps` that trims the spend is OPEN_ITEMS 26. It is also, not coincidentally, most
+> of the "dynamic slippage derived from measured pool depth" that both reopened findings named
+> as their precondition — building it would close all three at once.
+
+### The decision this needs
+
+1. **Ship uncapped and re-accept the MEV exposure** at the new scale, with EXT-R-L-1 and
+   SEC-POT-002 re-triaged as accepted-without-a-cap and the arithmetic above on the record. No
+   further code.
+2. **Build the impact trim first** (OPEN_ITEMS 26), then remove the cap. This is the recorded
+   precondition, it closes both reopened findings, and it is what makes large rounds actually
+   distribute into thin pools instead of skipping them.
+3. **Raise rather than remove** — keep a ceiling, set it far higher, and revisit when depth
+   improves.
+
+**My recommendation is 2.** The cap removal on its own does not buy what it is meant to buy:
+with today's pool depth a large round mostly skips, so the distribution ceiling is set by
+liquidity rather than by the parameter. Building the trim lifts the real ceiling *and* removes
+the reason the cap was needed.
+
+---
+
 ## Audit status — **complete for eleven of twelve contracts, with two gaps named**
 
 Nine external batches, one static-analysis pass, and a re-review of the contract that produced

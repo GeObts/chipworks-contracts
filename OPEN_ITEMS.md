@@ -711,3 +711,41 @@ that holds every unclaimed credit is a small thing to be missing and not a nothi
 **To close:** ask Bankr to re-send the `ChipClaims` report, or to confirm the lows were
 withdrawn. If the artifact is genuinely gone, the honest resolution is a fresh pass over
 `ChipClaims` rather than assuming four unread lows were immaterial.
+
+---
+
+## 26. NEW: there is no `maxImpactBps`, and building one closes three things at once
+
+**A gap found while removing the round cap.** The brief for that change assumed `ChipRounds`
+carries "the Chainlink-bounded min-out + maxImpactBps". Only the min-out exists.
+
+**What exists:** `_minOutFor` computes a Chainlink-derived `amountOutMinimum` and hands it to
+the router. A buy that cannot clear it reverts inside the router, `_buy` reports
+`executed == false`, and the whole slice is skipped and carried. **All-or-nothing.**
+
+**What does not exist:** anything that reduces the spend to a size the pool can absorb. There
+is no `maxImpactBps`, no depth lookup in the buy path, and no partial fill. A stock whose
+slice is too large for its pool buys **nothing**, not "as much as is safe".
+
+**Why it matters more now.** With the cap in place slices were small enough that this rarely
+bit. Uncapped, and against the pool depth measured in ASSUMPTIONS A-22 — everything but GOOGL
+and SPCX under $14k — a large round will skip most names rather than fill them. The
+distribution ceiling stops being a parameter and becomes liquidity.
+
+**The shape of the fix.** `StockRegistry.poolLiquidityUsd(stock)` already exists and is already
+used by the depth gate. A per-stock `maxImpactBps` would cap the spend at
+`poolLiquidityUsd * maxImpactBps / BPS` converted to quote units, buy that much, and let the
+remainder flow out through the existing unspent→Pot path at finalize. That reuses audited
+machinery and adds no new accounting.
+
+**One design question to settle first.** The brief says "carry the remainder to the next round
+**for that stock**". The mechanism above carries it to the **Pot**, where the next round
+re-splits it by that round's weights — which lands back on the same stock only to the extent
+holders keep the same splits. Earmarking per stock across rounds is new money-path storage and
+a materially bigger change. Worth deciding deliberately rather than discovering.
+
+**This is also the deferred half of two accepted findings.** EXT-R-L-1 and SEC-POT-002 both
+named "dynamic slippage derived from measured pool depth" as their precondition, and both said
+it should be solved once rather than twice. A depth-aware impact bound in the buy path is that
+work. Building it closes OPEN_ITEMS 17, 18 and 26 together and removes the reason the round cap
+existed.
