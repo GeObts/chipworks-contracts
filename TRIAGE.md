@@ -67,6 +67,103 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
+## Audit status — **complete for eleven of twelve contracts, with two gaps named**
+
+Nine external batches, one static-analysis pass, and a re-review of the contract that produced
+the only two Highs. This section is the index and the tally; every finding below it keeps its
+full entry, including the ones we disagreed with.
+
+### POLTreasury re-review — **both HIGHs confirmed closed**
+
+Bankr re-reviewed `POLTreasury` after `launch-candidate-10` and confirmed H-01 and H-02 are
+closed, with the on-chain enforcement verified rather than taken from the diff. That is the
+part worth recording: the claim was never "we added checks", it was **"a leaked manager key
+cannot move value anywhere, and that is enforced on chain rather than by key hygiene"** — and
+an independent party has now checked the enforcement, not the intention.
+
+What was verified: gauges resolve through Aerodrome's Voter with the pool derived from
+`positions(tokenId)`; tokens are allowlisted and always quote-paired; the pool comes from the
+position manager's own factory with `sqrtPriceX96` forced to zero; and liquidity moves in
+either direction only while the pool price sits inside the Chainlink band. No `onlyManager`
+function takes a destination argument — 8 of them, none with an `address to`.
+
+`test/POLTreasuryExploit.t.sol` is the standing proof: both attacks were first demonstrated to
+SUCCEED against `launch-candidate-9`, and the same two transactions now revert.
+`test_realAerodromeAnswersThePoolAndGaugeChecks` and `test_realVoterRefusesANonCanonicalGauge`
+run the H-01 attack against the live Voter on a Base fork, so the check is proven against real
+Aerodrome and not only against our mocks.
+
+**Nothing reopened. No new findings.** This is the closing entry for POLTreasury.
+
+### The tally
+
+**49 external findings** were individually triaged across nine batches, plus **168 static-analysis
+findings**. By the reporter's severity:
+
+| Severity | Count | Fixed with a test | Accepted / disputed with reasoning |
+|---|---:|---:|---:|
+| High | 6 | 5 | 1 |
+| Medium | 20 | 12 | 8 |
+| Low | 17 | 15 | 2 |
+| Informational | 5 | 3 | 2 |
+| Unscored (n/a by design change) | 1 | 0 | 1 |
+| **Total** | **49** | **35** | **14** |
+
+Static analysis, Slither 0.11.6 against `launch-candidate-1`: **168 findings — 1 valid and
+fixed (SLI-001), 1 accepted and then fixed anyway (SLI-005), 11 accepted with reasoning
+(SLI-002, the `return-bomb` class), 155 disputed** with a written per-class reason.
+
+**Nothing is in limbo except the two items named below.** Every other finding is either fixed
+with a test that fails on the old code, or accepted with the reasoning written down — including
+the six we disputed, which stay here permanently so the next reviewer can see the question was
+asked and what the answer was.
+
+### The two gaps, stated plainly
+
+**1. `StockRegistry` has never had an external review.** It is sometimes counted in the
+"eleven reviewed contracts" and it should not be. It appears in the batches only incidentally —
+in the SEC-POT-001 venue re-check and in one Slither `missing-zero-check` site — and no
+reviewer has ever been handed it as a subject. It holds no user funds and it is not in the
+custody path, but it decides **which stock is tradeable and at what depth**, which is the input
+every round's buying reads. It is the largest un-reviewed surface in the repo.
+
+**2. `ChipClaims` lows and informationals were never received.** Batch 1 delivered C-H-1, C-M-1
+and C-M-2 as a relayed summary and the report artifact never arrived, so `EXT-C-L-1` through
+`EXT-C-L-4` and the informationals **have never been read, let alone triaged**. They have been
+marked PENDING since `launch-candidate-1` rather than quietly dropped. Four lows on the ledger
+contract that holds every unclaimed credit is a small thing to be missing and not a nothing.
+
+Both are recorded in OPEN_ITEMS 25. Neither blocks a deploy on its own; both should be closed
+before anyone describes the audit as finished without qualification.
+
+### One open product question
+
+The **zero-CHIP recipe guard** (batch 9) is not a security finding and is not decided. It needs
+somebody who owns the economics to answer *must every forge burn $CHIP?* — see OPEN_ITEMS 24.
+
+### Per-contract index
+
+| Contract | Batch | Findings | Tag that closed it |
+|---|---|---|---|
+| `ChipClaims` | 1 | C-H-1, C-M-1, C-M-2 (+ **L-1…L-4 pending**) | `launch-candidate-3` |
+| `ChipRounds` | 1 | R-M-1, R-M-2, R-L-1, R-I-1 | `launch-candidate-3` |
+| `Pot` / `ConversionRoutes` | 2 | SEC-POT-001…006 | `launch-candidate-4` |
+| `FeeSplitter` | 3 | SEC-FEE-001…004 | `launch-candidate-5` |
+| `ChipActivation` | 4 | SEC-ACT-001…004 | `launch-candidate-6` |
+| `NounLoans` | 5 | SEC-LN-001…004 | `launch-candidate-8` |
+| `POLTreasury` | 6 + re-review | H-01, H-02, M-01…03, L-01…04 | `launch-candidate-10` |
+| `Anvil` | 7 | M-1, M-2, L-1…L-3, I-1 | `launch-candidate-11` |
+| `ClaimRouter` | 8 | SEC-RTR-001…004 | `launch-candidate-13` |
+| `Furnace` | 9 | SEC-FUR-001…005 | `launch-candidate-14` |
+| `StockRegistry` | **none** | — | **not reviewed** |
+| `ClutchVaultAdapter` | — | retired before review | n/a |
+
+**`launch-candidate-14` is the deployable tag.** It is the only one containing every fix:
+`launch-candidate-13` predates the Furnace batch and is missing SEC-FUR-003, -004 and -005.
+728 tests pass at that tag, 51 of them on a Base fork.
+
+---
+
 ### SEC-POT-001 re-checked against the B20 expansion — **still settled correctly**
 
 Asked when the stock set expanded, on the belief that stock buys would now route through
@@ -1478,11 +1575,16 @@ per-finding detail — so a reviewer can check this triage rather than take it o
 `python -m slither . --exclude-dependencies --json review/slither.json` if you want to query
 it programmatically.
 
-**Summary: 1 valid finding, 1 accepted-with-reasoning, 166 disputed as false positives or
+**Summary: 1 valid finding, 12 accepted-with-reasoning, 155 disputed as false positives or
 detector noise.** That ratio is normal for a codebase that deliberately uses gas-capped
 low-level calls and balance-delta accounting — the two patterns Slither is loudest about are
 the two this repo uses on purpose. The reasoning for each class is below; the discipline is
 writing it down, not the ratio.
+
+*(Corrected during the closing audit pass. This line previously read "1 accepted, 166
+disputed", which counted accepted CLASSES against disputed FINDINGS and dropped
+`missing-inheritance` entirely. The accepted 12 are the eleven `return-bomb` sites of SLI-002
+plus SLI-005; the table below has always summed to 168 and is the authority.)*
 
 | Detector | Impact | N | Verdict | One-line reason |
 |---|---|---:|---|---|

@@ -681,3 +681,46 @@ the constructor.
 
 Worth noticing that the launch recipes both carry a real `chipCost`, so this is about what a
 future `queueRecipeChange` is permitted to do, not about the deploy.
+
+---
+
+## 25. NEW: two audit gaps, named so they are not discovered later
+
+Recorded during the closing audit-status pass. Neither blocks a deploy on its own; both must be
+closed before anybody describes the review as finished without qualification.
+
+### 25a. `StockRegistry` has never had an external review
+
+Nine batches covered eleven contracts. **`StockRegistry` was not one of them.** It is sometimes
+counted among the reviewed set — it should not be. It appears in the log only incidentally: in
+the SEC-POT-001 venue re-check, and as one site in a Slither `missing-zero-check` class.
+
+**Why it matters more than "it holds no funds" suggests.** It holds nothing and is not in the
+custody path, which is why it kept sliding down the queue. But it decides **which stock is
+tradeable, on which venue, in which pool, and at what depth** — and `ChipRounds` reads all of
+that on every buy. A wrong pool, a wrong venue, or a depth gate that can be talked into
+returning the wrong answer is a bad buy in every round until somebody notices.
+
+It has substantial in-house coverage — `test/fork/B20RegistryConfig.t.sol` registers all
+thirteen tickers against live Base and pins the enable-gate, and `test/fork/StockRegistryFork.t.sol`
+exercises the pool verification against the real factories — but in-house coverage is what an
+external review is for checking, not a substitute for it.
+
+**AUDIT_BRIEF §4.3 is the brief.** The highest-value questions: can `_setVenue` be made to
+accept a pool the factory does not vouch for; can `poolLiquidityUsd` be manipulated across a
+single block to clear the gate; and does the B20 precompile `decimals()` fallback (A-15/A-17)
+have a path where a wrong value is trusted rather than rejected.
+
+### 25b. The `ChipClaims` lows and informationals were never received
+
+Batch 1 arrived as two reports. The `ChipRounds` one was complete. The `ChipClaims` one was
+relayed as a summary covering C-H-1, C-M-1 and C-M-2 only, and **the artifact never arrived**,
+so `EXT-C-L-1` through `EXT-C-L-4` and the informationals have never been read.
+
+They have been marked PENDING in TRIAGE since `launch-candidate-1` rather than quietly dropped,
+which was the right call and is not a substitute for having them. Four lows on the contract
+that holds every unclaimed credit is a small thing to be missing and not a nothing.
+
+**To close:** ask Bankr to re-send the `ChipClaims` report, or to confirm the lows were
+withdrawn. If the artifact is genuinely gone, the honest resolution is a fresh pass over
+`ChipClaims` rather than assuming four unread lows were immaterial.

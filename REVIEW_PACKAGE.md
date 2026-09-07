@@ -31,7 +31,7 @@ tag from `-3` onwards carries the review package with it — `REVIEW_PACKAGE.md`
 and regenerated `review/flattened/` sources — so the current candidate is the only thing to
 check out.
 
-**Reference `launch-candidate-14`.** Review is iterative rather than a single frozen pass:
+**Reference `launch-candidate-14`.** It is the deployable tag and the only one carrying every fix — `launch-candidate-13` predates the Furnace batch. The audit-status summary, the full tally and the two remaining gaps are at the top of `TRIAGE.md`; **`StockRegistry` has never been externally reviewed and is the largest un-reviewed surface here.** Review is iterative rather than a single frozen pass:
 findings arrive in batches, each batch is triaged in `TRIAGE.md` and lands in the next
 candidate, and the tag numbering is honest history — no tag is ever moved or deleted, so you
 can always diff the tree you read against the tree that shipped:
@@ -51,7 +51,7 @@ because the code-size guard in §5 is calibrated against exactly this configurat
 
 ```bash
 forge test --no-match-contract Fork          # 553 tests, NO RPC NEEDED
-forge test --match-path "test/fork/*" -j 1   # 40 tests against a live Base mainnet fork
+forge test --match-path "test/fork/*" -j 1   # 51 tests against a live Base mainnet fork
 ```
 
 **`-j 1` on the fork paths is not optional advice.** Fork tests are RPC-hungry and running

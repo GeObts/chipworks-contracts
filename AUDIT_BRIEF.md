@@ -5,13 +5,58 @@ funded by protocol fee streams, in permissionless 24-hour rounds. Holders opt in
 $CHIP to activate a Noun at a tier, and may borrow against that Noun without giving up what
 it earns.
 
-**Status:** feature-complete for phase 1. **No longer blocked on anyone.** Chipworks now
-runs its own activation vault instead of depending on Clutch; see §7.
+**Status:** feature-complete for phase 1, and **external review is complete for eleven of the
+twelve contracts.** Nine review batches plus a static-analysis pass plus a POLTreasury
+re-review; every finding is fixed with a test or accepted with written reasoning. The full
+tally, the per-contract index and the two gaps are at the top of
+**[TRIAGE.md](TRIAGE.md)** — read that before this document if you are picking up the review.
+
+**The deployable tag is `launch-candidate-14`.** It is the only tag containing every fix;
+`launch-candidate-13` predates the Furnace batch. 728 tests pass there, 51 on a Base fork.
+
+> **TWO THINGS ARE NOT DONE, and neither should be discovered later.**
+>
+> 1. **`StockRegistry` has never been externally reviewed.** It is sometimes counted among the
+>    reviewed contracts and it should not be. It holds no user funds, but it decides which
+>    stock is tradeable and at what depth — the input every round's buying reads. It is the
+>    largest un-reviewed surface here, and **§4.3 is where to start on it.**
+> 2. **The `ChipClaims` lows and informationals were never received.** `EXT-C-L-1` through
+>    `-L-4` have been PENDING since `launch-candidate-1` because the report artifact never
+>    arrived. They have never been read.
+>
+> Both are OPEN_ITEMS 25. Neither blocks a deploy by itself; both must be closed before
+> anybody calls the audit finished without qualification.
+
 **Target:** Base mainnet (8453) · Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 ·
 optimizer on, 200 runs · no `via_ir`.
-**Size:** ~3,030 lines of non-comment source across 12 contracts + 1 base + 14 interfaces.
-**Tests:** 649 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 40 tests
+**Size:** ~3,790 lines of non-comment source across 12 contracts + 1 base + 14 interfaces.
+**Tests:** 728 passing — unit, fuzz, 4 stateful invariants at 128k calls each, and 51 tests
 against a live Base mainnet fork.
+
+**Where the review is written down.** `TRIAGE.md` carries every finding with its full
+reasoning, including the six we disputed — a log that records only agreements is not a log.
+Per contract:
+
+| Contract | Batch | Findings | Closed in |
+|---|---|---|---|
+| `ChipClaims` | 1 | C-H-1, C-M-1, C-M-2 · **L-1…L-4 pending** | `launch-candidate-3` |
+| `ChipRounds` | 1 | R-M-1, R-M-2, R-L-1, R-I-1 | `launch-candidate-3` |
+| `Pot` / `ConversionRoutes` | 2 | SEC-POT-001…006 | `launch-candidate-4` |
+| `FeeSplitter` | 3 | SEC-FEE-001…004 | `launch-candidate-5` |
+| `ChipActivation` | 4 | SEC-ACT-001…004 | `launch-candidate-6` |
+| `NounLoans` | 5 | SEC-LN-001…004 | `launch-candidate-8` |
+| `POLTreasury` | 6 + re-review | **H-01, H-02**, M-01…03, L-01…04 | `launch-candidate-10` |
+| `Anvil` | 7 | M-1, M-2, L-1…L-3, I-1 | `launch-candidate-11` |
+| `ClaimRouter` | 8 | SEC-RTR-001…004 | `launch-candidate-13` |
+| `Furnace` | 9 | SEC-FUR-001…005 | `launch-candidate-14` |
+| `StockRegistry` | **none** | — | **not reviewed** |
+| Slither 0.11.6 | — | 168: 1 valid, 12 accepted, 155 disputed | `launch-candidate-3` |
+
+**The two Highs of the whole audit were both in `POLTreasury`**, both let a leaked manager
+session key take the entire POL book in one block, and both were demonstrated working against
+`launch-candidate-9` before they were fixed. If you read one thing in this repo adversarially,
+read `§4.4` and `test/POLTreasuryExploit.t.sol`. The re-review confirmed the enforcement is
+on chain rather than a matter of key hygiene.
 
 `B20_DOCS.md` in this repo is Base's own tokenized-stock documentation, filed verbatim. It is
 the source for everything in ASSUMPTIONS A-13, A-15 and A-18, and it is worth reading before
