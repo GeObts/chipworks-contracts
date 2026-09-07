@@ -15,12 +15,12 @@ should be read.
 
 ```bash
 git clone <repo> chipworks-contracts && cd chipworks-contracts
-git checkout launch-candidate-14
+git checkout launch-candidate-15
 git submodule update --init --recursive     # forge-std, openzeppelin-contracts
 
 cp .env.example .env                        # then set BASE_RPC_URL
 forge build
-forge test                                  # everything: 593 tests
+forge test                                  # everything: 729 tests
 ```
 
 ### One tag now, not two
@@ -31,13 +31,13 @@ tag from `-3` onwards carries the review package with it — `REVIEW_PACKAGE.md`
 and regenerated `review/flattened/` sources — so the current candidate is the only thing to
 check out.
 
-**Reference `launch-candidate-14`.** It is the deployable tag and the only one carrying every fix — `launch-candidate-13` predates the Furnace batch. The audit-status summary, the full tally and the two remaining gaps are at the top of `TRIAGE.md`; **`StockRegistry` has never been externally reviewed and is the largest un-reviewed surface here.** Review is iterative rather than a single frozen pass:
+**Reference `launch-candidate-15`.** It is the current deployable tag and carries the latest fixes. The audit-status summary, the full tally and the two remaining gaps are at the top of `TRIAGE.md`; **`StockRegistry` has never been externally reviewed and is the largest un-reviewed surface here.** Review is iterative rather than a single frozen pass:
 findings arrive in batches, each batch is triaged in `TRIAGE.md` and lands in the next
 candidate, and the tag numbering is honest history — no tag is ever moved or deleted, so you
 can always diff the tree you read against the tree that shipped:
 
 ```bash
-git diff launch-candidate-13 launch-candidate-14 -- src/
+git diff launch-candidate-14 launch-candidate-15 -- src/
 ```
 
 `review-1` and `launch-candidate-1` still exist and still resolve; they are simply eight
@@ -50,7 +50,7 @@ because the code-size guard in §5 is calibrated against exactly this configurat
 ### What needs an RPC, and what does not
 
 ```bash
-forge test --no-match-contract Fork          # 553 tests, NO RPC NEEDED
+forge test --no-match-path "test/fork/*"      # 678 tests, NO RPC NEEDED
 forge test --match-path "test/fork/*" -j 1   # 51 tests against a live Base mainnet fork
 ```
 
@@ -136,7 +136,7 @@ is short.
 | `ClaimRouter.sol` | 264 | 3309 | Batches many `ChipClaims.claimFor` calls into one transaction. **Never holds anything** — `claimFor` credits its `owner` argument, never `msg.sender`. Batch capped at 100; the sweep is multisig-only since batch 8. |
 
 **Totals:** ~2,794 LOC across the eleven; ~3,030 including the retired adapter and the shared
-conversion base. 593 tests, 40 of them against a live Base mainnet fork.
+conversion base. 729 tests, 51 of them against a live Base mainnet fork.
 
 ---
 
