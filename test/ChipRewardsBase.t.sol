@@ -181,7 +181,7 @@ abstract contract ChipRewardsBase is Test {
         rounds.setRoundParams(24 hours, 2 hours, MIN_POT);
         rounds.setRouters(address(router), address(router));
         rounds.setPolTreasury(polTreasury);
-        rounds.setChip(address(chip), address(0xdead));
+        rounds.setChip(address(chip));
         vm.stopPrank();
     }
 

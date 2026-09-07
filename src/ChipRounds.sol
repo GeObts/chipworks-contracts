@@ -77,7 +77,22 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     IActivationSource public activationSource;
     address public polTreasury;
     address public chipToken;
-    address public chipBurnAddress;
+    /// @notice Where the split-change fee is burned. **A constant, not a setting.**
+    ///
+    /// @dev This used to be a settable `chipBurnAddress` with no validation of any kind — not
+    ///      even a zero check — so a documented burn could have been pointed at any address,
+    ///      silently turning it into revenue. Nothing warned anyone: the event says "fee" and
+    ///      the docs said "burned". Found while wiring up burn visibility, and fixed by
+    ///      removing the lever rather than validating it, because there is exactly one correct
+    ///      value and it is the one Basescan labels as a burn address.
+    address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
+
+    /// @notice Running total of $CHIP this contract has burned, in wei.
+    /// @dev $CHIP is Bankr's Doppler token and has NO `burn`, so `totalSupply` does not move
+    ///      when we burn — a transfer to `0xdead` is the only burn available. This counter is
+    ///      how the split-change fee becomes visible at all. See
+    ///      `ChipActivation.effectiveChipSupply` for the protocol-wide figure.
+    uint256 public totalChipBurned;
 
     IUniswapV3SwapRouter public uniswapRouter;
     ISlipstreamSwapRouter public slipstreamRouter;
@@ -217,6 +232,8 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     error InsufficientExcess(address token, uint256 requested, uint256 available);
     error Insolvent(address token);
     error BadConfig();
+    /// @notice Less $CHIP reached `0xdead` than the fee required.
+    error ChipBurnShortfall(uint256 delivered, uint256 required);
 
     /// @param multisig  Owner.
     /// @param registry_ StockRegistry.
@@ -281,9 +298,11 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit AddressUpdated("polTreasury", v);
     }
 
-    function setChip(address token, address burnAddress) external onlyOwner {
+    /// @notice Point the split-change fee at the $CHIP token. The burn address is a constant.
+    /// @dev The second argument is gone rather than accepted-and-ignored; old callers fail to
+    ///      compile, which is how they get found.
+    function setChip(address token) external onlyOwner {
         chipToken = token;
-        chipBurnAddress = burnAddress;
         emit AddressUpdated("chipToken", token);
     }
 
@@ -448,7 +467,14 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         uint256 fee;
         if (existing.set && splitChangeFeeChip != 0 && chipToken != address(0)) {
             fee = splitChangeFeeChip;
-            IERC20(chipToken).safeTransferFrom(msg.sender, chipBurnAddress, fee);
+            // Measured, like every other burn in this protocol: a $CHIP that taxes transfers
+            // or lies about them would otherwise buy a split change under-paid. This path had
+            // neither the measurement nor a counter until burn visibility was wired up.
+            uint256 before = IERC20(chipToken).balanceOf(BURN_ADDRESS);
+            IERC20(chipToken).safeTransferFrom(msg.sender, BURN_ADDRESS, fee);
+            uint256 delivered = IERC20(chipToken).balanceOf(BURN_ADDRESS) - before;
+            if (delivered < fee) revert ChipBurnShortfall(delivered, fee);
+            totalChipBurned += fee;
         }
 
         _splits[collection][tokenId] = Split({set: true, count: uint8(stocks.length), stocks: s, pcts: p});

@@ -130,7 +130,7 @@ contract FullSystemForkTest is Test {
         rounds.setRoundParams(24 hours, 2 hours, 250e6);
         rounds.setRouters(UNIV3_ROUTER, address(0));
         rounds.setPolTreasury(address(polTreasury));
-        rounds.setChip(address(chipToken), address(0xdead));
+        rounds.setChip(address(chipToken));
         rounds.setHoldbackBps(1_500);
         claims.setCreditExpiry(30 days);
 

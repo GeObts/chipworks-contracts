@@ -1338,6 +1338,41 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     }
 
     /* ------------------------------------------------------------------ */
+    /*                        $CHIP BURN VISIBILITY                         */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Every $CHIP ever sent to `0xdead`, by anyone, for any reason.
+    ///
+    /// @dev THIS IS THE AUTHORITATIVE NUMBER, and it is deliberately not our own counter.
+    ///      {totalChipBurned} on this contract counts only what THIS contract burned;
+    ///      `ChipRounds` and `Furnace` keep their own. Summing three counters would miss a
+    ///      fourth contract added later, and would miss anyone who burned $CHIP by sending it
+    ///      to `0xdead` directly. The dead address's balance misses nothing.
+    function chipBurnedToDead() public view returns (uint256) {
+        return chipToken.balanceOf(BURN_ADDRESS);
+    }
+
+    /// @notice $CHIP actually in circulation: total supply less everything burned.
+    ///
+    /// @dev **$CHIP CANNOT BE TRULY BURNED, AND THIS IS THE WORKAROUND.** Bankr's Doppler
+    ///      token exposes no `burn`, so `totalSupply()` does not fall when the protocol burns
+    ///      — the tokens sit at `0xdead` forever, unreachable but still counted. That is a
+    ///      limitation of a contract we do not own, not a shortcut in this one.
+    ///
+    ///      So the honest circulating figure is this subtraction, and it has to be surfaced
+    ///      deliberately: by the site, and by filing `0x…dEaD` with CoinGecko and CMC as an
+    ///      excluded burn address after launch. Until that filing lands, aggregators will
+    ///      overstate $CHIP supply by exactly {chipBurnedToDead}. See README and DEPLOY.
+    ///
+    ///      Contrast the Furnace's fuel, which IS truly burned: Chiplets is `ERC721Burnable`,
+    ///      so forging genuinely reduces that collection's supply.
+    function effectiveChipSupply() external view returns (uint256) {
+        uint256 supply = chipToken.totalSupply();
+        uint256 burned = chipBurnedToDead();
+        return burned >= supply ? 0 : supply - burned;
+    }
+
+    /* ------------------------------------------------------------------ */
     /*                          IActivationSource                           */
     /* ------------------------------------------------------------------ */
 

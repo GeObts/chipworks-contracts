@@ -36,7 +36,12 @@ import {Vm} from "forge-std/Vm.sol";
 ///      contract is covered the moment it is created.
 contract IdentifyByAddressTest is Test {
     /// @notice Selectors and source spellings that would mean identity came from a string.
-    function test_noSourceFileResolvesAStockByNameOrSymbol() public view {
+    /// @dev Gas metering is paused: this is a build-time lint that substring-scans every
+    ///      source file, which is O(file x needle) in Solidity and grows with the codebase
+    ///      rather than with anything a user does. It ran out of gas once the burn-visibility
+    ///      work landed. Nothing here is on a production path.
+    function test_noSourceFileResolvesAStockByNameOrSymbol() public {
+        vm.pauseGasMetering();
         string[] memory files = _srcFiles();
         assertGt(files.length, 10, "the scan found the source tree");
 

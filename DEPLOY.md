@@ -23,7 +23,24 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `CHIPLETS` | **_TBD_** | The collection the Furnace consumes. **A standard ERC-721**, dropping on OpenSea. Was going to be Lil Based Nouns, then a DN404 hybrid; it is neither. See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
-| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead`. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). |
+| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead` and **`totalSupply` will not fall**. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). See BURN_VISIBILITY.md. |
+
+> ### 🔴 POST-LAUNCH, AND NOTHING WILL DO IT FOR YOU
+>
+> **File `0x000000000000000000000000000000000000dEaD` with CoinGecko and CoinMarketCap as an
+> excluded burn address for $CHIP.** Bankr's token has no `burn`, so burned $CHIP stays in
+> `totalSupply` forever. Until the filing lands, both aggregators overstate circulating supply
+> by exactly `ChipActivation.chipBurnedToDead()`, and the gap widens with every activation and
+> every forge.
+>
+> The site must show `ChipActivation.effectiveChipSupply()` — `totalSupply` minus the dead
+> balance — and say that is what it is showing. **Chiplets is the opposite case**: it is
+> `ERC721Burnable`, the Furnace calls `burn`, and its supply genuinely falls. BURN_VISIBILITY.md
+> has both.
+
+**Furnace forging needs a user approval step.** `chiplets.setApprovalForAll(furnace, true)`
+before `forge`, exactly like a marketplace listing. The Furnace has no burn role and cannot be
+given one; it burns only ids the caller named and owns. Tell the site builder.
 
 ---
 
