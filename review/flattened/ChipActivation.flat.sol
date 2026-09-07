@@ -1364,8 +1364,9 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     ///      excluded burn address after launch. Until that filing lands, aggregators will
     ///      overstate $CHIP supply by exactly {chipBurnedToDead}. See README and DEPLOY.
     ///
-    ///      Contrast the Furnace's fuel, which IS truly burned: Chiplets is `ERC721Burnable`,
-    ///      so forging genuinely reduces that collection's supply.
+    ///      Contrast the Furnace's fuel, which IS truly burned: Chiplets is OpenSea's
+    ///      `ERC721SeaDrop` (ERC721A), which exposes `burn`, so forging genuinely reduces that
+    ///      collection's supply.
     function effectiveChipSupply() external view returns (uint256) {
         uint256 supply = chipToken.totalSupply();
         uint256 burned = chipBurnedToDead();

@@ -8,9 +8,29 @@ address with the aggregators.
 
 ## Chiplets — a REAL burn
 
-Chiplets ships as a standard ERC-721 with OpenZeppelin's `ERC721Burnable`. The Furnace calls
-`chiplets.burn(tokenId)`, which emits `Transfer(owner, address(0), tokenId)` and **decrements
-`totalSupply`**. OpenSea, Basescan and every indexer read that event and shrink the collection.
+**Chiplets is not a contract in this repo.** It is deployed through OpenSea's drop flow —
+`ERC721SeaDrop`, which is `ERC721A` underneath — and our contracts only ever hold its ADDRESS,
+supplied at deploy time. Nothing in `src/` imports it, subclasses it, or assumes anything about
+it beyond the ERC-721 surface plus `burn(uint256)`.
+
+The Furnace calls `chiplets.burn(tokenId)`, which emits `Transfer(owner, address(0), tokenId)`
+and **decrements `totalSupply`**. OpenSea, Basescan and every indexer read that event and shrink
+the collection.
+
+**Operator burn is confirmed against OpenSea's source, not assumed:**
+
+```solidity
+// ERC721SeaDrop.sol — and ERC721SeaDropCloneable.sol, the variant their drop UI deploys
+function burn(uint256 tokenId) external { _burn(tokenId, true); }
+
+// ERC721A._burn, with approvalCheck == true
+if (!_isSenderApprovedOrOwner(...))
+    if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved;
+```
+
+That last branch — `isApprovedForAll` — is the one the Furnace uses. ERC721A's `totalSupply()`
+is `_currentIndex - _burnCounter - _startTokenId()`, so a burn genuinely reduces it, and
+`ownerOf` on a burned id reverts, which is how the Furnace verifies the burn took.
 
 **The forge flow is approve-then-burn, and the site must implement step one.**
 

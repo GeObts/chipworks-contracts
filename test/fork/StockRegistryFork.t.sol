@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test, console2} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {StockRegistry} from "../../src/StockRegistry.sol";
 import {Stock, Venue} from "../../src/interfaces/IStockRegistry.sol";
 import {MockAggregatorV3} from "../mocks/MockAggregatorV3.sol";
@@ -173,7 +174,14 @@ contract StockRegistryForkTest is Test {
 
         (uint256 stockBal, uint256 quoteBal) = registry.poolBalances(NVDA);
         assertEq(stockBal, realStock);
-        assertEq(quoteBal, realUsdc, "USDC is a normal contract, read directly");
+        // Compared against the FORK's value, not the RPC's. `_rpcBalanceOf` queries "latest"
+        // over the wire while the registry reads the forked block, so mixing the two sources
+        // makes this fail whenever a swap lands in between — a race in the test, not in the
+        // contract. The stock side has no choice (a B20 precompile cannot execute in a fork,
+        // ASSUMPTIONS A-15) and is etched back in at the RPC value; the quote side does have a
+        // choice, so it reads where the registry reads.
+        assertEq(quoteBal, IERC20(USDC).balanceOf(NVDA_POOL), "USDC is a normal contract, read in-fork");
+        assertApproxEqRel(quoteBal, realUsdc, 0.02e18, "and the two sources agree within a whisker");
 
         uint256 measured = registry.poolLiquidityUsd(NVDA);
         console2.log("NVDA pool depth, USD:", measured / 1e18);

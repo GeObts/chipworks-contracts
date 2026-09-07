@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import {ERC721Burnable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
 import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 import {Furnace} from "../../src/furnace/Furnace.sol";
@@ -30,7 +29,7 @@ import {MockERC20} from "../mocks/MockERC20.sol";
 ///      reach tokens the caller named AND owns, even though the approval it holds is broad.
 contract BurnVisibilityTest is Test {
     Furnace internal furnace;
-    BurnableChiplets internal chiplets;
+    SeaDropLikeChiplets internal chiplets;
     MockNoun internal based;
     MockNoun internal dark;
     MockERC20 internal chip;
@@ -46,7 +45,7 @@ contract BurnVisibilityTest is Test {
 
     function setUp() public {
         vm.warp(1_700_000_000);
-        chiplets = new BurnableChiplets();
+        chiplets = new SeaDropLikeChiplets();
         based = new MockNoun("Based Nouns", "BASED");
         dark = new MockNoun("DarkNOUNs", "DARK");
         chip = new MockERC20("Chipworks", "CHIP", 18);
@@ -268,24 +267,110 @@ contract BurnVisibilityTest is Test {
     function test_theBurnAddressIsTheCanonicalOne() public view {
         assertEq(furnace.BURN_ADDRESS(), 0x000000000000000000000000000000000000dEaD);
     }
+
+    /* ------------------------------------------------------------------ */
+    /*       THE APPROVAL IS WHAT AUTHORISES, NOT ANYTHING OF OURS          */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Without an approval, a third party calling the collection's own `burn` is
+    ///         refused by the COLLECTION. The Furnace has no privilege to lend it.
+    ///
+    /// @dev This is the load-bearing property of the whole approve-then-burn design. It lives
+    ///      in OpenSea's contract, not in ours: `ERC721SeaDrop.burn` is `_burn(tokenId, true)`
+    ///      and ERC721A's approval check refuses anyone who is not the owner, token-approved,
+    ///      or an operator. If that ever stopped being true, the Furnace would not be the
+    ///      thing that broke — but it is what the Furnace relies on, so it is asserted here.
+    function test_theCollectionItselfRefusesAnUnapprovedBurner() public {
+        chiplets.mint(alice, 42);
+
+        vm.prank(mallory);
+        vm.expectRevert(SeaDropLikeChiplets.TransferCallerNotOwnerNorApproved.selector);
+        chiplets.burn(42);
+
+        assertEq(chiplets.ownerOf(42), alice, "still hers");
+        assertEq(chiplets.totalSupply(), 1);
+    }
+
+    /// @notice And the operator branch is exactly what the Furnace uses: with
+    ///         `setApprovalForAll`, the burn is authorised; without it, refused.
+    function test_theOperatorBranchIsWhatAuthorisesTheFurnace() public {
+        chiplets.mint(alice, 42);
+        address operator = makeAddr("someOperator");
+
+        vm.prank(operator);
+        vm.expectRevert(SeaDropLikeChiplets.TransferCallerNotOwnerNorApproved.selector);
+        chiplets.burn(42);
+
+        vm.prank(alice);
+        chiplets.setApprovalForAll(operator, true);
+
+        vm.prank(operator);
+        chiplets.burn(42); // now allowed, by the collection's own rule
+
+        assertEq(chiplets.totalSupply(), 0, "supply fell");
+    }
+
+    /// @notice Revoking the approval stops the Furnace dead, mid-relationship. Nothing in our
+    ///         contracts caches or persists the right to burn.
+    function test_revokingApprovalStopsTheFurnaceImmediately() public {
+        uint256[] memory ids = _fuel(alice, 1, FUEL_COST);
+
+        vm.prank(alice);
+        chiplets.setApprovalForAll(address(furnace), false);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        furnace.forge(BASED_RECIPE, ids);
+
+        assertEq(chiplets.totalSupply(), FUEL_COST, "nothing burned");
+        assertEq(chiplets.ownerOf(1), alice);
+    }
 }
 
-/// @notice Chiplets as it will ship: a standard ERC-721 with OpenZeppelin's `ERC721Burnable`
-///         and a supply counter, so a burn is visible as a falling `totalSupply`.
-/// @dev No burn ROLE and none grantable. `burn` authorises its caller exactly the way
-///      `transferFrom` does, which is the whole reason approve-then-burn is not a rug vector.
-contract BurnableChiplets is ERC721, ERC721Burnable {
-    uint256 public totalSupply;
+/// @notice Chiplets as it will actually ship: **OpenSea's `ERC721SeaDrop`**, which is
+///         `ERC721A` underneath. Not a contract in this repo.
+///
+/// @dev MODELLED ON THE REAL AUTHORISATION PATH, because that is the thing under test.
+///      `ERC721SeaDrop.burn(uint256)` — present in both the standard and the cloneable
+///      variant OpenSea's drop UI deploys — is exactly:
+///
+///          function burn(uint256 tokenId) external { _burn(tokenId, true); }
+///
+///      and ERC721A's `_burn` with `approvalCheck == true` authorises:
+///
+///          if (!_isSenderApprovedOrOwner(...))
+///              if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved
+///
+///      i.e. owner, or token-approved, **or operator**. That last branch is what makes
+///      approve-then-burn work, and it is reproduced faithfully below rather than approximated
+///      with OpenZeppelin's `ERC721Burnable`, which has a different lineage.
+///
+///      ERC721A's `totalSupply()` is `_currentIndex - _burnCounter - _startTokenId()`, so a
+///      burn genuinely reduces it, and `ownerOf` on a burned id reverts. Both are mirrored.
+contract SeaDropLikeChiplets is ERC721 {
+    uint256 internal _minted;
+    uint256 internal _burnCounter;
+
+    error TransferCallerNotOwnerNorApproved();
 
     constructor() ERC721("Chiplets", "CHIPLET") {}
 
     function mint(address to, uint256 tokenId) external {
         _mint(to, tokenId);
-        ++totalSupply;
+        ++_minted;
     }
 
-    function _update(address to, uint256 tokenId, address auth) internal override returns (address from) {
-        from = super._update(to, tokenId, auth);
-        if (to == address(0)) --totalSupply;
+    function totalSupply() public view returns (uint256) {
+        return _minted - _burnCounter;
+    }
+
+    /// @dev The SeaDrop signature, with ERC721A's approval check.
+    function burn(uint256 tokenId) external {
+        address owner = ownerOf(tokenId);
+        if (msg.sender != owner && getApproved(tokenId) != msg.sender && !isApprovedForAll(owner, msg.sender)) {
+            revert TransferCallerNotOwnerNorApproved();
+        }
+        _burn(tokenId);
+        ++_burnCounter;
     }
 }

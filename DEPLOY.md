@@ -20,7 +20,7 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `LOAN_TREASURY` | _TBD_ | Where liquidated NounLoans collateral goes. May be the Safe. |
 | ~~`CLUTCH_VAULT_*`~~ | — | **Gone.** Chipworks runs its own activation vault; see step 4. |
 | `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. **A normal family collection: 0.5x earner, never burned.** |
-| `CHIPLETS` | **_TBD_** | The collection the Furnace consumes. **A standard ERC-721**, dropping on OpenSea. Was going to be Lil Based Nouns, then a DN404 hybrid; it is neither. See step 8. |
+| `CHIPLETS` | **_TBD_** | The collection the Furnace consumes AND the 4th earning collection. **Deployed through OpenSea's drop flow — `ERC721SeaDrop`/`ERC721A`, not a contract in this repo.** Our contracts hold only its address. Was going to be Lil Based Nouns, then a DN404 hybrid; it is neither. See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
 | `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead` and **`totalSupply` will not fall**. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). See BURN_VISIBILITY.md. |
@@ -41,6 +41,22 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 **Furnace forging needs a user approval step.** `chiplets.setApprovalForAll(furnace, true)`
 before `forge`, exactly like a marketplace listing. The Furnace has no burn role and cannot be
 given one; it burns only ids the caller named and owns. Tell the site builder.
+
+**Verify the Chiplets address answers `burn` BEFORE the first forge.** The Furnace falls back
+to a transfer to `0xdead` when a fuel collection has no `burn`, and that fallback is silent by
+design — it keeps forging working against any ERC-721. But it means a mis-wired or unexpected
+Chiplets contract would forge perfectly while never reducing supply, which is the whole point
+of the change. Two checks, once, on the live deployment:
+
+```
+cast code <CHIPLETS> | grep -c 42966c68        # the burn(uint256) selector, expect >= 1
+# then forge once and read:
+furnace.totalFuelTrueBurned()                  # must equal furnace.totalFuelBurned()
+```
+
+If the two counters diverge, the fuel is being dead-held rather than destroyed. OpenSea's
+`ERC721SeaDrop` and `ERC721SeaDropCloneable` both expose `burn(uint256)` as
+`_burn(tokenId, true)`, so the expected answer is that they match — see BURN_VISIBILITY.md.
 
 ---
 

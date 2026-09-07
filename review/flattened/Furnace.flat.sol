@@ -1028,9 +1028,11 @@ library SafeERC20 {
 ///
 ///      THE FUEL IS TRULY BURNED; THE $CHIP CANNOT BE. Two different mechanisms, for one
 ///      reason: we control neither contract, and only one of them offers a burn.
-///        - **Fuel (Chiplets):** `ERC721Burnable`, so {forge} calls `burn(tokenId)` on tokens
-///          the user has approved it for. That emits `Transfer(owner, 0, tokenId)` and
-///          **decrements `totalSupply`** — the collection visibly shrinks. See {_consumeFuel}.
+///        - **Fuel (Chiplets):** **OpenSea's `ERC721SeaDrop`, deployed through their drop
+///          flow — not a contract in this repo.** It is `ERC721A` underneath and exposes
+///          `burn(uint256)`, so {forge} calls it on tokens the user has approved us for. That
+///          emits `Transfer(owner, 0, tokenId)` and **decrements `totalSupply`** — the
+///          collection visibly shrinks. See {_consumeFuel}.
 ///        - **$CHIP:** Bankr's Doppler token exposes **no `burn`**, so a transfer to `0xdead`
 ///          is the only burn available and `totalSupply` will NOT drop. That is a limitation
 ///          of a contract we do not own, not a shortcut here. {totalChipBurned} is the
@@ -1113,7 +1115,9 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     ///      here. Changing it means a redeploy, which is the right amount of friction.
     ///
     ///      THE FUEL IS CHIPLETS, A PLAIN ERC-721. That was an open question for a while
-    ///      and it is now closed: Chiplets ships as a standard ERC-721, not a DN404 hybrid.
+    ///      and it is now closed: Chiplets ships as a standard ERC-721 — specifically
+    ///      OpenSea's `ERC721SeaDrop`, deployed through their drop flow rather than built
+    ///      here — and not a DN404 hybrid.
     ///      The interface this contract uses — `ownerOf`, then `transferFrom` to `0xdead` —
     ///      is exactly the right one, with no adapter and no mirror to reason about.
     ///
@@ -1154,7 +1158,8 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
     /// @dev The difference between this and {totalFuelBurned} is fuel sent to `0xdead`
     ///      because its collection exposes no `burn`. Both are gone as far as any holder is
     ///      concerned; only the first shows up as a reduced `totalSupply` on OpenSea and the
-    ///      explorers. Chiplets exposes `burn`, so at launch these should track each other.
+    ///      explorers. Chiplets exposes `burn`, so at launch these should track each other. If
+    ///      they ever diverge, the fuel collection stopped answering `burn` — check it.
     uint256 public totalFuelTrueBurned;
     uint256 public totalChipBurned;
     uint256 public totalForged;
@@ -1358,11 +1363,13 @@ contract Furnace is Ownable2Step, ReentrancyGuard, IERC721Receiver {
 
     /// @dev Destroy one fuel token, and verify it is actually gone.
     ///
-    ///      APPROVE-THEN-BURN, AND WHY THAT IS NOT A RUG VECTOR. Chiplets is
-    ///      `ERC721Burnable`, whose `burn` authorises the caller exactly the way `transferFrom`
-    ///      does — owner, approved-for-token, or operator. The Furnace holds no burn ROLE and
-    ///      cannot be granted one; it can only reach tokens a user has approved it for, in the
-    ///      ordinary marketplace way (`setApprovalForAll(furnace, true)`).
+    ///      APPROVE-THEN-BURN, AND WHY THAT IS NOT A RUG VECTOR. Chiplets is OpenSea's
+    ///      `ERC721SeaDrop`, whose `burn(uint256)` is `_burn(tokenId, true)` — ERC721A's
+    ///      approval check, which accepts the owner, a token-approved address, **or an
+    ///      operator**. Verified against both the standard and the cloneable variant OpenSea's
+    ///      drop UI deploys. The Furnace holds no burn ROLE and cannot be granted one; it can
+    ///      only reach tokens a user has approved it for, in the ordinary marketplace way
+    ///      (`setApprovalForAll(furnace, true)`), and revoking that stops it immediately.
     ///
     ///      That approval is broad, exactly as it is for any marketplace — so the real
     ///      guarantee is what THIS contract does with it, and it is narrow by construction:
