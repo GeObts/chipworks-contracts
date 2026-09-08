@@ -210,7 +210,12 @@ contract SafeCallsPhase3Costs is Script {
 
         uint256[5] memory tiered =
             [unit, (unit * 220) / 100, (unit * 450) / 100, (unit * 900) / 100, (unit * 2400) / 100];
-        uint256 flat = unit / 10; // LAUNCH_CONFIG section 4 item 6: Chiplets = 10% of base
+
+        // Read EXPLICITLY rather than derived. Deriving it would silently emit
+        // LAUNCH_CONFIG's 10%-of-base default even when a different number was chosen on
+        // purpose, and that difference is invisible once it is hex calldata.
+        uint256 flat = vm.envUint("CHIPLET_FLAT_CHIP");
+        require(flat > 0, "CHIPLET_FLAT_CHIP unset - state it, do not let it be derived");
         uint256[5] memory chiplet = [flat, flat, flat, flat, flat];
 
         console2.log("################ PHASE 3 SAFE CALLS - PART A (queue) ################");
@@ -219,6 +224,14 @@ contract SafeCallsPhase3Costs is Script {
         console2.log("           ", tiered[2], tiered[3]);
         console2.log("           ", tiered[4]);
         console2.log("Chiplets flat (x5):", flat);
+        if (flat != unit / 10) {
+            console2.log("  NOTE: this is NOT 10% of the base unit.");
+            console2.log("        LAUNCH_CONFIG s4 item 6 default would be:", unit / 10);
+            console2.log("        10% is what puts a Chiplet at PARITY with a Based Noun on");
+            console2.log("        cost-per-unit-of-earning, because Chiplets earn 0.1x.");
+            console2.log("        Higher means activating a Chiplet is worse value than a Noun.");
+            console2.log("        Deliberate is fine. Accidental is not. Confirm which.");
+        }
         console2.log("");
 
         console2.log("*** THIS ONE MUST GO FIRST AND IS ONE-WAY ***");
