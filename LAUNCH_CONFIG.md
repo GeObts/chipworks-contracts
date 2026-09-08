@@ -536,54 +536,56 @@ for the one case where it is still worth doing.
 
 ---
 
-## 6.6 🔴 REQUIRED AT LAUNCH: hand $CHIP ownership to the Burner
+## 6.6 ✅ RESOLVED: $CHIP burns are real, and no hand-off was ever needed
 
-**Ordering matters and it is one-way-ish.** The Burner must exist before the token is handed
-to it, and the hand-off can only happen after Bankr's launch has put ownership in our hands.
+**This section used to require `chip.transferOwnership(<ChipBurner>)` before burns would work.
+That step is impossible AND unnecessary, and the Burner works without it.**
 
-```
-1. Deploy ChipBurner(MULTISIG, CHIP)                        # before launch is fine
-2. Bankr launches $CHIP                                     # ownership lands with us
-3. chip.transferOwnership(<ChipBurner>)                     # THE STEP
-4. chip.owner() == <ChipBurner>                             # verify
-```
+**What we believed.** That Doppler's $CHIP had an owner-gated `burn`, so the only way to make
+burns real was to make `ChipBurner` the token's owner.
 
-**Verify the token's ABI before step 3, not after.** `ChipBurner` encodes three signatures by
-string — `burn(uint256)`, `updateTokenURI(string)`, `transferOwnership(address)`. A mismatch
-would not be discovered until the first burn, by which point the token is already owned by a
-contract that cannot drive it.
+**What is actually true.** Bankr confirmed the **Doppler factory owns $CHIP permanently and
+ownership cannot be transferred** — on chain, `owner()` reads
+`0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12` and always will. And `burn(uint256)` is a
+**standard public burn of the caller's own balance**. No ownership is involved.
 
-```
-cast code <CHIP> --rpc-url $BASE_RPC_URL | grep -c 42966c68     # burn(uint256)
-cast sig "updateTokenURI(string)"                                # cross-check against the
-cast sig "transferOwnership(address)"                            # verified token source
+**Why the deployed Burner is correct anyway.** `burnAll()` was written as:
+
+```solidity
+IChipOwnable(address(chipToken)).burn(balanceBefore);
 ```
 
-**Then prove it end to end, once, with a small amount:**
+which is a plain external `burn(uint256)` call on **its own balance**. The interface is *named*
+`IChipOwnable`, but the call carries no ownership assumption — so the token burning the caller's
+tokens is exactly the behaviour it needed. The design was right for the wrong reason.
+
+**Proven against the live pair**, not inferred — `test/fork/LiveBurnerBurn.t.sol` funds the
+deployed Burner from a real holder and burns:
 
 ```
-chip.transfer(<ChipBurner>, 1e18)
-burner.burnAll()                       # permissionless, anyone
-chip.totalSupply()                     # must have FALLEN by 1e18 - a real burn
-burner.totalBurned()                   # == 1e18
-burner.burnCount()                     # == 1
+token owner   0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12   (not the Burner, never will be)
+supply before 100,000,000,000.0
+supply after   99,999,999,999.0
+burned                     1.0 CHIP, by a permissionless caller
 ```
 
-**`burnAll` is `nonReentrant` since `-22`, and `totalBurned` is bounded by the Burner's own
-balance drop as well as by the fall in supply.** Neither changes anything for a well-behaved
-token; both exist so that the published figure cannot be inflated by the token it burns. See
-`test/ChipBurnerReentrancy.t.sol`.
+**The operational step, in full:**
 
-**What the Burner deliberately cannot do.** It has no `transfer`, no sweep, no rescue and no
-generic call: $CHIP that arrives can only ever leave by being destroyed, and the multisig
-cannot move it either. `mintInflation`, `updateMintRate` and `lockPool`/`unlockPool` are **not
-exposed** — a permissionless burner that can also mint is a contradiction. If any of them is
-ever genuinely needed, `transferTokenOwnership` moves the token to a new wrapper, visibly and
-deliberately. That escape hatch is why leaving them out is safe.
+```
+chip.transfer(<ChipBurner>, amount)     # any app burn path, or a keeper batch
+burner.burnAll()                        # permissionless, anyone
+chip.totalSupply()                      # HAS FALLEN. On chain. Everywhere.
+```
 
-**Until step 3 lands, `burnAll()` reverts** — the token's `burn` is owner-gated. App burn paths
-that send $CHIP to the Burner before then will simply accumulate a balance that gets destroyed
-on the first successful call. Nothing is lost; the burn is just deferred.
+**Two pass-throughs are now dead weight, and that is harmless.** `updateTokenUri` and
+`transferTokenOwnership` revert `PassThroughFailed`, because the token refuses a non-owner.
+They were only ever useful had the Burner become owner. **A revert there is not a sign the
+Burner is broken** — asserted by `test_thePassThroughsAreDeadWeightAndThatIsFine` so nobody
+later misreads it.
+
+**What this changes downstream:** nothing. `chipBurnedToDead()`, `effectiveChipSupply()` and the
+`min(supplyDrop, balanceDrop)` bound all behave as documented. Burns are real from the moment
+the Burner holds tokens — there is no deferred period and nothing to wait for.
 
 ---
 

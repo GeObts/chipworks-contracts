@@ -4,3 +4,5 @@ broadcast/
 .env
 docs/
 feeds.tmp.json
+safecalls-phase1-DRAFT.txt
+safecalls-phase1.json

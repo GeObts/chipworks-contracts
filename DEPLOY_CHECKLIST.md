@@ -50,7 +50,7 @@ forge test --match-contract DeployRehearsalTest -vv
 | `$CHIP` address known? | ❗ **No** | same |
 | 24–48h of price observed? | ❗ **No** | the cost table (§4), so step 4 |
 | **Is $CHIP `Ownable` or `Ownable2Step`?** | ✅ Single-step. `pendingOwner()` reverts on the live token, confirming it | step 6.6 |
-| 🔴 **Does an address you control own $CHIP?** | ❗ **NO. `owner()` = `0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12`**, a contract that is neither the deploy wallet nor the Safe | **step 6.6 entirely — burns are NOT real until this moves** |
+| **Does an address you control own $CHIP?** | ✅ **No, and it does not matter.** The Doppler factory owns it permanently; `burn(uint256)` is PUBLIC and burns the caller's own balance. `burnAll()` works as deployed — proven in `test/fork/LiveBurnerBurn.t.sol` | **nothing — step 6.6 is resolved** |
 | $CHIP address | ✅ `0x75Af968d2e58749FDA1b42C58186B76f5E511bA3` — ChipWorks/CHIP, 18 dp, 100B supply, EIP-1167 proxy → `0xdb7b520b…be87` | — |
 | Chiplets drop minted? | ❗ **No. `totalSupply()` is 0 on chain** | the first forge, and the §6.5 fuel-burn proof |
 | Chiplets seeded into the Furnace? | Cannot be — nothing minted | step 8's real use |

@@ -124,8 +124,12 @@ contract DeployPhase2Burner is Script {
     ///      ChipRounds and the Furnace. If it is wrong, all four redeploy. It is the only
     ///      deploy in the sequence whose own dependency is a Bankr artifact rather than ours.
     ///
-    ///      The ownership hand-off (`chip.transferOwnership`) is a SAFE transaction, not part
-    ///      of this script. See LAUNCH_CONFIG §6.6.
+    ///      NO OWNERSHIP HAND-OFF. This contract was designed believing $CHIP's `burn` was
+    ///      owner-gated, so it would have to become the token's owner first. It does not:
+    ///      the Doppler factory owns $CHIP permanently and `burn(uint256)` is a standard
+    ///      public burn of the caller's own balance. `burnAll()` calls exactly that, so it
+    ///      works from the moment this deploys. Proven against the live pair in
+    ///      `test/fork/LiveBurnerBurn.t.sol`.
     function run() external returns (address burner) {
         address multisig = vm.envAddress("MULTISIG");
         address chip = vm.envAddress("CHIP");
@@ -144,10 +148,11 @@ contract DeployPhase2Burner is Script {
         console2.log("=== PHASE 2 COMPLETE ===");
         console2.log("export CHIP_BURNER=%s", address(b));
         console2.log("");
-        console2.log("NEXT, FROM THE SAFE, IN THIS ORDER:");
-        console2.log("  1. chip.transferOwnership(%s)", address(b));
-        console2.log("  2. verify chip.owner() == %s   <- DO NOT PROCEED WITHOUT THIS", address(b));
-        console2.log("  3. transfer 1e18 CHIP to the burner, call burnAll(), confirm supply fell");
+        console2.log("NO OWNERSHIP HAND-OFF IS NEEDED OR POSSIBLE.");
+        console2.log("  The Doppler factory owns $CHIP permanently; burn(uint256) is PUBLIC and");
+        console2.log("  destroys the CALLER's own balance. burnAll() already does exactly that.");
+        console2.log("  Proof: test/fork/LiveBurnerBurn.t.sol, against this deployed address.");
+        console2.log("NEXT: transfer 1e18 CHIP here, call burnAll(), confirm totalSupply fell.");
 
         return address(b);
     }
