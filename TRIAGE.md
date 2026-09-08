@@ -1364,6 +1364,27 @@ belongs to the Slipstream factory and can never report ours, so the misconfigura
 constructor argument, not a wiring call, deliberately: an optional guard that silently does
 nothing when forgotten is the anti-pattern this repo already documents once.
 
+> ### ⚠️ UPDATE at `launch-candidate-21` — what changed, and what did NOT
+>
+> **Nothing in this finding's disposition changes. The Pot is still Uniswap-only and the
+> `_setRoute` guard above is untouched.** Point 2's citation of ASSUMPTIONS A-16 still holds
+> for the narrow claim it is used for here — the Pot's own routes, WETH and AERO, really are
+> Uniswap v3 pools. A-16's *broader* conclusion was wrong and is superseded by A-22; read the
+> header there before citing it for anything else.
+>
+> **What did change is point 4, and it is worth a reviewer's attention.** `ChipRounds`' stock
+> buys now genuinely route through Aerodrome Slipstream — factory `0xf8f2eB…061Ef`, router
+> `0x698Cb2…A92F`, ten of thirteen tickers. That branch was effectively dead at launch when
+> this finding was triaged, because every stock registered as `Venue.UniswapV3`. **It is now
+> the live buy path.**
+>
+> **This is a different contract and a different path from the one SEC-POT-001 covers**, and it
+> never had this finding's protection. `ChipRounds.setRouters(uni, slip)` performs **no
+> validation of any kind** — no zero check, and no `factory()` check of the sort `_setRoute`
+> got. That mattered little while the Slipstream branch went unused; it matters now. It is
+> called out as the first thing to attack in RESCAN_NOTE.md rather than left for a reviewer to
+> find, and it is the clearest candidate for the same treatment `_setRoute` received.
+
 **Disputed: "would lock those fees."** It would not, and two independent escapes already
 existed before this review. `Pot.disableRoute(token)` turns a bad route off;
 `Pot.sweepNonQuote(token, to)` rescues the token outright. A misconfigured route was always a

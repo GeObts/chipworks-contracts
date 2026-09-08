@@ -1155,6 +1155,27 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     /// @notice Where activation costs go. Not a contract, so nothing is recoverable from it.
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
 
+    /// @notice Where $CHIP burns are SENT. The {ChipBurner} at launch.
+    ///
+    /// @dev NOT THE SAME ADDRESS AS {BURN_ADDRESS}, AND THE DIFFERENCE MATTERS.
+    ///      `BURN_ADDRESS` is `0xdead` and stays that way: it is where an NFT goes when its
+    ///      collection exposes no `burn`, and an NFT sent to the Burner would be **stranded
+    ///      forever** — the Burner handles $CHIP and has no ERC-721 surface at all.
+    ///
+    ///      $CHIP is different because Bankr's Doppler token has only an owner-gated `burn`.
+    ///      Sending it to `0xdead` left it unreachable but still inside `totalSupply`, so every
+    ///      aggregator overstated circulating supply. Pointing this at the {ChipBurner} — which
+    ///      owns the token — turns those burns into real ones: `totalSupply` falls on chain.
+    ///
+    ///      IMMUTABLE ON PURPOSE. It was briefly a settable address on `ChipRounds` with no
+    ///      validation at all, which meant a documented burn could have been pointed anywhere
+    ///      and quietly become revenue. Set once, at deploy, or not at all.
+    ///
+    ///      A deployment may legitimately point this at `0xdead` — that is what the protocol
+    ///      did before the Burner existed, and it still works — but then burns are dead-held
+    ///      rather than destroyed. LAUNCH_CONFIG requires the Burner.
+    address public immutable chipBurnTarget;
+
     /// @notice The tier weight a flat-rate collection always reports: 1.00x.
     ///
     /// @dev **THE 0.1x FOR CHIPLETS DOES NOT LIVE HERE.** Weight is
@@ -1289,9 +1310,12 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     ///      freshly deployed ChipActivation accepts no activations at all until the multisig
     ///      configures at least one. That is the intended failure mode: forgetting a
     ///      collection makes it earn nothing rather than earn for free.
-    constructor(address multisig, address chipToken_, uint32[TIER_COUNT] memory tierBps_) Ownable(multisig) {
-        if (multisig == address(0) || chipToken_ == address(0)) revert ZeroAddress();
+    constructor(address multisig, address chipToken_, address chipBurnTarget_, uint32[TIER_COUNT] memory tierBps_)
+        Ownable(multisig)
+    {
+        if (multisig == address(0) || chipToken_ == address(0) || chipBurnTarget_ == address(0)) revert ZeroAddress();
         chipToken = IERC20(chipToken_);
+        chipBurnTarget = chipBurnTarget_;
         _validateTiers(tierBps_);
         tierBps = tierBps_;
         emit TiersExecuted(tierBps_);
@@ -1450,15 +1474,15 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
         emit Upgraded(collection, tokenId, effective, current, newTier, cost);
     }
 
-    /// @dev Moves $CHIP from the caller straight to `0xdead` and MEASURES what arrived.
-    ///      A $CHIP that taxes transfers, or lies about them, would otherwise buy an
+    /// @dev Moves $CHIP from the caller straight to {chipBurnTarget} and MEASURES what
+    ///      arrived. A $CHIP that taxes transfers, or lies about them, would otherwise buy an
     ///      activation under-paid. Failing closed is the right direction: the whole call
     ///      reverts and nothing is recorded.
     function _burnChip(uint256 amount) internal {
         if (amount == 0) return;
-        uint256 before = chipToken.balanceOf(BURN_ADDRESS);
-        chipToken.safeTransferFrom(msg.sender, BURN_ADDRESS, amount);
-        uint256 delivered = chipToken.balanceOf(BURN_ADDRESS) - before;
+        uint256 before = chipToken.balanceOf(chipBurnTarget);
+        chipToken.safeTransferFrom(msg.sender, chipBurnTarget, amount);
+        uint256 delivered = chipToken.balanceOf(chipBurnTarget) - before;
         if (delivered < amount) revert ChipBurnShortfall(delivered, amount);
         totalChipBurned += amount;
     }
@@ -1467,30 +1491,43 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     /*                        $CHIP BURN VISIBILITY                         */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Every $CHIP ever sent to `0xdead`, by anyone, for any reason.
+    /// @notice Every $CHIP that is out of circulation: destroyed, queued for destruction, or
+    ///         sent to `0xdead` by anyone for any reason.
     ///
     /// @dev THIS IS THE AUTHORITATIVE NUMBER, and it is deliberately not our own counter.
     ///      {totalChipBurned} on this contract counts only what THIS contract burned;
     ///      `ChipRounds` and `Furnace` keep their own. Summing three counters would miss a
     ///      fourth contract added later, and would miss anyone who burned $CHIP by sending it
-    ///      to `0xdead` directly. The dead address's balance misses nothing.
+    ///      to `0xdead` directly. These two balances miss nothing.
+    ///
+    ///      BOTH TERMS ARE NEEDED, AND THE NAME IS NOW SLIGHTLY WRONG. The {chipBurnTarget}
+    ///      balance is $CHIP queued at the `ChipBurner` and not yet destroyed - it can only
+    ///      ever be destroyed, so it is already out of circulation. The `0xdead` balance is
+    ///      the historical route plus anything a holder sends there directly, and it never
+    ///      goes away. When the two addresses are the same - a deployment that predates the
+    ///      Burner - the balance is counted once, not twice.
     function chipBurnedToDead() public view returns (uint256) {
-        return chipToken.balanceOf(BURN_ADDRESS);
+        uint256 dead = chipToken.balanceOf(BURN_ADDRESS);
+        return chipBurnTarget == BURN_ADDRESS ? dead : dead + chipToken.balanceOf(chipBurnTarget);
     }
 
     /// @notice $CHIP actually in circulation: total supply less everything burned.
     ///
-    /// @dev **$CHIP CANNOT BE TRULY BURNED, AND THIS IS THE WORKAROUND.** Bankr's Doppler
-    ///      token exposes no `burn`, so `totalSupply()` does not fall when the protocol burns
-    ///      — the tokens sit at `0xdead` forever, unreachable but still counted. That is a
-    ///      limitation of a contract we do not own, not a shortcut in this one.
+    /// @dev **THIS USED TO BE A WORKAROUND FOR $CHIP NOT BEING BURNABLE. IT NO LONGER IS.**
+    ///      The old reasoning was that Bankr's Doppler token exposes no `burn`, so
+    ///      `totalSupply()` could never fall and this subtraction was the only honest figure.
+    ///      The token has no *public* `burn`, but it has an owner-gated one, and the
+    ///      `ChipBurner` owns the token - so `totalSupply()` does fall, and the aggregator
+    ///      filing this docstring used to demand is no longer required. See BURN_VISIBILITY.
     ///
-    ///      So the honest circulating figure is this subtraction, and it has to be surfaced
-    ///      deliberately: by the site, and by filing `0x…dEaD` with CoinGecko and CMC as an
-    ///      excluded burn address after launch. Until that filing lands, aggregators will
-    ///      overstate $CHIP supply by exactly {chipBurnedToDead}. See README and DEPLOY.
+    ///      **IT STILL EARNS ITS PLACE**, for a smaller and more precise reason: $CHIP already
+    ///      transferred to the Burner but not yet destroyed is still inside `totalSupply`,
+    ///      and it is unambiguously gone - the Burner can do nothing with it but burn it. So
+    ///      this figure counts it as burned the moment it arrives, and does not jump when a
+    ///      keeper happens to call `burnAll()`. Without it the published supply would step
+    ///      down at arbitrary moments that mean nothing.
     ///
-    ///      Contrast the Furnace's fuel, which IS truly burned: Chiplets is OpenSea's
+    ///      The Furnace's fuel is truly burned by the same standard: Chiplets is OpenSea's
     ///      `ERC721SeaDrop` (ERC721A), which exposes `burn`, so forging genuinely reduces that
     ///      collection's supply.
     function effectiveChipSupply() external view returns (uint256) {

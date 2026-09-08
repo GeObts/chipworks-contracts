@@ -1211,21 +1211,39 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     IActivationSource public activationSource;
     address public polTreasury;
     address public chipToken;
-    /// @notice Where the split-change fee is burned. **A constant, not a setting.**
+    /// @notice Where the split-change fee is burned. The `ChipBurner` at launch.
     ///
-    /// @dev This used to be a settable `chipBurnAddress` with no validation of any kind — not
-    ///      even a zero check — so a documented burn could have been pointed at any address,
-    ///      silently turning it into revenue. Nothing warned anyone: the event says "fee" and
-    ///      the docs said "burned". Found while wiring up burn visibility, and fixed by
-    ///      removing the lever rather than validating it, because there is exactly one correct
-    ///      value and it is the one Basescan labels as a burn address.
-    address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
+    /// @dev **THERE IS NO `BURN_ADDRESS` CONSTANT ON THIS CONTRACT, AND THAT IS DELIBERATE.**
+    ///      `ChipActivation` and `Furnace` both keep one, because both can destroy an NFT and
+    ///      `0xdead` is where an NFT goes when its collection exposes no `burn` of its own.
+    ///      `ChipRounds` burns no NFTs — the split-change fee is the only thing it destroys and
+    ///      it is $CHIP. A `BURN_ADDRESS` here would be a public constant that nothing uses and
+    ///      that names the wrong destination, which is exactly the sort of thing a reader
+    ///      trusts. It was removed rather than left to rot.
+    ///
+    ///      WHY THIS IS NOT `0xdead`. Bankr's Doppler $CHIP has only an owner-gated `burn`.
+    ///      Sending it to `0xdead` left it unreachable but still inside `totalSupply`, so every
+    ///      aggregator overstated circulating supply. Pointing this at the `ChipBurner` — which
+    ///      owns the token — turns those burns into real ones: `totalSupply` falls on chain.
+    ///
+    ///      IMMUTABLE ON PURPOSE. This used to be a settable `chipBurnAddress` with no
+    ///      validation of any kind, not even a zero check, so a documented burn could have been
+    ///      pointed at any address and silently turned into revenue. Nothing warned anyone: the
+    ///      event says "fee" and the docs said "burned". It is now set once, at deploy, with a
+    ///      zero check, and there is no setter — the lever is gone rather than validated.
+    ///
+    ///      A deployment may legitimately point this at `0xdead` — that is what the protocol
+    ///      did before the Burner existed, and it still works — but then burns are dead-held
+    ///      rather than destroyed. LAUNCH_CONFIG requires the Burner.
+    address public immutable chipBurnTarget;
 
     /// @notice Running total of $CHIP this contract has burned, in wei.
-    /// @dev $CHIP is Bankr's Doppler token and has NO `burn`, so `totalSupply` does not move
-    ///      when we burn — a transfer to `0xdead` is the only burn available. This counter is
-    ///      how the split-change fee becomes visible at all. See
-    ///      `ChipActivation.effectiveChipSupply` for the protocol-wide figure.
+    /// @dev Sent to {chipBurnTarget} - the `ChipBurner`, which owns $CHIP and can call its
+    ///      owner-gated `burn`, so `totalSupply` genuinely falls. This counter is how the
+    ///      split-change fee becomes visible at all, and it counts what this contract routed
+    ///      rather than what has been destroyed yet. See `ChipBurner.totalBurned` for the
+    ///      destroyed figure and `ChipActivation.effectiveChipSupply` for the protocol-wide
+    ///      circulating one.
     uint256 public totalChipBurned;
 
     IUniswapV3SwapRouter public uniswapRouter;
@@ -1384,13 +1402,15 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         address pot_,
         address source_,
         address claims_,
-        uint256 splitChangeFeeChip_
+        uint256 splitChangeFeeChip_,
+        address chipBurnTarget_
     ) Ownable(multisig) {
         if (
             multisig == address(0) || registry_ == address(0) || pot_ == address(0) || source_ == address(0)
-                || claims_ == address(0)
+                || claims_ == address(0) || chipBurnTarget_ == address(0)
         ) revert ZeroAddress();
 
+        chipBurnTarget = chipBurnTarget_;
         registry = IStockRegistry(registry_);
         quoteToken = IStockRegistry(registry_).quoteToken();
         pot = IPot(pot_);
@@ -1604,9 +1624,9 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
             // Measured, like every other burn in this protocol: a $CHIP that taxes transfers
             // or lies about them would otherwise buy a split change under-paid. This path had
             // neither the measurement nor a counter until burn visibility was wired up.
-            uint256 before = IERC20(chipToken).balanceOf(BURN_ADDRESS);
-            IERC20(chipToken).safeTransferFrom(msg.sender, BURN_ADDRESS, fee);
-            uint256 delivered = IERC20(chipToken).balanceOf(BURN_ADDRESS) - before;
+            uint256 before = IERC20(chipToken).balanceOf(chipBurnTarget);
+            IERC20(chipToken).safeTransferFrom(msg.sender, chipBurnTarget, fee);
+            uint256 delivered = IERC20(chipToken).balanceOf(chipBurnTarget) - before;
             if (delivered < fee) revert ChipBurnShortfall(delivered, fee);
             totalChipBurned += fee;
         }

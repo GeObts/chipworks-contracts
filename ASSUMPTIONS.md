@@ -394,13 +394,38 @@ cast call 0xB20000000000000000000019f6E7C675b73C2e4D "decimals()(uint8)" -r $BAS
 cast call 0xB20000000000000000000019f6E7C675b73C2e4D "symbol()(string)"  -r $BASE_RPC_URL
 ```
 
-### A-16 · The liquidity is NOT on Aerodrome Slipstream — **BLOCKER, verified**
+### A-16 · The liquidity is NOT on Aerodrome Slipstream — **SUPERSEDED BY A-22. The conclusion was wrong.**
+
+> ## ⚠️ READ A-22 FIRST. THIS ENTRY IS KEPT FOR ITS REASONING, NOT ITS ANSWER.
+>
+> **The stock buys ARE on Aerodrome Slipstream.** Every measurement below is accurate and every
+> zero it reports is real — but they were taken against Aerodrome CL factory
+> `0x5e7BB1…809A`, and there are **two** Aerodrome CL factories. All thirteen B20 pools are on
+> the other one, `0xf8f2eB…061Ef`, at tick spacing 10, and they are 7–16x deeper than the
+> Uniswap pools this entry recommended instead. A-22 carries the correction, the depth table
+> and the router.
+>
+> **What this means for the three options at the bottom of this entry: none of them was taken,
+> and none is needed.** The premise they were choosing between — "the liquidity is on Uniswap,
+> the emissions are on Aerodrome" — was false. Buys and POL are both on Aerodrome; they are
+> simply on different CL factories, which is fine because they are different books.
+>
+> **What is still true and still load-bearing:** the *Pot's conversion* routes (WETH and AERO)
+> genuinely are Uniswap v3 pools, and `ConversionRoutes` is Uniswap-only by construction. That
+> is a separate question from where stocks are bought, and SEC-POT-001's triage cites this
+> entry for exactly that narrower point. See the note in TRIAGE under SEC-POT-001.
+>
+> The lesson is the one A-22 states: **a control proves the call works, it does not prove you
+> are calling the right contract.** This entry ran a control, passed it, and drew a conclusion
+> one level too broad — "not on this factory" became "not on Aerodrome". It is kept intact so
+> that inference stays visible.
+
 Spec section 5 step 4 buys on Aerodrome Slipstream, and section 6 mints Slipstream LP.
 Measured on Base at block 50,567,828:
 
-**Aerodrome Slipstream: no pool exists for any launch stock**, against USDC or WETH, at
-tick spacings 1 / 50 / 100 / 200 / 2000. The factory itself works (WETH/USDC resolves), so
-this is genuine absence, not a bad call.
+**Aerodrome Slipstream factory A: no pool exists for any launch stock**, against USDC or WETH,
+at tick spacings 1 / 50 / 100 / 200 / 2000. The factory itself works (WETH/USDC resolves), so
+this is genuine absence on *that factory*, not a bad call — and not absence on Aerodrome.
 
 **Aerodrome v2: effectively nothing.** NVDA/USDC holds $72. AAPL/USDC holds $0.002.
 GOOGL and META have no v2 pool at all.
