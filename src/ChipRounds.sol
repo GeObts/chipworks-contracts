@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -77,7 +78,40 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     IActivationSource public activationSource;
     address public polTreasury;
     address public chipToken;
-    address public chipBurnAddress;
+    /// @notice Where the split-change fee is burned. The `ChipBurner` at launch.
+    ///
+    /// @dev **THERE IS NO `BURN_ADDRESS` CONSTANT ON THIS CONTRACT, AND THAT IS DELIBERATE.**
+    ///      `ChipActivation` and `Furnace` both keep one, because both can destroy an NFT and
+    ///      `0xdead` is where an NFT goes when its collection exposes no `burn` of its own.
+    ///      `ChipRounds` burns no NFTs — the split-change fee is the only thing it destroys and
+    ///      it is $CHIP. A `BURN_ADDRESS` here would be a public constant that nothing uses and
+    ///      that names the wrong destination, which is exactly the sort of thing a reader
+    ///      trusts. It was removed rather than left to rot.
+    ///
+    ///      WHY THIS IS NOT `0xdead`. Bankr's Doppler $CHIP has only an owner-gated `burn`.
+    ///      Sending it to `0xdead` left it unreachable but still inside `totalSupply`, so every
+    ///      aggregator overstated circulating supply. Pointing this at the `ChipBurner` — which
+    ///      owns the token — turns those burns into real ones: `totalSupply` falls on chain.
+    ///
+    ///      IMMUTABLE ON PURPOSE. This used to be a settable `chipBurnAddress` with no
+    ///      validation of any kind, not even a zero check, so a documented burn could have been
+    ///      pointed at any address and silently turned into revenue. Nothing warned anyone: the
+    ///      event says "fee" and the docs said "burned". It is now set once, at deploy, with a
+    ///      zero check, and there is no setter — the lever is gone rather than validated.
+    ///
+    ///      A deployment may legitimately point this at `0xdead` — that is what the protocol
+    ///      did before the Burner existed, and it still works — but then burns are dead-held
+    ///      rather than destroyed. LAUNCH_CONFIG requires the Burner.
+    address public immutable chipBurnTarget;
+
+    /// @notice Running total of $CHIP this contract has burned, in wei.
+    /// @dev Sent to {chipBurnTarget} - the `ChipBurner`, which owns $CHIP and can call its
+    ///      owner-gated `burn`, so `totalSupply` genuinely falls. This counter is how the
+    ///      split-change fee becomes visible at all, and it counts what this contract routed
+    ///      rather than what has been destroyed yet. See `ChipBurner.totalBurned` for the
+    ///      destroyed figure and `ChipActivation.effectiveChipSupply` for the protocol-wide
+    ///      circulating one.
+    uint256 public totalChipBurned;
 
     IUniswapV3SwapRouter public uniswapRouter;
     ISlipstreamSwapRouter public slipstreamRouter;
@@ -86,8 +120,13 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
 
     uint64 public roundDuration;
     uint64 public accumulationWindow;
-    uint128 public minPotToOpen;
+    /// @notice Independent hard per-round quote budget. Depth quotes never replace this cap.
     uint128 public maxRoundBudget;
+    /// @notice Optional tighter per-stock quote cap; zero uses the round cap.
+    mapping(address stock => uint128 amount) public maxStockSpend;
+
+    /// @notice Minimum available quote to open a round.
+    uint128 public minPotToOpen;
     uint256 public splitChangeFeeChip;
     uint32 public defaultMaxSlippageBps;
 
@@ -99,6 +138,20 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
 
     mapping(address collection => uint32 bps) public collectionBaseBps;
     mapping(address stock => uint32 bps) internal _maxSlippageBpsOverride;
+
+    /// @notice Fraction of the validated finite buy-probe notional that one buy may spend.
+    /// @dev This is an additional conservative haircut, not a constant-product TVL model
+    ///      or a guarantee about spot-price impact. Hard quote caps apply independently.
+    uint32 public defaultMaxImpactBps;
+
+    mapping(address stock => uint32 bps) internal _maxImpactBpsOverride;
+
+    /// @notice Hard ceiling on any impact bound. A compromised multisig cannot widen the
+    ///         trim past the point where it stops bounding anything.
+    uint32 public constant MAX_IMPACT_CEILING_BPS = 500;
+
+    /// @notice Gas cap on the depth probe. Bounds a precompile that consumes everything.
+    uint256 public constant DEPTH_PROBE_GAS = 1_500_000;
 
     /* ----------------------------- state ------------------------------ */
 
@@ -119,6 +172,9 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /* ----------------------------- events ----------------------------- */
 
     event RoundOpened(uint256 indexed roundId, uint256 budget, address indexed opener);
+    /// @notice A slice was larger than its stock's pool could absorb; `spent` was bought and
+    ///         `slice - spent` returns to the Pot at finalize.
+    event SliceTrimmed(uint256 indexed roundId, address indexed stock, uint256 slice, uint256 spent);
     event WeightsContributed(uint256 indexed roundId, address indexed collection, uint256 count, uint256 weightAdded);
     event AccumulationClosed(uint256 indexed roundId, uint256 totalWeight);
     event StockBought(uint256 indexed roundId, address indexed stock, uint256 spent, uint256 received);
@@ -158,6 +214,11 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     error InsufficientExcess(address token, uint256 requested, uint256 available);
     error Insolvent(address token);
     error BadConfig();
+    error InsufficientDepthGas();
+    error NotAContract(address target);
+    error RouterNotOnFactory(address router, address expectedFactory, address actualFactory);
+    /// @notice Less $CHIP reached `0xdead` than the fee required.
+    error ChipBurnShortfall(uint256 delivered, uint256 required);
 
     /// @param multisig  Owner.
     /// @param registry_ StockRegistry.
@@ -174,13 +235,15 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         address pot_,
         address source_,
         address claims_,
-        uint256 splitChangeFeeChip_
+        uint256 splitChangeFeeChip_,
+        address chipBurnTarget_
     ) Ownable(multisig) {
         if (
             multisig == address(0) || registry_ == address(0) || pot_ == address(0) || source_ == address(0)
-                || claims_ == address(0)
+                || claims_ == address(0) || chipBurnTarget_ == address(0)
         ) revert ZeroAddress();
 
+        chipBurnTarget = chipBurnTarget_;
         registry = IStockRegistry(registry_);
         quoteToken = IStockRegistry(registry_).quoteToken();
         pot = IPot(pot_);
@@ -190,7 +253,11 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         roundDuration = 24 hours;
         accumulationWindow = 2 hours;
         defaultMaxSlippageBps = 200; // 2%
+        defaultMaxImpactBps = 25; // 0.25% of measured pool depth per buy
         splitChangeFeeChip = splitChangeFeeChip_;
+        uint8 quoteDec = registry.quoteDecimals();
+        if (quoteDec > 24) revert BadConfig();
+        maxRoundBudget = uint128(10_000 * (10 ** quoteDec));
     }
 
     /* ------------------------------------------------------------------ */
@@ -221,17 +288,68 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit AddressUpdated("polTreasury", v);
     }
 
-    function setChip(address token, address burnAddress) external onlyOwner {
+    /// @notice Point the split-change fee at the $CHIP token. The burn address is a constant.
+    /// @dev The second argument is gone rather than accepted-and-ignored; old callers fail to
+    ///      compile, which is how they get found.
+    function setChip(address token) external onlyOwner {
         chipToken = token;
-        chipBurnAddress = burnAddress;
         emit AddressUpdated("chipToken", token);
     }
 
+    /// @notice Point the engine at the two swap routers. Multisig only.
+    ///
+    /// @dev **BOTH ROUTERS ARE VERIFIED AGAINST THE REGISTRY'S OWN FACTORIES.** A router is
+    ///      only useful if it derives pool addresses from the same factory the registry
+    ///      resolved those pools from; one bound to a different factory cannot reach a single
+    ///      registered pool, and **every buy reverts, on every round, for every ticker**.
+    ///
+    ///      THIS USED TO BE UNVALIDATED, AND THE VENUE FLIP IS WHY IT STOPPED BEING SURVIVABLE.
+    ///      There was no zero check and no `factory()` check here. That was tolerable only
+    ///      while the Slipstream branch was dead code — every B20 stock registered as
+    ///      `Venue.UniswapV3`, so a wrong Slipstream router was never called. Since A-22 the
+    ///      B20 pools are known to live on Aerodrome CL **factory B**, ten of thirteen tickers
+    ///      register as `Venue.Slipstream`, and this is the live buy path. Two Aerodrome CL
+    ///      routers exist, they are the same bytecode with different constructor arguments,
+    ///      and only one reaches factory B. Getting it wrong is easy and the symptom — a round
+    ///      that buys nothing — reads like a depth problem rather than a wiring one.
+    ///
+    ///      `ConversionRoutes._setRoute` has had exactly this guard since SEC-POT-001. That
+    ///      finding was about the Pot's conversion path and never covered this one; this is
+    ///      the same protection applied to the contract that now needs it.
+    ///
+    ///      THE EXPECTED FACTORIES ARE READ FROM THE REGISTRY, NOT HARDCODED. They are
+    ///      immutables over there, so the pair can never drift apart: whatever factory the
+    ///      registry derives pools from is the factory a router must belong to. A registry
+    ///      redeploy onto a different factory automatically re-scopes this check.
+    ///
+    ///      NEITHER ROUTER MAY BE ZERO, even if only one venue is in use today. `Venue` is
+    ///      per-stock and nothing stops the next listing landing on the other one; a zero
+    ///      router would then fail at buy time instead of here.
     function setRouters(address uni, address slip) external onlyOwner {
+        _requireRouterOnFactory(uni, registry.uniswapV3Factory());
+        _requireRouterOnFactory(slip, registry.slipstreamFactory());
+
         uniswapRouter = IUniswapV3SwapRouter(uni);
         slipstreamRouter = ISlipstreamSwapRouter(slip);
         emit AddressUpdated("uniswapRouter", uni);
         emit AddressUpdated("slipstreamRouter", slip);
+    }
+
+    /// @dev Rejects at configuration time rather than at buy time. Not gas-capped and not
+    ///      tolerant of failure, exactly like `ConversionRoutes._requireUniswapV3Router`: this
+    ///      is a multisig call, and a router that cannot answer `factory()` is one we should
+    ///      not be pointing a round's budget at.
+    function _requireRouterOnFactory(address router, address expectedFactory) internal view {
+        if (router == address(0)) revert ZeroAddress();
+        if (router.code.length == 0) revert NotAContract(router);
+
+        (bool ok, bytes memory ret) = router.staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok || ret.length < 32) revert RouterNotOnFactory(router, expectedFactory, address(0));
+
+        address actualFactory = abi.decode(ret, (address));
+        if (actualFactory != expectedFactory) {
+            revert RouterNotOnFactory(router, expectedFactory, actualFactory);
+        }
     }
 
     function setCollectionBaseBps(address collection, uint32 bps) external onlyOwner {
@@ -240,14 +358,32 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit ConfigUpdated(bytes32(uint256(uint160(collection))), bps);
     }
 
-    function setRoundParams(uint64 duration, uint64 window, uint128 minPot, uint128 maxBudget) external onlyOwner {
-        if (duration == 0 || window >= duration || maxBudget == 0) revert BadConfig();
+    /// @notice Round timing and the minimum pot to open. Set the hard cap separately.
+    /// @dev The `maxBudget` argument was removed rather than accepted-and-ignored: a
+    ///      parameter that silently does nothing is the failure mode this repo has already
+    ///      been bitten by twice (the `setCustodian` trap, and the `callerMinOut` that
+    ///      existed but was never passed). Callers of the old four-argument form will fail to
+    ///      compile, which is the intended way to find them.
+    function setRoundParams(uint64 duration, uint64 window, uint128 minPot) external onlyOwner {
+        if (duration == 0 || window >= duration) revert BadConfig();
         roundDuration = duration;
         accumulationWindow = window;
         minPotToOpen = minPot;
-        maxRoundBudget = maxBudget;
         emit ConfigUpdated("roundDuration", duration);
-        emit ConfigUpdated("maxRoundBudget", maxBudget);
+        emit ConfigUpdated("minPotToOpen", minPot);
+    }
+
+    /// @notice Set the independent round budget cap in raw quote units. Zero is invalid.
+    function setMaxRoundBudget(uint128 amount) external onlyOwner {
+        if (amount == 0) revert BadConfig();
+        maxRoundBudget = amount;
+        emit ConfigUpdated("maxRoundBudget", amount);
+    }
+
+    /// @notice Optional tighter per-stock hard cap; zero uses the global round cap.
+    function setMaxStockSpend(address stock, uint128 amount) external onlyOwner {
+        maxStockSpend[stock] = amount;
+        emit ConfigUpdated(bytes32(uint256(uint160(stock))), amount);
     }
 
     function setSplitChangeFeeChip(uint256 v) external onlyOwner {
@@ -265,6 +401,19 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         if (bps >= BPS) revert BadConfig();
         defaultMaxSlippageBps = bps;
         emit ConfigUpdated("defaultMaxSlippageBps", bps);
+    }
+
+    /// @notice Per-stock impact bound. Zero clears the override back to the default.
+    function setMaxImpactBps(address stock, uint32 bps) external onlyOwner {
+        if (bps > MAX_IMPACT_CEILING_BPS) revert BadConfig();
+        _maxImpactBpsOverride[stock] = bps;
+        emit ConfigUpdated(bytes32(uint256(uint160(stock))), bps);
+    }
+
+    function setDefaultMaxImpactBps(uint32 bps) external onlyOwner {
+        if (bps == 0 || bps > MAX_IMPACT_CEILING_BPS) revert BadConfig();
+        defaultMaxImpactBps = bps;
+        emit ConfigUpdated("defaultMaxImpactBps", bps);
     }
 
     /// @notice Skip any stock whose feed is older than `v` seconds, carrying its budget.
@@ -303,6 +452,20 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     function maxSlippageBps(address stock) public view returns (uint32) {
         uint32 o = _maxSlippageBpsOverride[stock];
         return o == 0 ? defaultMaxSlippageBps : o;
+    }
+
+    /// @notice Effective impact bound for a stock: its override, else the default.
+    function maxImpactBps(address stock) public view returns (uint32) {
+        uint32 o = _maxImpactBpsOverride[stock];
+        return o == 0 ? defaultMaxImpactBps : o;
+    }
+
+    /// @notice The most one buy of `stock` may spend right now, in quote units.
+    /// @dev Exposed so a keeper can see why a round trimmed, and so the site can show a
+    ///      stock's per-round ceiling. Returns 0 when depth cannot be read, which is the
+    ///      same thing {settleStock} treats as "do not buy".
+    function maxSpendFor(address stock) public returns (uint256) {
+        return _maxSpendFor(stock);
     }
 
     /* ------------------------------------------------------------------ */
@@ -356,7 +519,14 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         uint256 fee;
         if (existing.set && splitChangeFeeChip != 0 && chipToken != address(0)) {
             fee = splitChangeFeeChip;
-            IERC20(chipToken).safeTransferFrom(msg.sender, chipBurnAddress, fee);
+            // Measured, like every other burn in this protocol: a $CHIP that taxes transfers
+            // or lies about them would otherwise buy a split change under-paid. This path had
+            // neither the measurement nor a counter until burn visibility was wired up.
+            uint256 before = IERC20(chipToken).balanceOf(chipBurnTarget);
+            IERC20(chipToken).safeTransferFrom(msg.sender, chipBurnTarget, fee);
+            uint256 delivered = IERC20(chipToken).balanceOf(chipBurnTarget) - before;
+            if (delivered < fee) revert ChipBurnShortfall(delivered, fee);
+            totalChipBurned += fee;
         }
 
         _splits[collection][tokenId] = Split({set: true, count: uint8(stocks.length), stocks: s, pcts: p});
@@ -388,8 +558,8 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         uint256 availableInPot = pot.available();
         if (availableInPot < minPotToOpen) revert PotTooSmall(availableInPot, minPotToOpen);
 
-        uint256 want = availableInPot > maxRoundBudget ? maxRoundBudget : availableInPot;
-        uint256 got = pot.pullBudget(want);
+        uint256 got = pot.pullBudget(Math.min(availableInPot, maxRoundBudget));
+        if (got > type(uint128).max) revert BadConfig();
 
         roundId = ++roundCount;
         _rounds[roundId] = Round({
@@ -501,6 +671,19 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     /// @dev ONE CALL PER STOCK IS THE ISOLATION MECHANISM. A stock whose token is frozen,
     ///      paused or policy-blocked fails only this call; every other stock proceeds. The
     ///      failed stock is marked skipped and its slice carries back to the Pot at finalize.
+    ///
+    ///      A SLICE TOO LARGE FOR ITS POOL IS ALL-OR-NOTHING, AND THAT IS WORTH KNOWING
+    ///      PRECISELY NOW THAT ROUNDS ARE UNCAPPED. `_buy` asks the router for the whole
+    ///      slice with a Chainlink-derived `amountOutMinimum`. Against a pool too thin to
+    ///      fill it at that price the swap reverts inside the router, `_buy` reports
+    ///      `executed == false`, nothing moved, and the ENTIRE slice is marked skipped and
+    ///      carried. It does not partially fill.
+    ///
+    ///      So the guarantees a large round has are: **the round never reverts**, **no funds
+    ///      are lost**, and **the unfilled value returns to the Pot and is re-split by the
+    ///      next round**. What it does NOT have is a partial fill — a thin stock in a big
+    ///      round buys nothing rather than buying what it safely can. That is the safe
+    ///      direction, and it is a real limitation: see OPEN_ITEMS 26.
     function settleStock(uint256 roundId, address stock) external nonReentrant {
         Round storage r = _rounds[roundId];
         if (r.state != RoundState.Buying) revert WrongState(roundId, r.state, RoundState.Buying);
@@ -527,13 +710,29 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
             return;
         }
 
-        (bool executed, uint256 received, uint256 quoteSpent, bytes memory reason) = _buy(stock, slice);
+        // THE TRIM. Spend at most what this stock's pool can absorb inside its impact
+        // bound; whatever is left of the slice is simply not spent, and `finalizeRound`
+        // returns it to the Pot with the rest of the unspent budget. There is deliberately
+        // NO per-stock earmark: the remainder re-enters the general Pot and is re-split by
+        // the next round's weights. Earmarking would be new money-path storage for a
+        // marginal gain, and holders who keep their splits get it back anyway.
+        uint256 ceiling = _maxSpendFor(stock);
+        if (ceiling == 0) {
+            stockSkipped[roundId][stock] = true;
+            emit StockSkipped(roundId, stock, slice, "no depth");
+            return;
+        }
+
+        uint256 spend = Math.min(Math.min(slice, ceiling), committedQuote);
+        if (spend < slice) emit SliceTrimmed(roundId, stock, slice, spend);
+
+        (bool executed, uint256 received, uint256 quoteSpent, bytes memory reason) = _buy(stock, spend);
 
         // Not executed means the swap reverted atomically: nothing left the contract, so the
         // slice is untouched and carries to the next round.
         if (!executed) {
             stockSkipped[roundId][stock] = true;
-            emit StockSkipped(roundId, stock, slice, reason);
+            emit StockSkipped(roundId, stock, spend, reason);
             return;
         }
 
@@ -671,9 +870,26 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
             return 0;
         }
         if (price1e18 == 0) return 0;
-        uint256 spendUsd = (spendAmount * 1e18) / (10 ** registry.quoteDecimals());
-        uint256 expectedOut = (spendUsd * (10 ** dec)) / price1e18;
-        return (expectedOut * (BPS - maxSlippageBps(stock))) / BPS;
+        uint256 spendUsd = Math.mulDiv(spendAmount, 1e18, 10 ** registry.quoteDecimals());
+        uint256 expectedOut = Math.mulDiv(spendUsd, 10 ** dec, price1e18);
+        return Math.mulDiv(expectedOut, BPS - maxSlippageBps(stock), BPS);
+    }
+
+    /// @dev Re-quotes executable depth on each buy using CALL, as canonical quoters
+    ///      simulate reverting swaps. Failure yields an isolated skip, never unlimited spend.
+    function _maxSpendFor(address stock) internal returns (uint256) {
+        // A keeper must fund the whole bounded probe plus skip bookkeeping. Otherwise
+        // deliberately under-gassing a healthy quote could permanently skip that slice.
+        if (gasleft() < DEPTH_PROBE_GAS + DEPTH_PROBE_GAS / 63 + 200_000) revert InsufficientDepthGas();
+        (bool ok, bytes memory ret) =
+            address(registry).call{gas: DEPTH_PROBE_GAS}(abi.encodeCall(IStockRegistry.poolLiquidityUsd, (stock)));
+        if (!ok || ret.length != 32) return 0;
+        uint256 depthUsd = abi.decode(ret, (uint256));
+        uint256 depthQuote = Math.mulDiv(depthUsd, 10 ** registry.quoteDecimals(), 1e18);
+        uint256 ceiling = Math.mulDiv(depthQuote, maxImpactBps(stock), BPS);
+        ceiling = Math.min(ceiling, maxRoundBudget);
+        uint128 stockCap = maxStockSpend[stock];
+        return stockCap == 0 ? ceiling : Math.min(ceiling, stockCap);
     }
 
     /// @dev Buys `stock` with up to `spendAmount` of quote token, bounded by the Chainlink

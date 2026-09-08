@@ -36,7 +36,12 @@ contract NounLoansTest is Test {
         // The chip gate reads a real ChipActivation. Costs are all zero here so chipping is
         // free and cannot perturb the $CHIP balances these tests assert on; the gate is
         // about the activation EXISTING, not about what it cost.
-        activation = new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        activation = new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
         _priceFree(address(based));
         _priceFree(address(dark));
 
@@ -87,7 +92,12 @@ contract NounLoansTest is Test {
     /// @dev A fresh NounLoans on a different $CHIP, with its own ChipActivation priced free
     ///      so the chip gate can be satisfied without the hostile token being involved in it.
     function _pairOn(address token) internal returns (NounLoans l2, ChipActivation a2) {
-        a2 = new ChipActivation(multisig, token, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        a2 = new ChipActivation(
+            multisig,
+            token,
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
         vm.prank(multisig);
         a2.queueCosts(address(based), [uint256(0), 0, 0, 0, 0]);
         vm.warp(block.timestamp + 48 hours);

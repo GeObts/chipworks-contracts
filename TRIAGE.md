@@ -67,11 +67,191 @@ We would much rather argue a finding out in writing than quietly let it go.
 
 ## Finding log
 
-## Audit status — **complete for eleven of twelve contracts, with two gaps named**
+## Depth-aware impact trim — **EXT-R-L-1, SEC-POT-002 and OPEN_ITEMS 26 closed together**
+
+`launch-candidate-16`. This replaces the ⚠️ REOPENED section that stood here between the cap
+removal and the trim landing; the removal is no longer un-mitigated.
+
+### What the cap was actually doing
+
+`maxRoundBudget` was accepted as the mitigation for two findings, in writing, at the time:
+
+| Finding | Severity | Its accepted disposition |
+|---|---|---|
+| EXT-R-L-1 | Low | *"the round cap does not go above $10,000 until dynamic slippage or private routing is in place"* |
+| SEC-POT-002 | Medium | *"that work is the shared precondition for lifting the round cap above $10,000"* |
+
+The reason is that `maxSlippageBps` is a **fixed** percentage. It decides whether a fill is
+acceptable and its value does not move when the round grows, so a sandwicher's take is bounded
+by 2% of the slice and scales linearly with it. The cap was the only thing keeping that
+uneconomic. Both findings asked for the same replacement — *dynamic slippage derived from
+measured pool depth* — and both said it should be **solved once, not twice**.
+
+### The replacement, and why it is a different kind of bound
+
+`maxImpactBps` sizes each buy from `StockRegistry.poolLiquidityUsd(stock)` — the same measured
+depth the enable-gate already uses — so a buy may spend at most
+`poolLiquidityUsd × maxImpactBps / BPS`. **Exposure per buy is now a function of the pool, not
+of the round.** Doubling the round does not double what is extractable from any one stock; it
+spreads the same bounded buys over more rounds.
+
+That is the property the cap was standing in for, and it is strictly better than the cap was:
+the cap bounded the whole round regardless of which stock it hit, so it was simultaneously too
+tight for GOOGL and too loose for a $1,400 pool. The trim is per stock and per pool.
+
+`test_theSpendCeilingDoesNotMoveWhenTheRoundGetsBigger` is the assertion: a round ten times
+larger buys the same amount of the same thin stock.
+
+### It also fixes the thing the cap was hiding
+
+Before the trim, a slice too large for its pool bought **nothing** — the router refused the
+whole thing on `amountOutMinimum` and the entire slice carried. With the cap on, slices were
+small enough that this rarely bit. Uncapped it would have meant large rounds skipping most of
+the B20 set, because A-22 originally measured everything but GOOGL and SPCX under $14k — against
+the wrong Aerodrome factory. On factory B, where the B20 liquidity actually is, all ten pools
+clear $100k and four clear $1M, so the trim now has real depth to work with. The reasoning
+below stands either way: it is about what happens when a slice outgrows its pool, not about how
+deep the pools happen to be.
+
+Now a thin name fills to its safe size and carries only the remainder.
+`test_aHalfMillionRoundAgainstRealB20Depth` runs a $500,000 round against the depths actually
+measured on Base and shows all three names buying, none skipped, each at its own ceiling, with
+the rest returned to the Pot.
+
+### The numbers, because the default is doing real work
+
+For a constant-product pool holding equal value each side, spending `k` bps of TVL costs about
+`2k` bps on the fill and leaves spot about `2k` bps richer than the mark. The default is
+**25 bps**, so ≈0.5% of slippage and ≈0.5% of drift — well inside the 2% tolerance.
+
+It was 50 bps in the first draft and that was measurably too loose: two consecutive rounds
+against a thin pool pushed it past the tolerance and the second one failed. Arbitrage restores
+the peg between rounds in practice, but a default should not depend on that being prompt. The
+per-stock override and the `MAX_IMPACT_CEILING_BPS = 500` ceiling are both there; the ceiling
+is what stops a compromised multisig widening the bound until it stops bounding.
+
+### Carry goes to the Pot, not to the stock
+
+Deliberately. The unspent remainder flows out through the existing `finalizeRound` unspent→Pot
+path and is re-split by the next round's weights. **No new money-path storage**, and no
+per-stock earmark: holders who keep their splits get it back anyway, and earmarking would have
+added accounting to the one path that must stay simple.
+
+### Dispositions
+
+| Finding | Was | Now |
+|---|---|---|
+| EXT-R-L-1 | ACCEPTED, conditional on the cap | **FIXED** — bound now scales with depth, not fixed at 2% |
+| SEC-POT-002 | Half fixed (`callerMinOut`), half deferred on the cap | **FIXED** — the deferred half is this |
+| OPEN_ITEMS 26 | Open | **CLOSED** |
+| OPEN_ITEMS 17, 18 | Open | **CLOSED** — both were the same deferred work |
+
+**One honest caveat.** `poolLiquidityUsd` is headline TVL across both sides; a concentrated
+pool's tradeable depth near spot is a fraction of it. The bound is conservative by construction
+and should stay that way. `Pot.convert` is bounded by `callerMinOut` and its per-call cap
+rather than by this — SEC-POT-002's conversion half was already addressed there, and the
+stock-buy half is what landed here.
+
+---
+
+## Audit status — **10 of 11 deployable contracts reviewed, with two gaps named**
 
 Nine external batches, one static-analysis pass, and a re-review of the contract that produced
-the only two Highs. This section is the index and the tally; every finding below it keeps its
-full entry, including the ones we disagreed with.
+the two most serious Highs. This section is the index and the tally; every finding below it
+keeps its full entry, including the ones we disagreed with.
+
+**The counts, stated once so they cannot drift.** **10 of the 11 deployable contracts have been
+externally reviewed** — `StockRegistry` is the one that has not. Counting source files rather
+than deployables gives 11, because `base/ConversionRoutes.sol` is an abstract base reviewed
+with `Pot` in batch 2; an earlier revision of this heading said "eleven of twelve" without
+saying which eleven, which was ambiguous enough to be read as "StockRegistry was reviewed". It
+was not. **Six Highs were found**, five fixed with a test and one accepted with written
+reasoning. There is no `/reports` directory: the triage below is the record, and the reviewers'
+original artifacts were relayed as messages rather than committed.
+
+### `launch-candidate-22` targeted re-scan — **all five cleared, one gap in the reasoning**
+
+Bankr re-scanned `ChipBurner`, `ChipRounds`, `ChipActivation`, `StockRegistry` and
+`POLTreasury` at `79d14ca`. **No findings. No change requested.** Verdict: *"all 5 contracts
+are structurally sound... the system is ready for deployment without moving the depth gate into
+the live execution loop."*
+
+Confirmed by them, and worth recording because each was a claim we made rather than proved:
+
+- **`ChipBurner` has no path to extract $CHIP** — no generic call, sweep, transfer or arbitrary
+  calldata, and no way to reach `mintInflation`. Omitting it while keeping
+  `transferTokenOwnership` was judged sound.
+- **`burnAll`'s `min(supplyDrop, balanceDrop)` bound holds** — `totalBurned` cannot be inflated
+  by external burns in the same call, nor by tokens that merely moved. Under-reporting happens
+  only when the token genuinely destroys less than asked, which they call the correct and
+  honest behaviour.
+- **`nonReentrant` on a permissionless function is not a DoS vector** — the lock is scoped to
+  the executing transaction; anyone can still flush at any time.
+- **The Slipstream `exactInputSingle` struct matches Aerodrome CL's requirement** field for
+  field, and `_minOutFor` applies identically across both venues.
+- **`_requireRouterOnFactory` secures the live buy path**, and reading the expected factories
+  from the registry rather than hardcoding keeps the pair consistent if the registry moves.
+- **The two Aerodrome books are fully decoupled** — `POLTreasury` never references
+  `StockRegistry`, factory B or stock tokens; `ChipRounds` never touches the NPM or Voter. A
+  factory-B pool handed to `POLTreasury` fails closed at the factory check.
+
+#### 🔴 THE ONE THING THEY GOT WRONG, AND IT IS IN THE REASONING, NOT THE VERDICT
+
+**Their §4 argument against a continuous depth gate is premised on the buy path not reading
+pool depth. It already does.**
+
+The argument was: *"an actor could execute a temporary swap or flash loan to suppress measured
+liquidity right before `settleStock` runs, forcing legitimate stock purchases to be skipped."*
+That is a good objection. It is also a description of code that shipped at
+`launch-candidate-16`:
+
+```solidity
+// ChipRounds.settleStock
+uint256 ceiling = _maxSpendFor(stock);        // -> registry.poolLiquidityUsd(stock)
+if (ceiling == 0) {
+    stockSkipped[roundId][stock] = true;
+    emit StockSkipped(roundId, stock, slice, "no depth");
+    return;                                    // the exact outcome they warn about
+}
+```
+
+`_maxSpendFor` reads **live pool token balances** on every settle, and a zero reading skips the
+stock outright. So the depth-aware impact trim (OPEN_ITEMS 26, which closed EXT-R-L-1 and
+SEC-POT-002) already puts a manipulable depth reading inside the execution loop.
+
+**We asked about this at `-19` and it was not answered.** That note's `ChipRounds` section
+says: *"can `_maxSpendFor` be made to over-report depth... Can a stock be made to skip
+permanently?"* — the over-reporting direction. The `-22` reasoning surfaces the mirror image,
+**under**-reporting, and neither has had a verdict.
+
+**Our own read of severity, pending theirs:**
+
+- **Griefing and liveness, not theft.** A suppressed reading trims or skips; nothing is spent,
+  the slice carries back to the Pot through `finalizeRound` and is re-split next round. No
+  funds move. That is why this is not being treated as a deploy blocker on our side.
+- **A flash loan is the wrong tool for it.** `poolLiquidityUsd` values *both* sides — stock at
+  the Chainlink mark plus USDC at par — so an ordinary swap rebalances the pool rather than
+  draining it and barely moves the total. The lever that actually works is **an LP withdrawing
+  liquidity** and re-adding after, which needs the attacker to be that LP. On the thinner B20
+  pools that is a small set of people.
+- So it is real, cheap for a dominant LP, and unglamorous. **Low severity, high relevance to
+  the exact question they were answering.**
+
+**This goes back to them as a question, not as a fix.** Their recommendation — keep depth out of
+the live execution path — may well mean the trim should change, and that would be a code change
+before deploy. We are not guessing at it. **§4's conclusion is not being treated as settled
+until they have answered knowing the trim exists.**
+
+#### Two imprecisions, neither of which changes a verdict
+
+- **The Chiplets 0.1x does not live in `ChipActivation`.** Their note describes it as "the 4th
+  collection with a fixed 0.1x weight multiplier" in that contract. `ChipActivation` reports a
+  flat `FLAT_TIER_BPS = 10_000` (1.00x); the 0.1x is
+  `ChipRounds.setCollectionBaseBps(CHIPLETS, 1_000)`, exactly as for Lil at 0.5x. The contract
+  says so in capitals for this reason. Harmless here, but a reviewer carrying that model into
+  the weight arithmetic would be looking in the wrong contract.
+- **"same block" should be "same transaction".** The `min()` bound and `nonReentrant` both
+  scope to the call, not the block. Their conclusion is right; the word is not.
 
 ### POLTreasury re-review — **both HIGHs confirmed closed**
 
@@ -188,11 +368,19 @@ So expanding the stock set changes nothing here even if the buys were on Slipstr
 `deadline`, and `StockRegistry._setVenue` already verifies a Slipstream pool against the CL
 factory. Both were built for exactly this.
 
-**As it turns out the buys are not on Slipstream anyway** — see ASSUMPTIONS A-22. There is no
-Slipstream pool for any B20 stock on Base, at any tick spacing, against USDC or WETH. Every
-one registers as `Venue.UniswapV3`. The Slipstream buy path stays in the contract because it
-is correct and because the day a B20 CL pool appears it becomes a `setVenue` call — but it is
-dead code at launch, and a reviewer should know that rather than assume it is exercised.
+**And the buys ARE on Slipstream — this entry used to say the opposite.** It said there was no
+Slipstream pool for any B20 stock at any tick spacing, that every one registered as
+`Venue.UniswapV3`, and that the Slipstream buy path was dead code at launch. That was measured
+against Aerodrome CL factory `0x5e7BB1…809A` and was true of that factory; it was not true of
+Aerodrome. There are **two** CL factories and every B20 pool is on the other one,
+`0xf8f2eB…061Ef`. See ASSUMPTIONS A-22 for the correction and the depth table.
+
+So the Slipstream path is **the** stock buy path at launch, not a spare one, and a reviewer
+should read it as live code. It is exercised end to end against the real router and a real pool
+in `test/fork/FactoryBRouter.t.sol`, and the full thirteen-ticker registry config is re-derived
+from factory B every run in `test/fork/B20RegistryConfig.t.sol`. The Uniswap path is the one
+that goes unexercised by the B20 set — it stays because `Venue` is per-stock and nothing says
+the next listing lands on the same venue.
 
 **Nothing changed in `src/`. This entry exists because the question was asked and the answer
 needed to be checkable.**
@@ -1259,6 +1447,27 @@ belongs to the Slipstream factory and can never report ours, so the misconfigura
 **rejected at configuration time** rather than discovered at conversion time. The factory is a
 constructor argument, not a wiring call, deliberately: an optional guard that silently does
 nothing when forgotten is the anti-pattern this repo already documents once.
+
+> ### ⚠️ UPDATE at `launch-candidate-21` — what changed, and what did NOT
+>
+> **Nothing in this finding's disposition changes. The Pot is still Uniswap-only and the
+> `_setRoute` guard above is untouched.** Point 2's citation of ASSUMPTIONS A-16 still holds
+> for the narrow claim it is used for here — the Pot's own routes, WETH and AERO, really are
+> Uniswap v3 pools. A-16's *broader* conclusion was wrong and is superseded by A-22; read the
+> header there before citing it for anything else.
+>
+> **What did change is point 4, and it is worth a reviewer's attention.** `ChipRounds`' stock
+> buys now genuinely route through Aerodrome Slipstream — factory `0xf8f2eB…061Ef`, router
+> `0x698Cb2…A92F`, ten of thirteen tickers. That branch was effectively dead at launch when
+> this finding was triaged, because every stock registered as `Venue.UniswapV3`. **It is now
+> the live buy path.**
+>
+> **This is a different contract and a different path from the one SEC-POT-001 covers**, and it
+> never had this finding's protection. `ChipRounds.setRouters(uni, slip)` performs **no
+> validation of any kind** — no zero check, and no `factory()` check of the sort `_setRoute`
+> got. That mattered little while the Slipstream branch went unused; it matters now. It is
+> called out as the first thing to attack in RESCAN_NOTE.md rather than left for a reviewer to
+> find, and it is the clearest candidate for the same treatment `_setRoute` received.
 
 **Disputed: "would lock those fees."** It would not, and two independent escapes already
 existed before this review. `Pot.disableRoute(token)` turns a bad route off;

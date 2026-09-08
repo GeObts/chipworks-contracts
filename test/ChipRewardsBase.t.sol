@@ -57,6 +57,7 @@ abstract contract ChipRewardsBase is Test {
     MockSlipstreamFactory internal slipFactory;
     MockSwapRouter internal router;
 
+    MockSwapRouter internal slipRouter;
     // collections
     MockNoun internal basedNouns;
     MockNoun internal darkNouns;
@@ -74,7 +75,9 @@ abstract contract ChipRewardsBase is Test {
     uint256 internal constant AAPL_USD = 250;
 
     uint128 internal constant MIN_POT = 250e6; // $250
-    uint128 internal constant MAX_BUDGET = 10_000e6; // $10k
+    /// @dev Retained only as a convenient "a large round" figure for tests. There is no
+    ///      round cap any more; nothing in `src/` reads a maximum.
+    uint128 internal constant MAX_BUDGET = 10_000e6;
     uint256 internal constant SPLIT_FEE = 5_000 ether; // 5,000 CHIP
 
     function setUp() public virtual {
@@ -92,13 +95,30 @@ abstract contract ChipRewardsBase is Test {
 
         uniFactory = new MockUniswapV3Factory();
         slipFactory = new MockSlipstreamFactory();
+
+        // Two routers, because `setRouters` now checks each one against the factory the
+        // REGISTRY resolves that venue's pools from, and a single double cannot answer
+        // `factory()` with two different addresses. Only `router` is ever swapped through --
+        // every stock in this base registers as `Venue.UniswapV3` -- but the Slipstream slot
+        // has to hold something that belongs to the Slipstream factory.
         router = new MockSwapRouter();
+        router.setFactory(address(uniFactory));
+        slipRouter = new MockSwapRouter();
+        slipRouter.setFactory(address(slipFactory));
 
         registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
         pot = new Pot(multisig, address(usdc), address(uniFactory));
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
-        rounds = new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), SPLIT_FEE);
+        rounds = new ChipRounds(
+            multisig,
+            address(registry),
+            address(pot),
+            address(adapter),
+            address(claims),
+            SPLIT_FEE,
+            0x000000000000000000000000000000000000dEaD
+        );
 
         basedNouns = new MockNoun("Based Nouns", "BASED");
         darkNouns = new MockNoun("DarkNOUNs", "DARK");
@@ -135,12 +155,42 @@ abstract contract ChipRewardsBase is Test {
             vm.etch(pool, address(new MockDepthPool()).code);
             MockDepthPool(pool).setLiquidity(1e18);
             (uint256 mark,) = registry.priceUsd(toks[i]);
-            depthQuoter.setQuote(toks[i], 10_000e6, 1e20, mark);
+            depthQuoter.setQuote(toks[i], 10_000_000e6, 1e20, mark);
             vm.prank(multisig);
-            registry.setDepthConfig(toks[i], address(depthQuoter), 10_000e6, 200, 120 hours);
+            registry.setDepthConfig(toks[i], address(depthQuoter), 10_000_000e6, 200, 120 hours);
             vm.prank(multisig);
             registry.setEnabled(toks[i], true);
         }
+        _fundPools();
+    }
+
+    /// @dev Give each registered pool real balances, so `poolLiquidityUsd` measures something.
+    ///
+    ///      Needed since the depth-aware impact trim landed: `settleStock` sizes every buy
+    ///      from `registry.poolLiquidityUsd(stock)` and refuses to buy at all when depth reads
+    ///      zero. Before the trim these pool addresses were empty placeholders that only had
+    ///      to exist in the factory; now they have to hold something. Deep on purpose — $10m
+    ///      a side pair — so the trim never binds in suites that are testing something else.
+    ///      `UncappedRoundsTest` is where thin pools are the subject.
+    function _fundPools() internal {
+        _fundPool(address(nvda), NVDA_USD);
+        _fundPool(address(googl), GOOGL_USD);
+        _fundPool(address(aapl), AAPL_USD);
+    }
+
+    /// @dev Same job for a stock a derived suite registers itself, whatever its token type.
+    ///      Low-level `mint` so it works for MockERC20 and every HostileTokens variant alike.
+    function _seedPoolDepth(address stock, address pool, uint256 priceUsd, uint8 dec) internal {
+        usdc.mint(pool, 5_000_000e6);
+        (bool ok,) =
+            stock.call(abi.encodeWithSignature("mint(address,uint256)", pool, (5_000_000 / priceUsd) * (10 ** dec)));
+        require(ok, "seed pool: mint failed");
+    }
+
+    function _fundPool(address stock, uint256 priceUsd) internal {
+        address pool = registry.getStock(stock).pool;
+        usdc.mint(pool, 5_000_000e6);
+        MockERC20(stock).mint(pool, (5_000_000 / priceUsd) * 1e8);
     }
 
     /// @dev Caller is already pranking the multisig when registering an extra hostile token.
@@ -149,8 +199,8 @@ abstract contract ChipRewardsBase is Test {
         vm.etch(pool, address(new MockDepthPool()).code);
         MockDepthPool(pool).setLiquidity(1e18);
         (uint256 mark,) = registry.priceUsd(token);
-        extraQuoter.setQuote(token, 10_000e6, 1e20, mark);
-        registry.setDepthConfig(token, address(extraQuoter), 10_000e6, 200, 120 hours);
+        extraQuoter.setQuote(token, 10_000_000e6, 1e20, mark);
+        registry.setDepthConfig(token, address(extraQuoter), 10_000_000e6, 200, 120 hours);
     }
 
     function _wire() internal {
@@ -164,10 +214,10 @@ abstract contract ChipRewardsBase is Test {
         rounds.setCollectionBaseBps(address(basedNouns), 10_000); // 1.0x
         rounds.setCollectionBaseBps(address(darkNouns), 20_000); // 2.0x
         rounds.setCollectionBaseBps(address(lilNouns), 5_000); // 0.5x
-        rounds.setRoundParams(24 hours, 2 hours, MIN_POT, MAX_BUDGET);
-        rounds.setRouters(address(router), address(router));
+        rounds.setRoundParams(24 hours, 2 hours, MIN_POT);
+        rounds.setRouters(address(router), address(slipRouter));
         rounds.setPolTreasury(polTreasury);
-        rounds.setChip(address(chip), address(0xdead));
+        rounds.setChip(address(chip));
         vm.stopPrank();
     }
 

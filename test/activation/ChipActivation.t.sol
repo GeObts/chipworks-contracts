@@ -35,7 +35,7 @@ contract ChipActivationTest is Test {
         based = new MockNoun("Based Nouns", "BASED");
         dark = new MockNoun("DarkNOUNs", "DARK");
 
-        act = new ChipActivation(multisig, address(chip), TIERS);
+        act = new ChipActivation(multisig, address(chip), 0x000000000000000000000000000000000000dEaD, TIERS);
         _configure(address(based), COSTS);
 
         chip.mint(alice, 100_000 ether);
@@ -572,7 +572,8 @@ contract ChipActivationTest is Test {
     /// @dev SafeERC20 alone does NOT catch this: the token returns true.
     function test_aLyingChipCannotBuyAnActivationForFree() public {
         LyingToken liar = new LyingToken("Chipworks", "CHIP", 18);
-        ChipActivation a2 = new ChipActivation(multisig, address(liar), TIERS);
+        ChipActivation a2 =
+            new ChipActivation(multisig, address(liar), 0x000000000000000000000000000000000000dEaD, TIERS);
         vm.prank(multisig);
         a2.queueCosts(address(based), COSTS);
         vm.warp(block.timestamp + 48 hours);
@@ -602,7 +603,7 @@ contract ChipActivationTest is Test {
 
     function test_aPausedChipBlocksActivationWithoutCorruptingState() public {
         PausableToken pt = new PausableToken("Chipworks", "CHIP", 18);
-        ChipActivation a2 = new ChipActivation(multisig, address(pt), TIERS);
+        ChipActivation a2 = new ChipActivation(multisig, address(pt), 0x000000000000000000000000000000000000dEaD, TIERS);
         vm.prank(multisig);
         a2.queueCosts(address(based), COSTS);
         vm.warp(block.timestamp + 48 hours);
@@ -713,7 +714,12 @@ contract ChipActivationTest is Test {
 
     function test_theConstructorRejectsABadTierTable() public {
         vm.expectRevert(ChipActivation.BadConfig.selector);
-        new ChipActivation(multisig, address(chip), [uint32(0), 12_500, 16_000, 20_000, 33_300]);
+        new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(0), 12_500, 16_000, 20_000, 33_300]
+        );
     }
 
     function test_onlyTheMultisigCanTouchConfig() public {

@@ -449,8 +449,12 @@ contract AnvilTest is Test {
     ///      moment. The buyer receives a clean Noun and chips it themselves at full price.
     function test_aPurchasedNounArrivesUnChipped() public {
         MockERC20 chip = new MockERC20("Chipworks", "CHIP", 18);
-        ChipActivation act =
-            new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        ChipActivation act = new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
         vm.prank(multisig);
         act.queueCosts(address(based), [uint256(0), 0, 0, 0, 0]);
         vm.warp(block.timestamp + 48 hours);

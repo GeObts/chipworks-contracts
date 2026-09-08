@@ -125,6 +125,8 @@ contract ChipRewardsHoldbackTest is ChipRewardsBase {
         rounds.setHoldbackBps(1_500);
         vm.stopPrank();
 
+        _seedPoolDepth(address(liar), pool, 100, 8);
+
         router.setRate(address(usdc), address(liar), 1e8, 100 * 1e6);
         liar.mint(address(router), 1_000_000e8);
 

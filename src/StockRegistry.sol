@@ -44,10 +44,10 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     uint8 public immutable override quoteDecimals;
 
     /// @notice Uniswap v3 factory used to verify `Venue.UniswapV3` pools.
-    address public immutable uniswapV3Factory;
+    address public immutable override uniswapV3Factory;
 
     /// @notice Aerodrome Slipstream factory used to verify `Venue.Slipstream` pools.
-    address public immutable slipstreamFactory;
+    address public immutable override slipstreamFactory;
 
     /// @notice Gas cap for the optional `decimals()` cross-check in {addStock}.
     /// @dev Bounds the loss when the probe hits a non-executable address. See {_checkedDecimals}.
@@ -167,7 +167,7 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
         _setFeed(token, feed);
     }
 
-    /// @notice Configure a finite buy probe using the canonical QuoterV2 for this venue.
+    /// @notice Configure a finite buy probe using the canonical quoter for this venue.
     /// @dev Factory identity catches configuration errors, not a malicious owner-selected
     ///      quoter. Governance must verify deployed canonical bytecode. Re-enable explicitly.
     function setDepthConfig(
@@ -181,7 +181,7 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
         Stock storage s = _stocks[token];
         if (
             s.venue == Venue.None || quoter.code.length == 0 || probeAmount == 0 || maxDeviationBps > 500
-                || maxFeedAge < 72 hours || s.tokenDecimals > 36 || quoteDecimals > 36
+                || maxFeedAge < 72 hours || s.tokenDecimals > 36 || quoteDecimals > 24
         ) revert InvalidDepthConfig();
         address expected = s.venue == Venue.UniswapV3 ? uniswapV3Factory : slipstreamFactory;
         (bool ok, bytes memory ret) = quoter.staticcall{gas: DEPTH_READ_GAS}(abi.encodeWithSignature("factory()"));
@@ -198,16 +198,11 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     }
 
     /// @notice Change the depth a stock must clear before it can be enabled. Multisig only.
-    /// @dev Disables an enabled stock if it no longer clears the updated gate.
     function setMinLiquidityUsd(address token, uint128 newMin) external onlyOwner {
         _requireRegistered(token);
         Stock storage s = _stocks[token];
         emit MinLiquidityUpdated(token, s.minLiquidityUsd, newMin);
         s.minLiquidityUsd = newMin;
-        if (s.enabled && !clearsMinLiquidity(token)) {
-            s.enabled = false;
-            emit EnabledUpdated(token, false);
-        }
     }
 
     /// @notice Enable or disable a stock. Multisig only.
@@ -370,7 +365,8 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
             return 0;
         }
         (bool ok, bytes memory result) = c.quoter.call{gas: DEPTH_QUOTE_GAS}(data);
-        if (!ok || result.length != 128) return 0;
+        if (!ok) return 0;
+        if (result.length != 128) return 0;
         (uint256 amountOut, uint160 sqrtAfter,,) = abi.decode(result, (uint256, uint160, uint32, uint256));
         if (amountOut == 0 || sqrtAfter == 0) return 0;
         return amountOut;

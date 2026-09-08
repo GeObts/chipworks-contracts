@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {StockRegistryTest} from "test/StockRegistry.t.sol";
+import {StockRegistryFixture} from "test/StockRegistry.t.sol";
 import {StockRegistry} from "src/StockRegistry.sol";
 import {Venue} from "src/interfaces/IStockRegistry.sol";
 import {MockDepthQuoter, MockDepthPool} from "test/mocks/MockDepthQuoter.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract StockRegistryDepthTest is StockRegistryTest {
+contract StockRegistryDepthTest is StockRegistryFixture {
     function testFuzz_donationsCannotChangeDepthOrEnablement(uint96 donation, bool stockSide, bool slipstream) public {
         _addNvda(20_000e18);
         _fundNvdaPool();

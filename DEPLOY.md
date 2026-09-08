@@ -20,10 +20,46 @@ Solidity 0.8.24 · EVM `cancun` · OpenZeppelin v5.1.0 · optimizer on, 200 runs
 | `LOAN_TREASURY` | _TBD_ | Where liquidated NounLoans collateral goes. May be the Safe. |
 | ~~`CLUTCH_VAULT_*`~~ | — | **Gone.** Chipworks runs its own activation vault; see step 4. |
 | `LIL_NOUNS` | `0xe3c5Ef27B80481518a2363406e354a9361415556` | Verified on Base: ERC-721, 4,420 supply, EIP-1967 proxy, NOT Enumerable. **A normal family collection: 0.5x earner, never burned.** |
-| `CHIPLETS` | **_TBD_** | The collection the Furnace consumes. **A standard ERC-721**, dropping on OpenSea. Was going to be Lil Based Nouns, then a DN404 hybrid; it is neither. See step 8. |
+| `CHIPLETS` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | **VERIFIED ON CHAIN 2026-09-07.** The collection the Furnace consumes AND the 4th earning collection. Not a contract in this repo. `name()` = `CHIPLETS`, `symbol()` = `CHIPP`, `supportsInterface(0x80ac58cd)` = **true**, `burn(uint256)` selector **present**, `owner()` = `0xcd2f7B22…FCEFa`. `totalSupply()` was **0** at the time of checking — the drop had not minted. See step 8. |
 | `BASED_NOUNS` | _TBD_ | ERC-721. |
 | `DARK_NOUNS` | _TBD_ | ERC-721. |
-| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. **No `burn()`**, so every burn in this repo is a transfer to `0xdead`. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). |
+| `CHIP` | _TBD_ | $CHIP, a standard ERC-20 from the Doppler/Bankr launch. Its `burn` is **owner-gated**, and at launch the owner becomes `ChipBurner` (step 0), so **`totalSupply` does fall** — burns are real. Needed by ChipRounds (split fee), ChipActivation (activation cost) and Furnace (forge cost). See BURN_VISIBILITY.md. |
+
+> ### 🔴 AT LAUNCH, AND NOTHING WILL DO IT FOR YOU
+>
+> **`chip.transferOwnership(<ChipBurner>)`.** This is what makes $CHIP burns real. Until it
+> lands, `burnAll()` reverts and every burned $CHIP simply accumulates at the Burner — nothing
+> is lost, but `totalSupply` does not fall and the aggregators overstate circulating supply.
+> LAUNCH_CONFIG §6.6 carries the sequence and the **ABI check that must happen first**.
+>
+> **The CoinGecko/CMC filing this note used to demand is no longer required.** It was mandatory
+> when every burn was a transfer to `0xdead` and `totalSupply` could never move. With a real
+> burn the aggregators pick the fall up on their own. File `0xdead` only if $CHIP was burned
+> there before the hand-off landed — see BURN_VISIBILITY.md, which carries the one-line check.
+>
+> The site should still show `ChipActivation.effectiveChipSupply()` and say that is what it is
+> showing: it counts $CHIP queued at the Burner as already gone, so the published figure does
+> not step down whenever a keeper calls `burnAll()`.
+
+**Furnace forging needs a user approval step.** `chiplets.setApprovalForAll(furnace, true)`
+before `forge`, exactly like a marketplace listing. The Furnace has no burn role and cannot be
+given one; it burns only ids the caller named and owns. Tell the site builder.
+
+**Verify the Chiplets address answers `burn` BEFORE the first forge.** The Furnace falls back
+to a transfer to `0xdead` when a fuel collection has no `burn`, and that fallback is silent by
+design — it keeps forging working against any ERC-721. But it means a mis-wired or unexpected
+Chiplets contract would forge perfectly while never reducing supply, which is the whole point
+of the change. Two checks, once, on the live deployment:
+
+```
+cast code <CHIPLETS> | grep -c 42966c68        # the burn(uint256) selector, expect >= 1
+# then forge once and read:
+furnace.totalFuelTrueBurned()                  # must equal furnace.totalFuelBurned()
+```
+
+If the two counters diverge, the fuel is being dead-held rather than destroyed. OpenSea's
+`ERC721SeaDrop` and `ERC721SeaDropCloneable` both expose `burn(uint256)` as
+`_burn(tokenId, true)`, so the expected answer is that they match — see BURN_VISIBILITY.md.
 
 ---
 
@@ -72,7 +108,15 @@ below that does not depend on the token.
 | 1 | `FeeSplitter` | multisig, **pot placeholder**, ops, 2000, 2000 | `setPot(Pot)` after step 3 | — it can receive from the start, but nobody should call `distribute` before `setPot` |
 | 2 | `StockRegistry` | multisig, USDC, uni factory, slipstream factory | 13 x `addStock` (all disabled) | every stock starts **disabled**; `setEnabled` needs feed + pool + measured depth |
 | 3 | `Pot` | multisig, USDC | `setRewards(ChipRounds)` after 5b; `setConversionConfig`; `setRoute(AERO)` | `openRound` reverts while `rewards` is unset |
-| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; 🔴 `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
+| 4 | `ChipActivation` | multisig, **$CHIP**, tier bps | `queueCosts` → 48h → `executeCosts` per collection; **`setFlatRateCollection(CHIPLETS)` BEFORE its first `executeCosts`**; 🔴 `setCustodian(NounLoans)` after 9 | **an unpriced collection cannot be activated at all** — `CollectionNotConfigured` |
+
+> **Chiplets is flat-rate and the order matters.** `setFlatRateCollection(CHIPLETS)` must run
+> **before** the collection's first `executeCosts`; it is refused on a live collection, one-way
+> by design, so a mistake here means redeploying `ChipActivation`. The five cost entries must
+> all be **equal** — a flat collection has one price and the validator refuses a ladder.
+> Activation is `activateFlat(CHIPLETS, tokenId, sacrificeId)`: a flat $CHIP amount plus one
+> OTHER Chiplet, truly burned. The site needs `chiplets.setApprovalForAll(chipActivation, true)`
+> as step one, the same as the Furnace.
 | 5a | `ChipClaims` | multisig, StockRegistry | `setRounds`, `setPolTreasury`, `setClaimSchedule`, `setCreditExpiry` | **`contributeWeights` reverts until `setRounds`** — the ledger rejects an unknown caller |
 | 5b | `ChipRounds` | multisig, registry, Pot, **ChipActivation**, ChipClaims, 🔶fee | the config table in step 5b | a round reverts at the first `contributeWeights` until 5a is wired |
 | 6 | `POLTreasury` | multisig, USDC, position manager, FeeSplitter, UniV3 factory, **Aerodrome Voter** | `setManager`, `setRewards(ChipClaims)`, POL assets **with feeds**, routes, income tokens | holds nothing until `ChipRounds.setPolTreasury` points at it |
@@ -168,7 +212,8 @@ call, needs no action from the borrower, and is retroactive — but nothing will
 Only these actually bind. Everything else can move.
 
 ```
-$CHIP ────────────────> 4 ChipActivation, 8 Furnace, 9 NounLoans, 5b ChipRounds (fee)
+$CHIP ────────────────> 0 ChipBurner, 4 ChipActivation, 8 Furnace, 9 NounLoans, 5b ChipRounds (fee)
+0 ChipBurner ─────────> 4 ChipActivation, 5b ChipRounds, 8 Furnace   🔴 immutable in all three
 2 StockRegistry ──────> 5a ChipClaims, 5b ChipRounds
 3 Pot ────────────────> 5b ChipRounds
 4 ChipActivation ─────> 5b ChipRounds
@@ -182,11 +227,58 @@ $CHIP ────────────────> 4 ChipActivation, 8 Furn
 `POLTreasury.setRewards` also takes **ChipClaims**, because compound credits are notified by
 the ledger. Both are easy to get backwards and neither fails loudly.
 
+**`ChipBurner` (0) is the one new hard edge**, and it is unforgiving in a way the others are
+not: `chipBurnTarget` is `immutable` on ChipActivation, ChipRounds and the Furnace, so if the
+Burner's address is wrong at deploy there is no setter to fix it — all three redeploy. It is
+also the only step whose own dependency, `$CHIP`, is a Bankr artifact rather than ours.
+
 ---
 
 ## Order
 
 Deploy in this order. Each step lists what it needs from earlier steps.
+
+### 0. ChipBurner — **built**
+
+Needs: `MULTISIG`, `$CHIP`.
+
+**Deploy this before ChipActivation, ChipRounds and the Furnace, because all three take its
+address as an immutable constructor argument.** It is the only new dependency in the deploy
+graph, and the only one that is genuinely one-way: get it wrong and three contracts have to be
+redeployed.
+
+| Arg | Value | Meaning |
+|---|---|---|
+| `multisig` | `MULTISIG` | The admin owner. May use the two pass-throughs; **may never move a single $CHIP**. |
+| `chipToken_` | `CHIP` | Immutable. The token this wrapper owns and burns. |
+
+**What it is for.** Bankr's Doppler $CHIP has no public `burn`, only an owner-gated one. Every
+$CHIP "burn" in this protocol used to be a transfer to `0xdead`: unreachable, but still inside
+`totalSupply`, so every aggregator overstated circulating supply and the gap grew with every
+activation. Making this contract the token's **owner** turns those into real burns —
+`totalSupply` falls, on chain, everywhere.
+
+**Burning is permissionless.** Anyone may call `burnAll()`; it destroys this contract's whole
+balance and nothing else, and it verifies the burn by reading `totalSupply` before and after
+rather than trusting a return value. `totalBurned` therefore counts what left existence, not
+what was asked to leave.
+
+**It is structurally burn-only.** No `transfer`, no sweep, no rescue, no generic `call`. $CHIP
+that arrives here is gone; the only question is when somebody calls `burnAll()`. `mintInflation`
+and `updateMintRate` are deliberately **not** exposed — a permissionless burner that can also
+mint is a contradiction. `transferTokenOwnership` is the escape hatch if any of that is ever
+genuinely needed, and it is what stops this being a permanent trap.
+
+**The ownership hand-off is a launch-day step, not a deploy step.** The token's ownership only
+lands with us when Bankr launches, so `chip.transferOwnership(<ChipBurner>)` happens then — see
+LAUNCH_CONFIG §6.6, which also carries the ABI check that must happen **before** the hand-off.
+Until it lands `burnAll()` reverts and the app's burn paths simply accumulate a balance here.
+Nothing is lost; the burn is deferred.
+
+> **`0xdead` is still the right value for one thing: NFTs.** The Burner has no ERC-721 surface
+> at all, so a Noun or a Chiplet sent to it would be **stranded forever**. `BURN_ADDRESS` stays
+> `0xdead` on all three contracts and `chipBurnTarget` is a separate field. They are not
+> interchangeable, and `test/BurnRouting.t.sol` is what keeps them apart.
 
 ### 1. FeeSplitter — **built**
 
@@ -239,7 +331,7 @@ Constructor arguments:
 | `multisig` | `MULTISIG` | Owner. |
 | `quoteToken_` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | USDC on Base (verified, 6 dp). |
 | `uniswapV3Factory_` | `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` | Verifies Uniswap v3 pools. |
-| `slipstreamFactory_` | `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A` | Verifies Aerodrome Slipstream pools. |
+| `slipstreamFactory_` | `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` | Verifies Aerodrome Slipstream pools. **FACTORY B, and this is the one that matters** — there are two Aerodrome CL factories and every B20 stock pool is on this one. The older `0x5e7BB1…809A` (factory A) resolves none of them, and `slipstreamFactory` is **immutable**, so a registry deployed against factory A cannot register a single stock and must be redeployed. ASSUMPTIONS A-22. |
 
 Then register all nine stocks **disabled**, four with pools and five without:
 
@@ -275,38 +367,10 @@ node in ASSUMPTIONS A-13 and A-18, and asserted in `test/fork/ChainlinkFeeds.t.s
 All thirteen need `tokenDecimals = 8` and a `minLiquidityUsd` you choose (see below). The four
 with pools also need their Chainlink feed, which is still outstanding (ASSUMPTIONS A-13).
 
-**Executable-depth configuration (issue #5).** `poolLiquidityUsd` now reports the
-configured buy-probe notional in 18-decimal USD only if a canonical venue quote executes
-within its Chainlink bound. It returns zero on unavailable, stale, malformed, or failed
-quotes. `poolTvlUsd` and `poolBalances` are informational and include donations.
-
-Before enabling, call `setDepthConfig(token, quoter, probeAmount, maxDeviationBps,
-maxFeedAge)` from the multisig. `probeAmount` is in raw quote-token units (USDC: 6dp).
-Select the canonical QuoterV2 matching the registry factory, verify its deployment, and
-set a finite probe at least as large as the intended maximum single-stock buy. Start with
-200 bps deviation (includes pool fees; maximum allowed 500) and 120 hours feed age to
-accommodate equity-market closures. The contract requires at least 72 hours and does not
-permit freshness checks to be disabled for the depth gate.
-
-The historical $25k/$50k TVL thresholds are not executable-depth defaults. Choose and
-record a new `minLiquidityUsd` in probe USD units. For example, a 1,000 USDC probe is
-`1_000e6`, paired with a `1_000e18` threshold. This example does not approve $1,000 buys
-on a particular stock: validate its quote and cap the round budget accordingly. Missing
-probe configuration and zero depth block enabling even at a zero threshold.
-
-Base Uniswap V3 QuoterV2: `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a`
-([official deployments](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments)).
-For the configured Slipstream factory `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A`,
-QuoterV2 is `0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0`
-([official initial deployment](https://github.com/aerodrome-finance/slipstream#initial-deployment)).
-Newer Slipstream factories use different deployments; do not mix versions.
-
-`poolLiquidityUsd`, `clearsMinLiquidity`, and `liquidityReport` now require CALL, not
-STATICCALL, because canonical quoters simulate reverting swaps. Off-chain callers still
-use `eth_call`; `CheckDepth.s.sol` already uses that path. Each entry makes one quote
-with a 1,000,000-gas quote cap plus bounded feed/pool reads. Budget report gas per entry
-and validate on the target node. Reconfiguring the probe disables the stock; changing
-venue also clears its probe configuration.
+**Issue #5 changes the measurement and configuration.** Configure a finite executable
+probe before enabling. The former $25k/$50k TVL thresholds are not compatible defaults.
+See the executable-depth configuration section below for units, canonical quoters, caps,
+and required calls. Raw balances now appear only in `poolTvlUsd` and `poolBalances`.
 
 **Enabling, at launch week:**
 ```
@@ -409,6 +473,7 @@ Needs: `MULTISIG`, `$CHIP`. Deploy before ChipRounds.
 |---|---|
 | `multisig` | `MULTISIG` |
 | `chipToken_` | `CHIP` |
+| `chipBurnTarget_` | **`ChipBurner` from step 0** — where activation and upgrade $CHIP is sent. Immutable, non-zero. Not `0xdead`: see step 0. |
 | `tierBps_` | `[10000, 12500, 16000, 20000, 33300]` (1.00 / 1.25 / 1.60 / 2.00 / 3.33) |
 
 **No collection can be activated until it is priced**, and pricing is the same call that
@@ -506,18 +571,26 @@ Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ChipActivation`, **`ChipClaims`**.
 | `source_` | **ChipActivation** from step 4 |
 | `claims_` | ChipClaims from step 5a |
 | `splitChangeFeeChip_` | `5000e18` (5,000 CHIP) |
+| `chipBurnTarget_` | **`ChipBurner` from step 0** — where the split-change fee is sent. Immutable, non-zero. |
+
+> **`setRouters` now validates, so run it AFTER the registry is deployed and BEFORE the first
+> round.** It reads `registry.uniswapV3Factory()` and `registry.slipstreamFactory()` and
+> requires each router to report the matching one. That makes the router and the registry a
+> matched pair by construction: if the registry is ever redeployed onto a different factory,
+> the old router stops being accepted. There is no way to set only one of the two.
 
 Then configure, all from the multisig:
 
 | Call | Recommended value |
 |---|---|
 | `setRoundParams(duration, window, minPot, maxBudget)` | `86400, 7200, 250e6, 10000e6` |
+| `setCollectionBaseBps(CHIPLETS, 1000)` | **Chiplets = 0.1x.** This IS the 0.1x — `ChipActivation` reports a flat 1.00x and the base supplies the rate, exactly as for Lil. No code change was needed in `ChipRounds`. |
 | `setCollectionBaseBps(LIL_NOUNS, 5000)` | Lil = 0.5x |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |
-| `setRouters(uniswapRouter, slipstreamRouter)` | Uniswap v3 SwapRouter02; Slipstream router |
+| `setRouters(uniswapRouter, slipstreamRouter)` | `0x2626664c2603336E57B271c5C0b26F421741e481` (Uniswap v3 SwapRouter02) and **`0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F`** — the Slipstream router bound to **factory B**. The better-known `0xBE6D8f…18a5` serves factory A and could never reach a B20 pool; proved both ways in `test/fork/FactoryBRouter.t.sol`. **Since `-22` this is enforced on chain**: each router's `factory()` is checked against the matching factory on the registry, and neither may be zero, so a wrong router reverts here instead of reverting every buy later. |
 | `setPolTreasury(polTreasury)` | after step 6 — receives the holdback |
-| `setChip(chipToken, 0x…dead)` | after the $CHIP launch |
+| `setChip(chipToken)` | after the $CHIP launch. **One argument** — the burn destination is `chipBurnTarget`, a constructor argument, and there is deliberately no setter for it. |
 | `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |
 | `setDefaultMaxSlippageBps(200)` | 2% around the Chainlink mark |
 | `setMaxFeedAge(432000)` | **120 hours.** Skip a stock whose feed has frozen; its slice carries |
@@ -572,57 +645,66 @@ Post-deploy checks:
 - `rounds.activationSource()` is ChipActivation
 - open a tiny test round end to end on a fork before funding the real Pot
 
-### The full B20 set — registry config, derived from chain 2026-09-06
+### The full B20 set — registry config, derived from chain 2026-09-07
 
-All thirteen tickers register. **Every one is `Venue.UniswapV3`**, not Slipstream — see
-ASSUMPTIONS A-22, which is the sweep proving no B20 stock has a Slipstream pool on Base at any
-tick spacing, against USDC or WETH. `test/fork/B20RegistryConfig.t.sol` re-derives every pool
-below from the live factory on each run, so this table cannot silently go stale.
+**THIS TABLE WAS REPLACED. The venue is Aerodrome Slipstream, not Uniswap v3.**
 
-The following is historical headline TVL (now `poolTvlUsd`), including both raw balances
-with stock valued at its Chainlink mark. Measured 2026-09-06. It is not executable depth
-and cannot establish enablement after issue #5.
+The previous version of this section registered all ten tradeable tickers as `Venue.UniswapV3`
+and said no B20 stock had a Slipstream pool at any tick spacing. That was measured against
+Aerodrome CL factory `0x5e7BB1…809A` and it was true of *that factory* — there are **two**
+Aerodrome CL factories and every B20 pool is on the other one, `0xf8f2eB…061Ef`. ASSUMPTIONS
+A-22 carries the correction, the identifying probes, and the router that reaches it.
 
-| Ticker | Token | Chainlink feed | Venue | Pool | Fee | Historical TVL USD |
-|---|---|---|---|---|---|---|
-| GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | UniV3 | `0x1f52F46BaC657564c31122b12b43A459E09273C8` | 10000 | **129,959** |
-| SPCX | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` | UniV3 | `0x127a12FC0953ab2ab89558c67Ba6D597D7140431` | 10000 | **40,844** |
-| MSFT | `0xB200000000000000000000Ab99cFa739E253872B` | `0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c` | UniV3 | `0xD73cBeCC0F62C7C1704332ED119514d6d84DC607` | 10000 | 13,989 |
-| NVDA | `0xb20000000000000000000078ee7ce2fE4908108C` | `0x04689a41629776563E6822F76f2e57D148d28513` | UniV3 | `0x60661b315553EB81872deEA9a66d567Cf0CCd33B` | 3000 | 12,341 |
-| AMZN | `0xb200000000000000000000d9192b6B456483C2E8` | `0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295` | UniV3 | `0x7F030e5fD657795C0937a3e8af2929Fd90DA91C7` | 10000 | 8,411 |
-| AAPL | `0xb200000000000000000000C2e324d24d7eEcd1fb` | `0x787f13dEa48Db0897CbCDD985de77809D837F988` | UniV3 | `0x97F35d1E92795327614BE000cd18cba1Be2c1931` | 3000 | 4,485 |
-| META | `0xb2000000000000000000008bC8786B856E61707C` | `0x6526aE6797A76123638b863AeE4dD27Ba4E4b27D` | UniV3 | `0x583919ec1975a1238C50e1940911894ee6912476` | 3000 | 1,482 |
-| TSLA | `0xb2000000000000000000001e800a7f5189430cD0` | `0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4` | UniV3 | `0xad6A86333C579d5Bbd150F28e74651006Fa87b3B` | 10000 | 276 |
-| MSTR | `0xb2000000000000000000004884b426556b92883d` | `0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a` | UniV3 | `0x5237817130DFc43F176A9146D3aE1Be85cBacAFb` | 10000 | **0** |
-| SNDK | `0xb200000000000000000000397293Cb8cda9a10c5` | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` | UniV3 | `0x26fa54cdfc64fAacb5364c09De7Ac2F72308052D` | 10000 | **0** |
-| COIN | `0xb200000000000000000000c85a31389D71F3ecfb` | `0x408e44f504A7371a345F03a73dDC96A4b48e8aa7` | **None** | — | — | no pool |
-| CRCL | `0xB20000000000000000000019f6E7C675b73C2e4D` | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` | **None** | — | — | no pool |
-| INTC | `0xB2000000000000000000004AFF16039bA04bdFBc` | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` | **None** | — | — | no pool |
+All thirteen tickers register: ten as `Venue.Slipstream` at **tick spacing 10** (fee 500), and
+COIN, CRCL and INTC as `Venue.None` because they have no pool on either factory or on Uniswap.
+`test/fork/B20RegistryConfig.t.sol` re-derives every pool below from factory B on each run, and
+asks each pool what factory it thinks it belongs to, so this table cannot silently go stale.
+
+Historical TVL is the raw-balance sum (now `poolTvlUsd`), not executable depth. Measured
+2026-09-07 at the latest block.
+
+| Ticker | Token | Chainlink feed | Venue | Pool (factory B, ts=10) | Historical TVL USD |
+|---|---|---|---|---|---|
+| NVDA | `0xb20000000000000000000078ee7ce2fE4908108C` | `0x04689a41629776563E6822F76f2e57D148d28513` | Slipstream | `0x853F5f1B92b16714Fe6CDA67CAad0856B83C7ab9` | **2,455,345** |
+| GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | Slipstream | `0xB1987CAD1682841b4b641d50E520777eC5Ab5542` | **1,597,689** |
+| AAPL | `0xb200000000000000000000C2e324d24d7eEcd1fb` | `0x787f13dEa48Db0897CbCDD985de77809D837F988` | Slipstream | `0xA3b1E3f9747065e2073722Ff4c9027d3eA4994F0` | **1,368,360** |
+| META | `0xb2000000000000000000008bC8786B856E61707C` | `0x6526aE6797A76123638b863AeE4dD27Ba4E4b27D` | Slipstream | `0xEAF57753BC382E0324a1D43F72E7027705a2273E` | **1,089,917** |
+| SPCX | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` | Slipstream | `0x0bf58fe0FAc935Ac69595c19B12Ba0d75E3F8c0E` | **208,271** |
+| SNDK | `0xb200000000000000000000397293Cb8cda9a10c5` | `0x388b0dC46C0Fb05A74BeE0994fa5b02c6Fcca2eA` | Slipstream | `0x5A8236f575471e7BfCA2C8462a200c28f737246E` | **188,143** |
+| TSLA | `0xb2000000000000000000001e800a7f5189430cD0` | `0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4` | Slipstream | `0x469337fDcc5E8f38e2E4B670B04F57865D13a7BB` | **169,762** |
+| AMZN | `0xb200000000000000000000d9192b6B456483C2E8` | `0x06A8E4b3aBB3B7543d8396FB2B763d22820cB295` | Slipstream | `0xd03Bc8C7F2FAedCe2aac81bF0444AEA08Ea06E9b` | **168,718** |
+| MSFT | `0xB200000000000000000000Ab99cFa739E253872B` | `0xeB10A6c9aa7E537aEd766C08c35Dae35B321b18c` | Slipstream | `0x7103eB3c9590d1281f7dc03b2A9EE27C39dF5D54` | **151,152** |
+| MSTR | `0xb2000000000000000000004884b426556b92883d` | `0xB3cE282CD188b35DA0E38D8Bc7d58e33173D202a` | Slipstream | `0x8b27f626ab668197000BC722A1012022CAeD10E2` | **117,519** |
+| COIN | `0xb200000000000000000000c85a31389D71F3ecfb` | `0x408e44f504A7371a345F03a73dDC96A4b48e8aa7` | **None** | — | no pool |
+| CRCL | `0xB20000000000000000000019f6E7C675b73C2e4D` | `0x0231cF2635D1E17bB5c2462cc7504Ba1fBd61f33` | **None** | — | no pool |
+| INTC | `0xB2000000000000000000004AFF16039bA04bdFBc` | `0xAB657C39bac0D5886250D70849e2E3E008F2EECB` | **None** | — | no pool |
+
+`fee` is not in this table because the Slipstream path does not read it — the pool is derived
+from the tick spacing. All ten pools are fee 500.
 
 All thirteen feeds are 8dp, live, and return sane prices — asserted by
 `test_allThirteenRegisterDisabledWithRealFeeds`, which replaces the stand-in feed the registry
 suite used while A-13 was open.
 
-**MSTR and SNDK have deployed pool contracts holding no USDC.** They register with a venue and
-are blocked by the depth gate rather than by `PoolNotSet`, which is a different failure with
-the same outcome; `test_anEmptyPoolIsAsBlockedAsAMissingOne` pins both.
+**The two empty Uniswap pools are gone from the picture.** MSTR and SNDK had deployed Uniswap
+pool contracts holding no USDC; on factory B both hold real depth on both sides. The property
+that an existing-but-empty pool is as blocked as a missing one still matters and is still
+pinned by `test_anEmptyPoolIsAsBlockedAsAMissingOne`, which now empties a live pool to show it
+rather than relying on a ticker happening to be empty.
 
 ### Which of these can actually be enabled
 
-The historical table cannot answer this. Configure and validate each stock's finite probe,
-then use `liquidityReport()` through `eth_call` on the deployment node. Any stock without
-a working quote remains disabled, regardless of its raw TVL.
-
-`ChipRounds` in this revision has no `_maxSpendFor()` or per-stock `maxImpactBps` check.
-It retains its independent `maxRoundBudget`, committed-quote accounting, Chainlink output
-floor, and isolated swap failures. The probe is an enablement-time check; it does not
-guarantee future depth. Keep the round cap conservative enough for a round allocated wholly
-to one stock. A dynamically measured per-stock spend ceiling is separate follow-up work.
+The former balance-based check reported ten of thirteen above $25,000, while the
+wrong-factory Uniswap table reported only two. Those figures describe historical
+token balances; they do not prove executable capacity or current enablement.
+Configure a probe per stock and read `liquidityReport()` through eth_call at launch.
+Settlement re-quotes the probe, sizes a bounded buy, and carries any unspent remainder.
+The Chainlink swap floor and independent round/stock hard caps apply as well.
 
 The three pool-less tickers **cannot be enabled at all**, at any threshold including zero,
 because `setEnabled(true)` requires a venue before it reaches the number
 (`test_theEnableGateBlocksThePoollessTickersByConstruction`). When their pools appear it is
-`setVenue`, `setDepthConfig`, then `setEnabled`, and the gate re-quotes.
+`setVenue`, `setDepthConfig`, then `setEnabled`, and the gate re-measures.
 
 ---
 
@@ -734,7 +816,7 @@ Post-deploy checks:
 
 ### 8. Furnace — **built**
 
-Needs: `MULTISIG`, `$CHIP`, `LIL_NOUNS`, and the two output collections.
+Needs: `MULTISIG`, `$CHIP`, `ChipBurner` (step 0), `CHIPLETS`, and the two output collections.
 
 **Deploy this last, and understand that it is not part of the money path.** The Furnace
 shares no storage, no inheritance and no call path with ChipRounds, ChipClaims, Pot or
@@ -746,13 +828,40 @@ matter; it is listed last because it depends on `$CHIP` existing.
 |---|---|---|
 | `multisig` | `MULTISIG` | Owner. Two-step ownership transfer. |
 | `chipToken_` | `$CHIP` | Burned alongside the fuel. Must exist first. |
-| `fuelCollection_` | **`CHIPLETS` — TBD** | The collection consumed as fuel. A plain ERC-721. Blocks the Furnace deploy until the Chiplets address exists — and that is now the *only* thing blocking it, since there is no hybrid-token integration work left. |
-| `basedRecipe` | `{outputCollection: BASED_NOUNS, lilCost, chipCost}` | Recipe id 0, `FORGE_BASED`. |
-| `darkRecipe` | `{outputCollection: DARK_NOUNS, lilCost, chipCost}` | Recipe id 1, `FORGE_DARK`. |
+| `chipBurnTarget_` | **`ChipBurner` from step 0** | Where the forge's $CHIP goes. Immutable, non-zero. **Not** `fuelCollection_`'s destination — burned fuel still goes to `0xdead` when the collection has no `burn`. |
+| `fuelCollection_` | `0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33` | The collection consumed as fuel. Verified: real ERC-721, exposes `burn(uint256)`, so forging **truly reduces its supply**. No longer a blocker. |
+| `basedRecipe` | `{outputCollection: BASED_NOUNS, fuelCost: 25, chipCost: <placeholder>}` | Recipe id 0, `FORGE_BASED`. **25 Chiplets.** The $CHIP portion is set at launch — see the note below. |
+| `darkRecipe` | `{outputCollection: DARK_NOUNS, fuelCost: 50, chipCost: <placeholder>}` | Recipe id 1, `FORGE_DARK`. **50 Chiplets** — twice the Based count, matching the 2.0x collection base a DarkNOUN earns at (`setCollectionBaseBps(DARK_NOUNS, 20000)` in step 5b). The $CHIP portion is set at launch, same as recipe 0. |
 
 Pass `exists: true, paused: false` in both structs; the constructor rewrites both flags, so
-their value in calldata is ignored. `lilCost` must be in `1..100` (`MAX_LIL_COST`) or the
-constructor reverts. **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
+their value in calldata is ignored. `fuelCost` must be in `1..100` (`MAX_FUEL_COST`) — 25 is well
+inside it — or the constructor reverts.
+
+> ### ⚠️ THE $CHIP PORTION CANNOT BE LEFT UNSET AT DEPLOY, AND THAT COSTS 48 HOURS
+>
+> Both Chiplet counts are decided — **25 for a Based Noun, 50 for a DarkNOUN** — so the **fuel**
+> zero-check is satisfied and the counts no longer block the deploy. But there is a **second**
+> zero-check: `_setRecipe` refuses `chipCost == 0`
+> as well, added in `launch-candidate-15` on the decision that **every forge must burn $CHIP**.
+> A free forge is a sink we do not want.
+>
+> So the Furnace cannot be deployed with the $CHIP amount blank. The sequence is:
+>
+> 1. Deploy with a deliberate **placeholder** `chipCost` — high enough that nobody would
+>    forge at it by accident, and recorded in LAUNCH_CONFIG as a placeholder.
+> 2. **Pause both recipes immediately** (`setPaused(0, true)`, `setPaused(1, true)`) so nobody
+>    can forge at the placeholder at all. Pausing is not timelocked, so this is instant.
+> 3. At launch, once the token price is observed: `queueRecipeChange(0, 25, <real chipCost>)`
+>    and `queueRecipeChange(1, 50, <real chipCost>)` → **48 hours** →
+>    `executeRecipeChange(0)` and `executeRecipeChange(1)`, then unpause both.
+>
+> **Plan the 48 hours.** This is the same timelock every other economic parameter gets, and it
+> is deliberate — but it means the real forge price cannot land on launch day unless it was
+> queued two days earlier. Queue it against the observed price as soon as that price exists.
+>
+> The **DarkNOUN** recipe needs the same placeholder-and-pause treatment as recipe 0 — its
+> `fuelCost` of 50 is settled, but its `chipCost` is discovered at the same moment recipe 0's is.
+> **`chipCost` must be non-zero** — a recipe that forges for fuel alone is
 refused by both the constructor and `queueRecipeChange` (`BadConfig`). Every forge burns $CHIP;
 that was decided in response to external review batch 9, on the grounds that a free forge is a
 sink the protocol does not want and an abuse vector.
@@ -793,7 +902,7 @@ user is about to forge out from under them. Deposit in the order you want tokens
 **Changing prices — 48h timelock, two transactions:**
 
 ```
-queueRecipeChange(recipeId, lilCost, chipCost)     // emits RecipeChangeQueued(.., executableAt)
+queueRecipeChange(recipeId, fuelCost, chipCost)    // emits RecipeChangeQueued(.., executableAt)
 ... wait 48h ...
 executeRecipeChange(recipeId)                       // emits RecipeChangeExecuted
 ```
@@ -961,3 +1070,64 @@ forge verify-contract --chain base <address> src/FeeSplitter.sol:FeeSplitter \
   --constructor-args $(cast abi-encode "constructor(address,address,address,uint32,uint32)" \
   $MULTISIG $POT $OPS_WALLET 2000 2000)
 ```
+
+## Issue #5: executable-depth configuration
+
+`poolLiquidityUsd(token)` now validates a configured finite quote-to-stock buy probe and
+returns its input notional in 18-decimal USD, or zero. `poolTvlUsd` is the renamed raw
+balance metric and is informational only. Historical TVL tables cannot establish
+enablement or a spending ceiling. Recalibrate `minLiquidityUsd` in validated probe USD.
+
+Before enabling, the multisig calls
+`setDepthConfig(token, quoter, probeAmount, maxDeviationBps, maxFeedAge)`.
+`probeAmount` is in raw quote-token units (USDC: 6dp). Start with a 200-bps deviation
+including fees (maximum 500) and 120-hour feed age (minimum 72 hours, never disabled).
+Select the finite probe and minimum together based on actual executable quotes, then
+validate the resulting buy size and gas costs. No probe, failed/zero/malformed quote,
+invalid pool state, unusable feed, future timestamp, or stale feed means a failed gate,
+even when the minimum is zero. Changing venue clears probe configuration; changing probe
+configuration disables the stock until explicitly re-enabled.
+
+Canonical Base deployments, checked against their official sources:
+
+| Venue/factory | QuoterV2 |
+|---|---|
+| Uniswap V3 `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` | `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a` |
+| Slipstream A `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A` | `0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0` |
+| Slipstream B `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` (B20) | `0x514c8B5f54112481E28028F1166Bd78501089259` |
+
+Sources: [Uniswap deployments](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments)
+and [Aerodrome deployments](https://github.com/aerodrome-finance/slipstream#deployments).
+The factory getter check catches mismatches but does not prove canonical bytecode;
+governance must verify the selected deployment.
+
+`poolLiquidityUsd`, `clearsMinLiquidity`, `liquidityReport`, and `maxSpendFor` are non-view
+because canonical quoters simulate reverting swaps. Use `eth_call` for off-chain reads,
+not EVM STATICCALL. `CheckDepth.s.sol` already uses eth_call. Allow roughly 1.4M gas per
+registry report entry and 1.5M for a round's depth call; a quote itself is capped at 1M.
+
+`ChipRounds` re-quotes at settlement. `maxImpactBps` is an additional conservative
+fraction of the validated probe notional, not a constant-product impact estimate:
+the default 25 bps of a $1,000 probe permits $2.50 per buy. Do not extrapolate TVL from
+this result. `maxSpendFor` clamps to the independent round cap and any tighter stock cap;
+settlement also clamps to its slice and committed quote. Set the hard round limit with
+`setMaxRoundBudget`; the constructor defaults to 10,000 whole quote tokens. The launch
+runbook's $1,000 policy uses `setMaxRoundBudget(1_000e6)`. `setMaxStockSpend(stock, amount)`
+sets a tighter stock limit; zero falls back to the round cap. Neither cap is inferred
+from a quote. The existing three-argument `setRoundParams` remains valid.
+
+Failed depth measurements produce an isolated `StockSkipped(..., "no depth")`, leaving
+committed quote untouched. Successful swaps retain actual balance-delta accounting;
+unspent slices return to the Pot. Chainlink minimum swap output is unchanged. The depth
+gate's mandatory freshness remains active if the separate round freshness check is off.
+
+Spot manipulation, flash liquidity, tick-crossing gas, quoter availability, issuer transfer
+policies, stale-but-within-window marks, and quote-token depegs remain limitations. This
+is not a TWAP or an anti-MEV guarantee; independent caps remain necessary. A stock's
+enabled flag may persist as the market changes, but every buy now re-quotes capacity.
+
+The factory-B deployment is named Quoter in its deployment list but exposes the
+QuoterV2 tuple ABI on chain; this is asserted by the real B20 fork test. Settlement
+requires enough gas for the full depth allowance plus EIP-150 overhead and bookkeeping
+(approximately 1.73M remaining at the probe). Underfunded calls revert without marking
+the stock settled, so they can be retried with sufficient gas.

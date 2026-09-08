@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test, console2} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {StockRegistry} from "src/StockRegistry.sol";
+import {ChipRounds} from "src/ChipRounds.sol";
 import {Venue} from "src/interfaces/IStockRegistry.sol";
 import {ISlipstreamFactory} from "src/interfaces/IAmmFactories.sol";
 import {IUniswapV3QuoterV2, ISlipstreamQuoterV2} from "src/interfaces/IVenueQuoters.sol";
@@ -21,11 +22,13 @@ contract StockRegistryDonationForkTest is Test {
     uint128 internal constant PROBE = 100e6;
 
     StockRegistry internal registry;
+    ChipRounds internal rounds;
     address internal multisig = makeAddr("multisig");
 
     function setUp() public {
         vm.createSelectFork(vm.envString("BASE_RPC_URL"));
         registry = new StockRegistry(multisig, USDC, UNI_FACTORY, SLIP_FACTORY);
+        rounds = new ChipRounds(multisig, address(registry), address(1), address(2), address(3), 0, address(4));
         console2.log("Donation fork block", block.number);
     }
 
@@ -72,6 +75,7 @@ contract StockRegistryDonationForkTest is Test {
         uint256 depthBefore = registry.poolLiquidityUsd(WETH);
         assertEq(depthBefore, 100e18, "finite probe clears its Chainlink bound");
         assertFalse(registry.clearsMinLiquidity(WETH));
+        assertEq(rounds.maxSpendFor(WETH), 250_000, "25 bps of the $100 probe in USDC units");
 
         address donated = stockSide ? WETH : USDC;
         uint256 donation = stockSide ? 1_000 ether : 1_000_000e6;
@@ -84,6 +88,7 @@ contract StockRegistryDonationForkTest is Test {
         assertEq(_state(pool), stateBefore, "liquidity and slot0 unchanged");
         assertEq(_quote(slip), quotedBefore, "actual output quote unchanged, not just capped metric");
         assertEq(registry.poolLiquidityUsd(WETH), depthBefore);
+        assertEq(rounds.maxSpendFor(WETH), 250_000, "donations cannot raise the production ceiling");
         assertFalse(registry.clearsMinLiquidity(WETH));
         vm.prank(multisig);
         vm.expectRevert(

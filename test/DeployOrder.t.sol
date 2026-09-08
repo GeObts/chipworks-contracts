@@ -127,8 +127,12 @@ contract DeployOrderTest is Test {
     /* ------------------------------------------------------------------ */
 
     function test_step4_anUnpricedCollectionCannotBeActivated() public {
-        ChipActivation act =
-            new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        ChipActivation act = new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
 
         based.mint(alice, 1);
         vm.startPrank(alice);
@@ -143,8 +147,12 @@ contract DeployOrderTest is Test {
 
     /// @notice And queueing alone is not enough — the 48h execute is what makes it live.
     function test_step4_queueingWithoutExecutingLeavesItClosed() public {
-        ChipActivation act =
-            new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        ChipActivation act = new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
 
         vm.prank(multisig);
         act.queueCosts(address(based), [uint256(1 ether), 2 ether, 3 ether, 4 ether, 5 ether]);
@@ -196,6 +204,7 @@ contract DeployOrderTest is Test {
         Furnace furnace = new Furnace(
             multisig,
             address(chip),
+            0x000000000000000000000000000000000000dEaD,
             address(lil),
             Furnace.Recipe({
                 exists: true, paused: false, outputCollection: address(based), fuelCost: 3, chipCost: 1 ether
@@ -231,8 +240,12 @@ contract DeployOrderTest is Test {
         t.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
         t.feeBps = [uint32(50), 100, 200, 500, 900];
         t.bountyBps = 200;
-        ChipActivation act =
-            new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        ChipActivation act = new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
         vm.prank(multisig);
         act.queueCosts(address(based), [uint256(0), 0, 0, 0, 0]);
         vm.warp(block.timestamp + 48 hours);
@@ -336,9 +349,22 @@ contract DeployOrderTest is Test {
     {
         StockRegistry registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
         pot = new Pot(multisig, address(usdc), address(uniFactory));
-        act = new ChipActivation(multisig, address(chip), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
+        act = new ChipActivation(
+            multisig,
+            address(chip),
+            0x000000000000000000000000000000000000dEaD,
+            [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+        );
         claims = new ChipClaims(multisig, address(registry));
-        rounds = new ChipRounds(multisig, address(registry), address(pot), address(act), address(claims), 5_000 ether);
+        rounds = new ChipRounds(
+            multisig,
+            address(registry),
+            address(pot),
+            address(act),
+            address(claims),
+            5_000 ether,
+            0x000000000000000000000000000000000000dEaD
+        );
 
         vm.startPrank(multisig);
         act.queueCosts(address(based), [uint256(0), 0, 0, 0, 0]);
@@ -347,7 +373,7 @@ contract DeployOrderTest is Test {
 
         pot.setRewards(address(rounds));
         rounds.setCollectionBaseBps(address(based), 10_000);
-        rounds.setRoundParams(24 hours, 2 hours, 250e6, 10_000e6);
+        rounds.setRoundParams(24 hours, 2 hours, 250e6);
         // deliberately NOT claims.setRounds(address(rounds))
         vm.stopPrank();
     }

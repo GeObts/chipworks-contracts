@@ -120,7 +120,33 @@ removal loop cost more than the budget had spare. The set is reconstructible fro
 | `FeeSplitter.sol` | 178 | transiently, **plus ETH escrow** | Three-way split of every inflow: Pot / ops / POL |
 | `Pot.sol` | 103 | **yes, round budget** | Holds round budget, converts inflows to USDC |
 | `ClaimRouter.sol` | 264 | **never** | Batches many Chipworks claims into one transaction. Sweep is multisig-only |
+| `ChipBurner.sol` | 59 | **yes, $CHIP awaiting destruction** | **Owns the $CHIP token** so burns are real. Permissionless `burnAll`; two multisig pass-throughs. **New — see below** |
 | `adapters/ClutchVaultAdapter.sol` | 76 | no | **RETIRED, not deployed.** The old Clutch seam, kept as an alternative implementation |
+
+**`ChipBurner` is the newest contract and the one with the least review history**, so it is
+worth naming what to attack. It becomes the **owner of $CHIP**, which is the largest single
+authority anywhere in this system — `transferOwnership` on the token sweeps up `burn`,
+`updateTokenURI`, `updateMintRate`, `lockPool`/`unlockPool`, `mintInflation` and
+`transferOwnership` itself.
+
+The design answer is that the wrapper deliberately exposes almost none of it: `burnAll`
+(permissionless, can only destroy its own balance), `updateTokenUri` and
+`transferTokenOwnership` (multisig). There is **no `transfer`, no sweep, no rescue and no
+generic `call`**, so $CHIP that arrives is structurally burn-only — not even the multisig can
+move it. `mintInflation` is not exposed at all, on the grounds that a permissionless burner
+that can also mint is a contradiction; `transferTokenOwnership` is the escape hatch that makes
+leaving it out safe rather than permanent.
+
+Worth attacking specifically:
+- Can any path move $CHIP out of the Burner without destroying it? (The claim is no.)
+- `burnAll` verifies by reading `totalSupply` before and after and reverts unless it fell —
+  can a token make that check pass while not really burning?
+- The three token signatures are encoded **by string**. A mismatch is not discovered until the
+  first burn, by which point the token is already owned by a contract that cannot drive it.
+  LAUNCH_CONFIG §6.6 carries the pre-hand-off ABI check; the ordering is the risk, not the code.
+- `chipBurnTarget` is immutable on all three burning contracts. Confirm there is genuinely no
+  setter, and that `0xdead` (for NFTs) and `chipBurnTarget` (for $CHIP) are never confused —
+  an NFT sent to the Burner is stranded forever. `test/BurnRouting.t.sol`.
 
 Money flows: fee sources → `FeeSplitter` → `Pot` (+ ops, + POL) → `Pot.convert()` → round
 budget → `ChipRounds` buys stock → credits → `claim` → holders. Unclaimed after 30 days →
@@ -141,10 +167,11 @@ holds it at rest except the NounLoans pool, which is seeded by the multisig.
 | Chainlink ETH/USD | `0x7104…Bb70` | Real heartbeat | on fork |
 | Chainlink AERO/USD | `0x4EC5…cfF0` | Real heartbeat | on fork |
 | Uniswap v3 factory / SwapRouter02 | `0x3312…FDfD` / `0x2626…e481` | Standard | on fork |
-| Aerodrome Slipstream factory / NPM | `0x5e7B…809A` / `0x8279…5b72` | `mint` keyed by tickSpacing + sqrtPriceX96 | **selector-probed against deployed bytecode** |
+| Aerodrome Slipstream factory **B** / router **B** | `0xf8f2…061Ef` / `0x698C…A92F` | **The B20 stock venue.** Every stock pool is here, tick spacing 10. Router B is the only one that can reach them | **real fork buy**, `test/fork/FactoryBRouter.t.sol` |
+| Aerodrome Slipstream factory **A** / NPM | `0x5e7B…809A` / `0x8279…5b72` | **The POL venue**, and a different book. `mint` keyed by tickSpacing + sqrtPriceX96. Holds no B20 pool | **selector-probed against deployed bytecode** |
 | AERO | `0x9401…8631` | Standard | on fork |
 | ~~Clutch soft-staking vault~~ | — | **NO LONGER A DEPENDENCY.** Replaced by `ChipActivation`; see §7 | n/a |
-| $CHIP | _TBD_ | Standard ERC-20, Doppler/Bankr launch, **no `burn()`** | at launch |
+| $CHIP | _TBD_ | Standard ERC-20, Doppler/Bankr launch. **Owner-gated `burn()`**; `ChipBurner` becomes the owner at launch, so burns are real and `totalSupply` falls | at launch |
 
 Two dependency facts that shape the whole codebase:
 
@@ -609,7 +636,7 @@ Four properties to attack, each of which is structural rather than policy:
   consumed. Check the case where $CHIP's `balanceOf(0xdead)` is itself manipulable.
 
 Also worth a look: duplicate detection in `lilIds` is an O(n²) inner loop bounded by
-`MAX_LIL_COST = 100`; recipe cost changes are behind a 48h timelock with events at queue and
+`MAX_FUEL_COST = 100`; recipe cost changes are behind a 48h timelock with events at queue and
 execute, while **pausing is deliberately immediate** because halting a recipe is a safety
 action; and an NFT that arrives via `safeTransferFrom` is accepted but never registered as
 stock, so it cannot silently become someone's output.

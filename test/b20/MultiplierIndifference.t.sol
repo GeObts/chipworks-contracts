@@ -7,6 +7,7 @@ import {Venue} from "../../src/interfaces/IStockRegistry.sol";
 
 import {MockAggregatorV3} from "../mocks/MockAggregatorV3.sol";
 import {MultiplierToken} from "../mocks/MultiplierToken.sol";
+import {MockDepthQuoter} from "test/mocks/MockDepthQuoter.sol";
 
 /// @title MultiplierIndifferenceTest
 /// @notice A B20 token is NOT permanently one share. Prove nothing here assumes it is.
@@ -73,6 +74,11 @@ contract MultiplierIndifferenceTest is ChipRewardsBase {
 
         router.setRate(address(usdc), address(msftc), 1e8, MSFT_USD * 1e6);
         msftc.mint(address(router), 1_000_000e8);
+
+        // Depth for the impact trim. A rebasing token is the interesting case here: the
+        // pool's balance rebases with everything else, so measured depth moves with the
+        // multiplier — which is exactly the indifference this suite is checking.
+        _seedPoolDepth(address(msftc), pool, MSFT_USD, STOCK_DEC);
     }
 
     /// @dev One Noun, all weight on MSFTc, one finalized round.
@@ -135,6 +141,8 @@ contract MultiplierIndifferenceTest is ChipRewardsBase {
 
         // Dividend converts to shares: the token is worth 25% more before we buy.
         msftFeed.setAnswer(int256((MSFT_USD * 125 / 100) * 1e8));
+        (address q,,,) = registry.depthConfig(address(msftc));
+        MockDepthQuoter(q).setQuote(address(msftc), 10_000_000e6, 1e8, (MSFT_USD * 125 / 100) * 1e6);
         router.setRate(address(usdc), address(msftc), 1e8, (MSFT_USD * 125 / 100) * 1e6);
 
         rounds.settleStock(id, address(msftc));

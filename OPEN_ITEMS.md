@@ -446,7 +446,7 @@ pins that.
 
 ---
 
-## 17. NEW: fixed 2% slippage is a cap-raise precondition
+## 17. RESOLVED (superseded by item 26): fixed 2% slippage is a cap-raise precondition
 
 External review (TRIAGE EXT-R-L-1). `defaultMaxSlippageBps` is 2%, flat, per stock, and the
 buy is a single `exactInputSingle` on a public mempool. At launch-cap budgets that is fine —
@@ -471,7 +471,7 @@ for.
 
 ---
 
-## 18. NEW: permissionless `convert` is MEV-exposed at scale
+## 18. RESOLVED: permissionless `convert` is MEV-exposed at scale
 
 External review batch 2 (TRIAGE SEC-POT-002). `Pot.convert` is permissionless and executes
 against whatever the pool says when it lands, bounded only by the Chainlink haircut. At
@@ -561,6 +561,13 @@ the Furnace already burns plain ERC-721s with `ownerOf` then `transferFrom` to `
 
 The integration is now: put the Chiplets address in `fuelCollection_`, set `fuelCost` per
 recipe, deploy. No adapter, no seam.
+
+**The counts are settled: 25 Chiplets for a Based Noun, 50 for a DarkNOUN.** The Dark figure
+was the last thing outstanding here. Twice the Based count, matching the 2.0x collection base a
+DarkNOUN earns at, so the forge ratio and the earning ratio agree rather than quietly pulling
+against each other. DEPLOY.md step 8 and LAUNCH_CONFIG §6 carry them. The `chipCost` on both
+recipes is still discovered from the observed launch price and still costs a 48-hour timelock,
+which is the only part of the recipe that is not decided.
 
 
 ---
@@ -712,17 +719,250 @@ that holds every unclaimed credit is a small thing to be missing and not a nothi
 withdrawn. If the artifact is genuinely gone, the honest resolution is a fresh pass over
 `ChipClaims` rather than assuming four unread lows were immaterial.
 
-## Issue #5 — Donation-resistant registry gate
+---
 
-The proposed fix replaces the balance-derived gate with a configured finite canonical
-venue quote. See `review/ISSUE_5.md` for API scope, evidence, and validation. Raw TVL is
-now `poolTvlUsd` and cannot authorize enabling.
+## 26. Historical impact trim — measurement corrected by issue #5
 
-Before deployment, choose probes, minimum USD thresholds, canonical quoters, and round
-caps per the revised DEPLOY.md and LAUNCH_CONFIG.md. Re-evaluate gas on the production
-node, including B20 precompile execution. A factory getter alone is not a bytecode audit.
+**Issue #5 update:** the discussion below records the earlier balance-based design.
+The fix uses finite executable quotes and restores independent hard caps. The old
+TVL-derived figures and uncapped-round rationale do not describe the fixed implementation.
 
-A dynamic per-stock spend ceiling remains open: this target revision has no
-`_maxSpendFor` or `maxImpactBps` implementation. This gate-only fix neither adds one nor
-claims one exists. Spot manipulation/flash liquidity, changes after enablement, and
-keeper gas availability remain explicit limitations. No audit status is changed here.
+**Closed in `launch-candidate-16`.** `ChipRounds` now sizes every per-stock buy from measured
+pool depth: a buy spends at most `poolLiquidityUsd(stock) * maxImpactBps / BPS`, defaulting to
+25 bps with a per-stock override and a hard `MAX_IMPACT_CEILING_BPS` of 500.
+
+**This is the work items 17 and 18 both deferred**, and they said it should be solved once
+rather than twice. It was: the stock-buy path now has depth-derived sizing, which is what
+EXT-R-L-1 asked for, and it is the deferred half of SEC-POT-002. Both are re-triaged as FIXED
+in TRIAGE rather than accepted-with-a-cap.
+
+**Three consequences worth keeping in mind:**
+
+1. **The round cap could then come off** without reopening either finding — that was its
+   written precondition, and it is now met.
+2. **Thin names distribute instead of skipping.** Before the trim, a slice too large for its
+   pool bought nothing at all. Against the depth measured in A-22 that would have meant large
+   rounds skipping most of the B20 set.
+3. **Throughput per stock is now set by liquidity, not by a parameter.** At 25 bps a $130k pool
+   takes ~$325 a round. That is the honest ceiling of the current market, and raising
+   `maxImpactBps` does not raise it safely — it just moves the cost from "carried to the next
+   round" to "paid to a sandwicher". The way to distribute more is deeper pools.
+
+**Carry is to the Pot, not earmarked per stock** — the remainder leaves through the existing
+unspent→Pot path and is re-split next round. No new money-path storage, which was the design
+question flagged when this item was opened.
+
+---
+
+## 27. RESOLVED: the $CHIP Burner exists, and the burns are real
+
+**Asked for during the Chiplet-earning work**: whether the $CHIP Burner is built yet, or still
+pending a Bankr ownership-authority answer, with the Chiplet-activation burn to route through
+it "same as all other $CHIP burns".
+
+**The answer this item originally gave was wrong, and the way it was wrong is the point.** It
+said a Burner of ours could not create a true burn because a burn needs a function on the TOKEN
+and Bankr's Doppler $CHIP exposes none. The premise was half right: the token has no *public*
+`burn`, but it has an **owner-gated** one, and ownership lands with us at launch. "No public
+burn" was read as "no burn". A contract we own can call it.
+
+**`src/ChipBurner.sol` is that contract**, and it is built. It becomes the token's owner at
+launch, and every app burn path sends $CHIP to it instead of to `0xdead`. `burnAll()` is
+permissionless, verifies the burn by reading `totalSupply` before and after, and **`totalSupply`
+genuinely falls**.
+
+**All five paths moved together, in one change**, which is what this item asked for when it was
+still open:
+
+| Path | Contract |
+|---|---|
+| Activate a Noun | `ChipActivation` |
+| Activate a flat-rate token (Chiplets) | `ChipActivation` |
+| Upgrade a tier | `ChipActivation` |
+| Forge, $CHIP portion | `Furnace` |
+| Change a split | `ChipRounds` |
+
+The destination is `chipBurnTarget`, an **immutable** constructor argument on all three
+contracts with a zero-check and no setter anywhere. Routing one path through the Burner and
+leaving four at `0xdead` would have split the accounting and made `chipBurnedToDead()` silently
+incomplete — the failure this item explicitly warned against, and it was avoided.
+
+**`0xdead` is still correct for NFTs, and the two are separate fields.** `BURN_ADDRESS` stays
+`0xdead` on all three contracts: it is where an NFT goes when its collection exposes no `burn`,
+and an NFT sent to the Burner would be **stranded forever** — the Burner has no ERC-721 surface.
+`test/BurnRouting.t.sol` exists to keep them apart.
+
+**What did not become redundant.** `effectiveChipSupply()` still earns its place: it counts
+$CHIP queued at the Burner as already out of circulation, so the published figure does not jump
+when a keeper happens to call `burnAll()`. The **aggregator filing** is what became unnecessary
+— see BURN_VISIBILITY.md, which now carries the one case where it is still worth doing.
+
+**Remaining work is operational, not code**: LAUNCH_CONFIG §6.6 carries the ownership hand-off,
+including the ABI check that must happen **before** it. Until `chip.owner()` is the Burner,
+`burnAll()` reverts and burns simply accumulate — nothing is lost, the burn is deferred.
+
+---
+
+## 28. ACCEPTED BY DESIGN: the depth gate is point-in-time, and depth drifts
+
+**Ruled on by Bankr at the `launch-candidate-22` re-scan: the gate stays point-in-time, and
+monitoring is operational.** Their words: *"keep `setEnabled` as the administrative gate. If
+continuous pool monitoring is desired, manage it via off-chain keeper alerts or administrative
+scripts that trigger `setEnabled(stock, false)` if sustained pool drain occurs."*
+
+That is exactly the mitigation already written into LAUNCH_CONFIG §8, so **nothing needs
+building and this item is closed as accepted-by-design.** Their reasoning for refusing a
+continuous gate — that an on-chain depth read inside the buy path is manipulable and would let
+an actor suppress liquidity to force a skip — is recorded in TRIAGE, **along with the fact that
+the buy path already contains one.** See item 29; that part is not settled.
+
+The original description follows, because the gap itself has not gone away — it is being
+carried knowingly rather than fixed.
+
+**`StockRegistry.setEnabled(token, true)` checks depth once, at the moment of enabling, and
+nothing re-checks it afterwards.** A stock enabled at $200,000 of measured depth stays enabled
+at $20,000, at $2,000, and at zero. `clearsMinLiquidity()` will say `false` the whole way down
+while `isEnabled()` keeps saying `true`, and rounds keep buying it.
+
+**Two ways to reach the inconsistent state, and only one of them was ever proposed for a fix:**
+
+| How | Covered? |
+|---|---|
+| Governance **raises** `minLiquidityUsd` above a stock's measured depth | An external PR proposes re-checking inside `setMinLiquidityUsd`. **Not merged** — see below |
+| The pool **drains** below an unchanged `minLiquidityUsd` | **Nothing addresses this**, and it is the far more likely one |
+
+The second is the real gap. Nobody has to do anything for it to happen — one LP leaving is
+enough, and these are not deep pools by the standards of the rest of DeFi.
+
+### Why it is not a hole in the money path
+
+**The depth gate is not the per-buy protection and never was.** What actually stands between a
+round and a bad fill is `ChipRounds._minOutFor`: every buy must clear the stock's Chainlink mark
+less `maxSlippageBps` (2% by default), and a buy that cannot is refused **in full** by the
+router, with the whole slice carrying back to the Pot. That check reads live state on every
+buy and cannot go stale.
+
+So a drained pool does not produce a bad purchase. It produces a stock that **silently stops
+filling** — the slice carries, round after round, and nothing announces why. That is a
+**liveness and observability** problem, not a solvency one, which is why it is an open item
+rather than a blocker.
+
+### The mitigation until it is built
+
+**Operational, and it belongs on the deploy checklist:**
+
+- **The keeper reads `liquidityReport()` on every cycle** — it is one call that returns every
+  registered stock, its measured depth, its threshold and whether it clears — and **alerts on
+  any stock where `isEnabled() == true` and `clearsMinLiquidity() == false`.** That pair
+  disagreeing is the whole signal, and it is cheap to watch.
+- **`setEnabled(token, false)` is the response**, it is instant and not timelocked, and it is
+  reversible the moment depth returns.
+- **Watch for the softer signal too**: a stock that skips repeatedly on `_minOutFor` without
+  its feed being stale is a pool that has gone thin, and it will show up there before anybody
+  looks at the report.
+
+LAUNCH_CONFIG §8 already tells the keeper to watch for stocks skipping on a stale feed. This is
+the second thing to watch for, and it has the opposite cause.
+
+### Why the open PR was not merged
+
+An external PR (#4) re-checks the gate inside `setMinLiquidityUsd` and disables an enabled stock
+that no longer clears. The change is fail-closed, `onlyOwner` is untouched, it merges cleanly
+and its tests pass — it is competent work.
+
+It was held for two reasons, neither of them about quality:
+
+1. **It closes the smaller of the two doors.** The drift case, which is the likely one, is
+   untouched by it.
+2. **It changes `StockRegistry` in the middle of a live re-scan.** RESCAN_NOTE tells Bankr that
+   `StockRegistry`'s runtime bytecode is unchanged since `launch-candidate-14`, and that claim
+   is load-bearing — it is why two of the five contracts are in scope for their environment
+   rather than their code. Merging mid-flight would invalidate the note in the reviewer's hands.
+
+**The question went to Bankr instead**, in RESCAN_NOTE §4, and the answer is above: leave it
+operational. So the drift case is closed by the keeper alert, not by code.
+
+**PR #4 IS NOT DISPOSED OF BY THAT RULING, AND IT WOULD BE EASY TO THINK IT WAS.** Bankr was
+asked whether the gate should be **continuous** — re-checked inside `settleStock` or `_buy` —
+and said no. PR #4 does not do that. It re-checks at **administrative** time, inside
+`setMinLiquidityUsd`, which is the zone Bankr explicitly endorsed keeping (*"keep `setEnabled`
+as the administrative gate"*). The ruling neither blesses nor rejects it, because it answers a
+question about a different place in the code.
+
+What remains true of PR #4 either way:
+
+- it closes only the raise-the-threshold door, never the drift door, which the keeper now
+  covers anyway;
+- it changes `StockRegistry`, whose unchanged-since-`-14` status was load-bearing during the
+  re-scan — **that constraint expires now the re-scan is complete**;
+- its silent-disable-on-unreadable-feed asymmetry against `setEnabled`'s loud revert is still
+  unresolved and still undiscussed in the PR.
+
+So it is now a small optional tidy-up in a zone the reviewer has blessed, not a fix the system
+needs. **Merging it would still not close this item** — the drift case is closed by the keeper
+alert, and PR #4 does not touch it.
+
+---
+
+## 29. NEW: the buy path already reads manipulable pool depth — and the reviewer's argument assumed it did not
+
+**Raised by us, out of Bankr's own `-22` reasoning.** It is the one thing the re-scan got wrong,
+and it is in the reasoning rather than the verdict.
+
+Bankr refused a continuous depth gate partly on this ground:
+
+> *"an actor could execute a temporary swap or flash loan to suppress measured liquidity right
+> before `settleStock` runs, forcing legitimate stock purchases to be skipped."*
+
+**That is a description of code that already shipped, at `launch-candidate-16`.**
+`ChipRounds.settleStock` calls `_maxSpendFor(stock)`, which staticcalls
+`registry.poolLiquidityUsd(stock)` — **historically live pool token balances; executable probes after issue #5** — and a zero reading skips the
+stock outright with reason `"no depth"`. The depth-aware impact trim (item 26, which closed
+EXT-R-L-1 and SEC-POT-002) put a manipulable depth reading inside the execution loop, and the
+`-22` reasoning treats the execution loop as if it were clean.
+
+**It was asked at `-19` and never answered.** That note asked whether `_maxSpendFor` could be
+made to **over**-report depth. The `-22` reasoning raises the mirror image — **under**-reporting
+— and neither direction has a verdict.
+
+### Our read of severity, pending theirs
+
+- **Griefing and liveness, not theft.** A suppressed reading trims or skips; nothing is spent,
+  and the slice carries back to the Pot through `finalizeRound` to be re-split next round. No
+  funds move and no holder loses a credit. This is why it is not being treated as a deploy
+  blocker on our side.
+- **A flash loan is the wrong tool.** `poolLiquidityUsd` values *both* sides — stock at the
+  Chainlink mark, USDC at par — so an ordinary swap rebalances the pool rather than draining it
+  and barely moves the total. The lever that works is **an LP withdrawing liquidity** before a
+  settle and re-adding after, which requires being that LP. On the thinner B20 pools
+  (MSTR at $117k, MSFT at $151k) that is a small set of people.
+- **Repeatable, and cheap for a dominant LP.** The cost is one withdraw/re-add per round; the
+  effect is that one stock takes no slice that round.
+
+### What needs to happen
+
+**This goes back to Bankr as a targeted question, not as a fix.** We are not guessing at the
+answer, because their recommendation — keep depth out of the live execution path — may mean the
+trim itself should change, and that would be a code change before deploy.
+
+The question to put:
+
+> `ChipRounds.settleStock` already reads `poolLiquidityUsd` per buy via `_maxSpendFor`, and
+> skips the stock when it reads zero. Does the §4 objection apply to it? If so, what shape do
+> you want: leave it, bound how far the ceiling may move between rounds, or drop the trim and
+> rely on `_minOutFor` alone?
+
+**Until that is answered, §4's conclusion is not settled**, and this item is the reason. The
+verdict on the five contracts stands regardless — nothing here is a finding against the code
+that was scanned.
+
+## Issue #5 — donation-resistant enablement and spending
+
+The proposed fix quotes a finite probe for each stock, re-quotes at settlement, and applies
+independent round/stock caps. See `review/ISSUE_5.md` for validation and residual risks.
+Raw balances are informational TVL only. This supersedes historical statements in items
+26/28 that a balance-derived trim establishes executable capacity or justifies removing caps.
+
+Review deployment probe sizes, thresholds, canonical factory/quoter versions, mandatory
+feed ages, and keeper gas on the target node. Flash liquidity and spot manipulation remain
+possible; this change addresses donation-based inflation and does not alter audit status.

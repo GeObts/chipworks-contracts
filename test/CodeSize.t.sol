@@ -73,10 +73,24 @@ contract CodeSizeTest is Test {
         _check("Pot", pot);
         _check("ClutchVaultAdapter", adapter);
 
-        _check("ChipRounds", address(new ChipRounds(multisig, registry, pot, adapter, claims, 5_000 ether)));
+        _check(
+            "ChipRounds",
+            address(
+                new ChipRounds(
+                    multisig, registry, pot, adapter, claims, 5_000 ether, 0x000000000000000000000000000000000000dEaD
+                )
+            )
+        );
         _check(
             "ChipActivation",
-            address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]))
+            address(
+                new ChipActivation(
+                    multisig,
+                    _erc20(),
+                    0x000000000000000000000000000000000000dEaD,
+                    [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+                )
+            )
         );
         _check("FeeSplitter", address(new FeeSplitter(multisig, multisig, multisig, 2_000, 2_000)));
         _check("POLTreasury", address(new POLTreasury(multisig, _erc20(), _nft(), multisig, _factory(), multisig)));
@@ -86,8 +100,14 @@ contract CodeSizeTest is Test {
         loanTerms.length = [uint64(7 days), 14 days, 30 days, 90 days, 180 days];
         loanTerms.feeBps = [uint32(50), 100, 200, 500, 900];
         loanTerms.bountyBps = 200;
-        address activation =
-            address(new ChipActivation(multisig, _erc20(), [uint32(10_000), 12_500, 16_000, 20_000, 33_300]));
+        address activation = address(
+            new ChipActivation(
+                multisig,
+                _erc20(),
+                0x000000000000000000000000000000000000dEaD,
+                [uint32(10_000), 12_500, 16_000, 20_000, 33_300]
+            )
+        );
         _check("NounLoans", address(new NounLoans(multisig, _erc20(), multisig, multisig, activation, loanTerms)));
 
         _check("Anvil", address(new Anvil(multisig, multisig, 2_500)));
@@ -101,6 +121,7 @@ contract CodeSizeTest is Test {
         return new Furnace(
             multisig,
             _erc20(),
+            0x000000000000000000000000000000000000dEaD,
             _nft721(),
             Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), fuelCost: 5, chipCost: 1 ether}),
             Furnace.Recipe({exists: true, paused: false, outputCollection: _nft721(), fuelCost: 10, chipCost: 2 ether})

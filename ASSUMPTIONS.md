@@ -394,13 +394,38 @@ cast call 0xB20000000000000000000019f6E7C675b73C2e4D "decimals()(uint8)" -r $BAS
 cast call 0xB20000000000000000000019f6E7C675b73C2e4D "symbol()(string)"  -r $BASE_RPC_URL
 ```
 
-### A-16 · The liquidity is NOT on Aerodrome Slipstream — **BLOCKER, verified**
+### A-16 · The liquidity is NOT on Aerodrome Slipstream — **SUPERSEDED BY A-22. The conclusion was wrong.**
+
+> ## ⚠️ READ A-22 FIRST. THIS ENTRY IS KEPT FOR ITS REASONING, NOT ITS ANSWER.
+>
+> **The stock buys ARE on Aerodrome Slipstream.** Every measurement below is accurate and every
+> zero it reports is real — but they were taken against Aerodrome CL factory
+> `0x5e7BB1…809A`, and there are **two** Aerodrome CL factories. All thirteen B20 pools are on
+> the other one, `0xf8f2eB…061Ef`, at tick spacing 10, and they are 7–16x deeper than the
+> Uniswap pools this entry recommended instead. A-22 carries the correction, the depth table
+> and the router.
+>
+> **What this means for the three options at the bottom of this entry: none of them was taken,
+> and none is needed.** The premise they were choosing between — "the liquidity is on Uniswap,
+> the emissions are on Aerodrome" — was false. Buys and POL are both on Aerodrome; they are
+> simply on different CL factories, which is fine because they are different books.
+>
+> **What is still true and still load-bearing:** the *Pot's conversion* routes (WETH and AERO)
+> genuinely are Uniswap v3 pools, and `ConversionRoutes` is Uniswap-only by construction. That
+> is a separate question from where stocks are bought, and SEC-POT-001's triage cites this
+> entry for exactly that narrower point. See the note in TRIAGE under SEC-POT-001.
+>
+> The lesson is the one A-22 states: **a control proves the call works, it does not prove you
+> are calling the right contract.** This entry ran a control, passed it, and drew a conclusion
+> one level too broad — "not on this factory" became "not on Aerodrome". It is kept intact so
+> that inference stays visible.
+
 Spec section 5 step 4 buys on Aerodrome Slipstream, and section 6 mints Slipstream LP.
 Measured on Base at block 50,567,828:
 
-**Aerodrome Slipstream: no pool exists for any launch stock**, against USDC or WETH, at
-tick spacings 1 / 50 / 100 / 200 / 2000. The factory itself works (WETH/USDC resolves), so
-this is genuine absence, not a bad call.
+**Aerodrome Slipstream factory A: no pool exists for any launch stock**, against USDC or WETH,
+at tick spacings 1 / 50 / 100 / 200 / 2000. The factory itself works (WETH/USDC resolves), so
+this is genuine absence on *that factory*, not a bad call — and not absence on Aerodrome.
 
 **Aerodrome v2: effectively nothing.** NVDA/USDC holds $72. AAPL/USDC holds $0.002.
 GOOGL and META have no v2 pool at all.
@@ -708,68 +733,121 @@ recorded once, here.
 
 ---
 
-### A-22 · No B20 stock has an Aerodrome Slipstream pool — **swept on chain 2026-09-06**
+### A-22 · B20 stocks trade on Aerodrome CL — **CORRECTED 2026-09-07, the original was wrong**
 
-**This one contradicts a briefing, so it is written with the method attached.**
+**The original A-22 said there are no Aerodrome pools for any B20 stock. That was wrong, and
+the way it was wrong is worth keeping.**
 
-The stock-registry expansion was specified as adding TSLA, AMZN, MSFT, MSTR, SNDK and SPCX
-"all with live Aerodrome Slipstream pools". They do not have any. Neither do the four already
-registered, and neither do the three being added disabled.
+The sweep was real and its control passed: `getPool` on factory
+`0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A` resolved WETH/USDC at tick spacing 100 in the same
+run, so a zero for the B20 pairs meant "no pool" rather than "bad call". Every one of those
+zeros was correct. **The error was assuming that factory was the only Aerodrome CL factory.**
 
-Swept with `test/fork/B20PoolDiscovery.t.sol` against latest Base, for **all thirteen** B20
-tickers:
+There are two, and both are Aerodrome:
 
-| Venue | Probed | Found |
+| | Factory A `0x5e7BB1…809A` | Factory B `0xf8f2eB…061Ef` |
 |---|---|---|
-| Aerodrome Slipstream (CL) `0x5e7BB1…809A` | vs USDC **and** vs WETH, tick spacings 1, 2, 5, 10, 25, 50, 100, 200, 500, 2000 | **nothing, for any ticker** |
-| Aerodrome basic AMM `0x420DD3…40Da` | vs USDC (v and s) and vs WETH | AAPL and NVDA only, both **vAMM**, ~$4.9k and ~$4.2k |
-| Uniswap v3 `0x33128a…FDfD` | vs USDC, fees 100/500/2500/3000/10000 | every pool with real depth |
+| `voter()` | `0x16613524…480A5` | **the same** |
+| `owner()` | `0xE6A41fE6…32075` | **the same** |
+| `factoryRegistry()` | `0x5C3F18F0…37C0` | **the same** |
+| `poolImplementation()` | `0xeC8E5342…5831` | `0xc7708985…B665` — different |
+| B20 stock pools | **none** | **all of them**, tick spacing 10, fee 500 |
+| Slipstream NPM reports | **this one** | not this one |
 
-**The control matters.** The same `getPool` call on the same Slipstream factory resolves
-WETH/USDC at tick spacing 100 in the same test run, so a zero is "there is no pool", not "we
-are calling it wrong". `test_noB20StockHasASlipstreamPool` asserts both halves and will start
-failing the day a Slipstream pool appears — which is the point of writing it as an assertion
-rather than a note.
+Same Voter, same owner, same factory registry, different pool implementation. Factory B is a
+newer Aerodrome CL factory, and it is where the B20 liquidity is.
 
-**Where the belief probably came from.** AAPL and NVDA really do have Aerodrome pools, and a
-router or aggregator UI would happily route a stock buy through Aerodrome for them. But they
-are **basic vAMM pools, not concentrated-liquidity ones**, and they are the two smallest
-venues either token trades on. `Venue.Slipstream` verifies against the CL factory and
-correctly refuses them; `Venue.UniswapV3` is where the depth is.
+**A control proves the call works. It does not prove you are calling the right contract.** That
+is the lesson, and it is why this entry keeps the wrong version's reasoning rather than
+overwriting it.
 
-**Consequence for the registry.** Every B20 stock is registered as `Venue.UniswapV3`, with the
-deepest USDC pool for that ticker. `test_slipstreamVenueCannotBeFakedForAB20` proves the
-registry cannot be told otherwise: passing `Venue.Slipstream` with a ticker's real Uniswap
-pool reverts `PoolNotFoundInFactory`, because the CL factory has never heard of it.
+### Measured depth, both sides, at the Chainlink marks
 
-**This does not close the Slipstream path.** `ChipRounds` encodes both venue shapes and
-`StockRegistry` verifies both factories, so the day a B20 Slipstream pool appears with real
-depth it is a `setVenue` call and nothing else. See A-16, which said the same thing about the
-conversion side and is still correct.
+`test/fork/AerodromeFactoryCheck.t.sol` reads the USDC side in-fork and the stock side over raw
+RPC (B20 tokens are precompiles, A-15), and prices the stock side at its live feed.
 
-## A-23 — Executable-depth gate and its limits (issue #5)
+| Ticker | USDC side | Stock side | **TVL** |
+|---|---:|---:|---:|
+| NVDA | $1,640,788 | $845,095 | **$2,485,883** |
+| AAPL | $951,435 | $773,150 | **$1,724,585** |
+| GOOGL | $868,502 | $753,452 | **$1,621,954** |
+| META | $615,830 | $588,126 | **$1,203,956** |
+| SNDK | $97,987 | $87,243 | **$185,230** |
+| SPCX | $104,987 | $78,020 | **$183,007** |
+| AMZN | $87,400 | $64,216 | **$151,616** |
+| TSLA | $80,367 | $69,212 | **$149,579** |
+| MSFT | $59,326 | $84,479 | **$143,805** |
+| MSTR | $49,899 | $49,306 | **$99,205** |
 
-The registry certifies one configured quote-to-stock buy probe using the venue's
-canonical QuoterV2, bounded by a Chainlink output-value deviation. No token balance
-contributes to enablement. `poolTvlUsd` is the renamed historical balance metric and
-remains diagnostic. The result is the validated input USD notional, not total pool
-capacity, available liquidity across all prices, or permission to extrapolate a larger buy.
+**These are 7–16x lower than the figures supplied from the Aerodrome UI** (which gave NVDA
+$20.9M, GOOGL $12.9M, SPCX $2.9M). The UI is not showing pool TVL — most likely concentrated
+`liquidity`, a virtual quantity much larger than the tokens actually in the contract.
+`StockRegistry.poolTvlUsd` preserves these historical balance measurements. After issue #5,
+the gate and impact trim use finite executable quotes, so this table cannot size them. **Do not size parameters from the UI number.**
 
-Canonical quoters are non-view and expensive. Each measurement uses one bounded CALL;
-their inner pool swap reverts, leaving balances and positions unchanged. Off-chain
-reports must use eth_call, not EVM STATICCALL. A 1M-gas quote cap can conservatively reject
-markets that cross many ticks. A failed quote, bad state, numeric overflow, or unavailable
-feed produces zero and fails the gate, even at a zero threshold.
+The former balance-based gate reported all ten above $25,000, compared with only GOOGL
+and SPCX on the wrong-factory Uniswap figures. That historical comparison cannot establish
+which stocks clear the executable-probe gate; configure and remeasure each one at launch.
 
-The new depth policy requires a fresh feed timestamp (minimum age window 72h; recommended
-120h for equity closures); priceUsd itself retains A-14's raw mark/timestamp semantics.
-The quote token is still valued at par. Quoter factory identity is a configuration check,
-not proof of canonical bytecode: the multisig must select the reviewed deployed quoter.
+### The router — **SETTLED 2026-09-07, and proved with a real buy**
 
-Donations alone cannot add positions or improve executable quotes for ordinary tokens.
-Spot state can still change through swaps, flash liquidity, position changes, issuer
-policies, and market moves. This is not a TWAP or anti-MEV guarantee. An enablement-time
-probe cannot guarantee liquidity at settlement. The present ChipRounds has no
-_maxSpendFor/maxImpactBps path; its budget cap, Chainlink minimum output, balance-delta
-accounting and skip/carry-forward semantics remain the independent controls. Historical
-references suggesting a production per-stock impact check should be read with this correction.
+**The Slipstream SwapRouter we already knew about, `0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5`,
+reports `factory() == 0x5e7BB1…809A` — factory A.** It cannot derive a factory-B pool address,
+so registering these stocks as `Venue.Slipstream` and pointing `ChipRounds` at that router would
+have produced buys that revert every time. That was the last thing blocking the venue switch.
+
+**The router bound to factory B is `0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F`.**
+
+It was derived from the chain rather than taken from a deployment list: read the `Swap` events
+on the NVDA/USDC pool, tally the senders, probe each one for `factory()`. Exactly one answered
+with factory B, and its code is the same 9,908 bytes as the factory-A router — the same
+contract, a different constructor argument.
+
+| | Router A `0xBE6D8f…18a5` | Router B `0x698Cb2…A92F` |
+|---|---|---|
+| `factory()` | `0x5e7BB1…809A` | `0xf8f2eB…061Ef` |
+| code size | 9,908 bytes | **the same** |
+| reaches B20 pools | **no — reverts** | **yes** |
+
+**Proved, not inferred.** `test/fork/FactoryBRouter.t.sol` runs a real `exactInputSingle`
+through router B against the live NVDA/USDC pool, in exactly the 8-field Slipstream shape
+`ChipRounds._buy` encodes: $10,000 USDC in, 43.129 NVDA out, an implied $231 against a
+Chainlink mark of $229.96. The same suite asserts that router A reverts on the same call.
+
+### What the flip actually changes
+
+Three settings, no contract change:
+
+| Where | Setting | Value |
+|---|---|---|
+| `StockRegistry` constructor | `slipstreamFactory_` | `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` |
+| `ChipRounds.setRouters` | `slip` | `0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F` |
+| `registry.addStock` | `venue` / `tickSpacing` | `Venue.Slipstream` / `10` |
+
+**`slipstreamFactory` is immutable**, so this is a deploy argument that has to be right the
+first time — a registry built on factory A cannot register a single B20 stock as Slipstream, and
+`test_aFactoryARegistryCannotRegisterTheB20Venue` is the proof it fails loudly rather than
+quietly. The whole thirteen-ticker config is re-derived from factory B every run in
+`test/fork/B20RegistryConfig.t.sol`; ten have a factory-B pool, while three register as
+`Venue.None`. Its small configured probes do not clear the historical $25,000 threshold;
+the exact gate is tested separately against a successful live quote.
+
+### POL stays on factory A, on purpose
+
+`POLTreasury` derives its factory from the Slipstream NPM, which reports factory A, so **POL
+positions and stock buys sit on different Aerodrome factories**. That is correct, not a
+mismatch to fix: they are different books. POL is protocol-owned liquidity in WETH/USDC-shaped
+pairs, which exist on factory A and are what the NPM and the Voter's gauges know about; stock
+buys are one-shot swaps against B20 pools, which exist only on factory B. Nothing reads across
+the two — `POLTreasury` never consults `StockRegistry`, and `ChipRounds._buy` never touches the
+NPM. The only thing to avoid is assuming one address serves both.
+
+## Issue #5 — measurement assumptions
+
+See DEPLOY.md's executable-depth configuration section and `review/ISSUE_5.md`.
+The metric certifies a configured finite buy probe within a Chainlink deviation bound.
+It does not estimate total TVL, extrapolate capacity, or promise immunity to flash liquidity.
+Quoters must match the registered factory and venue-specific QuoterV2 ABI.
+Canonical quoter simulations require CALL and revert pool writes; bounded failure returns
+zero. Both enablement and settlement consume this path. Historical balance-based
+calculations and claims about removal of independent caps are superseded by this fix.

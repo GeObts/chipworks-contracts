@@ -31,7 +31,7 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
     function setUp() public override {
         super.setUp();
 
-        activation = new ChipActivation(multisig, address(chip), TIER_TABLE);
+        activation = new ChipActivation(multisig, address(chip), 0x000000000000000000000000000000000000dEaD, TIER_TABLE);
         _price(address(basedNouns));
         _price(address(darkNouns));
 
@@ -305,6 +305,8 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         loans.liquidate(loanId);
 
         rounds.closeAccumulation(id);
+        // The loan deadline warp does not model a dead price feed.
+        nvdaFeed.setAnswer(int256(NVDA_USD * 1e8));
         rounds.settleStock(id, address(nvda));
         rounds.finalizeRound(id);
 

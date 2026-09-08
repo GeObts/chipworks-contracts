@@ -29,6 +29,7 @@ Three things gate everything else. Read this before booking a launch date.
 | Blocker | Duration | What it blocks |
 |---|---|---|
 | **$CHIP must launch first** | — | 4 contracts take it as a constructor argument |
+| **ChipBurner must exist first** | — | ChipActivation, ChipRounds and the Furnace take it as an **immutable** argument |
 | **Price discovery: 24–48h observed** | 1–2 days | The entire cost table (§4). ChipActivation cannot deploy before it |
 | **48h timelocks** | 2 days each, parallel | Pricing each collection in ChipActivation; NounLoans terms |
 
@@ -37,12 +38,19 @@ observed price, so the timelock cannot start until price discovery finishes. Rea
 
 ```
 Day 0     $CHIP launches. Initial buy inside the window (§3).
+          Deploy ChipBurner, then chip.transferOwnership(ChipBurner) (§6.6).
 Day 1–2   Observe. Do NOT compute the table from day-0 volatility.
 Day 2     Compute the cost table (§4). Deploy ChipActivation. Queue costs for
           all three collections. Queue NounLoans terms. Queue Anvil prices.
+          Queue both Furnace recipe prices (25 / 50 Chiplets).
 Day 4     Execute all queued config. Deploy the rest. Wire. Verify.
 Day 5     First round.
 ```
+
+**The Burner is deployed before it is given the token.** `ChipBurner(MULTISIG, CHIP)` needs
+only the token's address, so it can go out the moment $CHIP exists; the `transferOwnership`
+hand-off is separate and is what §6.6 gates. Doing both on day 0 keeps the three contracts that
+take its address unblocked.
 
 Anything that can be deployed before $CHIP exists — FeeSplitter, StockRegistry, Pot,
 POLTreasury — can be done on day 0 to shorten the tail.
@@ -163,7 +171,7 @@ constant**, so they lift when the audit lands without touching a contract.
 | Cap | Value | Where |
 |---|---|---|
 | Round minimum | **$100** | `ChipRounds.setRoundParams` — `minPot = 100e6` |
-| Round maximum | **$1,000** | `ChipRounds.setRoundParams` — `maxBudget = 1_000e6` |
+| Round maximum | **$1,000** | `ChipRounds.setMaxRoundBudget(1_000e6)` |
 | POL holdback | **15%** — unchanged | `ChipRounds.setHoldbackBps(1500)` |
 | NounLoans `maxPrincipal` | **≈60% of the Anvil queue price**, per collection, denominated in $CHIP | `NounLoans.setMaxPrincipal` |
 | NounLoans pool | seeded from the initial buy (§3) | `NounLoans.depositPool` |
@@ -200,26 +208,24 @@ owner() == MULTISIG ; opsBps() == 2000 ; potBps() == 8000
 send 0.001 ETH, distributeETH(), confirm the 80/20 landing
 ```
 
-**2. StockRegistry** — `(MULTISIG, USDC, UNI_FACTORY, SLIPSTREAM_FACTORY)`
+**2. StockRegistry** — `(MULTISIG, USDC, UNI_FACTORY, SLIPSTREAM_FACTORY_B)` where
+`SLIPSTREAM_FACTORY_B` is **`0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef`**.
 
-Issue #5 changes the depth gate: configure `setDepthConfig` per stock before enabling.
-Use the canonical QuoterV2 for its factory, an explicit quote-token probe amount, a
-Chainlink deviation bound (initially 200 bps including fees; maximum 500), and a mandatory
-feed age (120 hours recommended; minimum 72). Review the probe notional and
-`minLiquidityUsd` together; historical TVL thresholds are not compatible defaults.
-Missing configuration, failed quotes, zero depth, and unusable feeds all block enabling,
-including with a zero threshold. Venue changes require probe reconfiguration.
-
-Call `liquidityReport()` with `eth_call`, allowing up to approximately 1.4M gas per entry.
-It validates one finite buy probe per stock and returns its USD notional on success.
-`poolBalances()` and `poolTvlUsd()` are informational only. See DEPLOY.md for canonical
-addresses and units. Keep `maxRoundBudget` independently capped: this revision does not
-add a per-stock spend ceiling or re-quote during settlement.
+> 🔴 **THIS IS THE ONE ADDRESS THAT CANNOT BE CORRECTED LATER.** There are two Aerodrome CL
+> factories and every B20 stock pool is on this one. The older, better-known
+> `0x5e7BB1…809A` (factory A) resolves **none** of them, and `slipstreamFactory` is
+> **immutable** — a registry deployed against factory A cannot register a single stock as
+> `Venue.Slipstream` and has to be redeployed. It does at least fail loudly
+> (`PoolNotFoundInFactory`) rather than silently. ASSUMPTIONS A-22.
 
 Register all **thirteen** B20 stocks disabled (addresses and feeds: ASSUMPTIONS A-13/A-18).
+Ten register as `Venue.Slipstream` at **tick spacing 10**; COIN, CRCL and INTC have no pool
+anywhere and register as `Venue.None`.
 ```
 stockCount() == 13 ; enabledTokens().length == 0
+getStock(NVDAc).venue == Slipstream ; getStock(NVDAc).tickSpacing == 10
 setEnabled(CRCLc, true)  -> reverts PoolNotSet     # no market yet
+liquidityReport()        # after setDepthConfig; validates probes, not historical TVL
 ```
 
 **3. Pot** — `(MULTISIG, USDC, UNIV3_FACTORY)`, then `setConversionConfig`, `setRoute(AERO)`
@@ -253,7 +259,7 @@ markAndPoolPrice(NVDAc, <pool>) -> two numbers inside the band
 
 ### After $CHIP, after price discovery
 
-**4. ChipActivation** — `(MULTISIG, CHIP, [10000, 12500, 16000, 20000, 33300])`
+**4. ChipActivation** — `(MULTISIG, CHIP, ChipBurner, [10000, 12500, 16000, 20000, 33300])`
 Then `queueCosts` x3 with the §4 table → **48h** → `executeCosts` x3.
 ```
 allTierBps() == [10000,12500,16000,20000,33300]
@@ -270,13 +276,32 @@ window's day of the week, permanently.** Pick it deliberately.
 setClaimSchedule(604800, 172800) ; setCreditExpiry(2592000)
 ```
 
-**5b. ChipRounds** — `(MULTISIG, registry, Pot, ChipActivation, ChipClaims, 5_000e18)`
+**5b. ChipRounds** — `(MULTISIG, registry, Pot, ChipActivation, ChipClaims, 5_000e18,
+ChipBurner)`
 ```
 setRoundParams(86400, 7200, 100e6, 1_000e6)   # LAUNCH CAPS
 setCollectionBaseBps(LIL, 5000) / (BASED, 10000) / (DARK, 20000)
 setHoldbackBps(1500) ; setDefaultMaxSlippageBps(200) ; setMaxFeedAge(432000)
-setRouters(...) ; setChip(CHIP, 0xdead)
+setChip(CHIP)                                 # ONE argument - the burn target is immutable
+setRouters(0x2626664c2603336E57B271c5C0b26F421741e481,
+           0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F)
+slipstreamRouter() == 0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F
 ```
+
+> ✅ **THE SLIPSTREAM ROUTER MUST BE THE FACTORY-B ONE — AND SINCE `-22` THE CONTRACT
+> ENFORCES IT.** `0x698Cb2…A92F` is bound to factory B and is the only router that can reach a
+> B20 pool. The better-known `0xBE6D8f…18a5` serves factory A.
+>
+> `setRouters` now reads the factories off the registry and refuses any router that does not
+> match, so **the wrong address reverts at set-time** with `RouterNotOnFactory(router,
+> expected, actual)` naming both. Neither router may be zero, and an EOA is refused with
+> `NotAContract`.
+>
+> This used to be the entry with the worst failure mode in this runbook: no validation at all,
+> and the symptom of getting it wrong was a round that bought nothing, which reads like a depth
+> problem rather than a wiring one. It is now a loud failure in the transaction that causes it.
+> Both directions are still proved on a live fork in `test/fork/FactoryBRouter.t.sol`, and the
+> guard itself in `test/RouterGuards.t.sol`.
 
 > **⚠️ WIRING CHECK — `claims.setRounds(rounds)`**
 > Until this is called, **every round reverts at the first `contributeWeights`**, because the
@@ -291,12 +316,20 @@ setRouters(...) ; setChip(CHIP, 0xdead)
 **7. ClaimRouter** — `(MULTISIG, **ChipClaims**, 1000000)`. Points at the ledger, not the
 engine. One leg; the Clutch leg is gone.
 
-**8. Furnace** — `(MULTISIG, CHIP, LIL_NOUNS, basedRecipe, darkRecipe)` with the §4 amounts.
+**8. Furnace** — `(MULTISIG, CHIP, ChipBurner, CHIPLETS, basedRecipe, darkRecipe)`.
+
+The fuel is **Chiplets**, not Lils — Lils reverted to an ordinary 0.5x family collection and
+are never burned (OPEN_ITEMS 20). The Chiplet counts are **25 for a Based Noun, 50 for a
+DarkNOUN**, twice the Based count to match the 2.0x base a DarkNOUN earns at. The `chipCost` on
+both recipes is a **placeholder at deploy** — it cannot be zero — so pause both immediately and
+queue the real prices against the observed §4 price.
 ```
 approve + depositStock(BASED_NOUNS, ids)
-setPaused(1, true)                      # Dark recipe OFF at launch
-recipe(1).paused == true
+setPaused(0, true) ; setPaused(1, true)   # BOTH off at launch, placeholder prices
+recipe(0).fuelCost == 25 ; recipe(1).fuelCost == 50
 forge(1, ids) -> reverts RecipeIsPaused
+# then, once the price is observed:
+queueRecipeChange(0, 25, <real>) ; queueRecipeChange(1, 50, <real>)  -> 48h -> execute, unpause
 ```
 
 **9. NounLoans** — `(MULTISIG, CHIP, FeeSplitter, LOAN_TREASURY, **ChipActivation**, terms)`
@@ -332,6 +365,115 @@ unshelve(BASED_NOUNS, shelfRemaining(), ops) -> reverts WouldTakeTheHead  # L-3
 ```
 **Winding a shelf down is two transactions**: `setPaused(collection, true)`, then `unshelve`.
 A live shelf will not give up its last Noun.
+
+---
+
+## 6.5 🔴 REQUIRED PRE-LAUNCH: prove the Chiplet burn is a REAL burn
+
+**Not optional, and not a smoke test.** The Furnace and ChipActivation both fall back to a
+transfer to `0xdead` when a collection exposes no `burn`. That fallback is deliberate — it
+keeps forging and activation working against any ERC-721 — and it is **silent**. A mis-wired or
+unexpected Chiplets contract would forge and activate perfectly while never reducing supply,
+which is the entire point of the change. Nothing else catches it.
+
+**Check one — the selector is in the deployed bytecode.**
+
+```
+cast code 0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33 --rpc-url $BASE_RPC_URL | grep -c 42966c68
+# expect >= 1. ALREADY CHECKED 2026-09-07 and it returned 1, alongside:
+#   name() = "CHIPLETS", symbol() = "CHIPP", supportsInterface(0x80ac58cd) = true
+#   totalSupply() = 0        <- the drop had not minted yet; re-check after it does
+```
+
+OpenSea's `ERC721SeaDrop` and `ERC721SeaDropCloneable` both expose
+`burn(uint256) { _burn(tokenId, true); }`, so the expected answer is a hit. If it is zero, stop
+— the drop was deployed from a contract that cannot be truly burned from.
+
+**Check two — the counters agree after the first real forge.**
+
+```
+furnace.totalFuelTrueBurned() == furnace.totalFuelBurned()          # must be EQUAL
+```
+
+Equal means every fuel token was destroyed. If `totalFuelTrueBurned` is lower, that many
+tokens were dead-held instead and the collection's `totalSupply` did not move. Investigate
+before announcing anything about supply.
+
+**Check three — the same for the activation path.**
+
+```
+# activate one Chiplet, then read the ActivatedFlat event:
+#   sacrificeTrueBurned == true
+chiplets.totalSupply()                                             # must have fallen by 1
+```
+
+**And the $CHIP side, which is now the same case.** This section used to say $CHIP could never
+be truly burned. It can: the token's `burn` is owner-gated rather than absent, and the
+`ChipBurner` owns it. Once §6.6 has landed, `chip.totalSupply()` **does** fall.
+
+```
+chipActivation.chipBurnedToDead() == chip.balanceOf(0x...dEaD) + chip.balanceOf(<ChipBurner>)
+chipActivation.effectiveChipSupply() == chip.totalSupply() - chipActivation.chipBurnedToDead()
+
+# and the end-to-end one, after any app burn:
+burner.burnAll() ; chip.totalSupply()          # must have FALLEN by what was burned
+```
+
+The site should still display `effectiveChipSupply()` — it counts $CHIP queued at the Burner as
+already out of circulation, so the number does not step down at the arbitrary moment a keeper
+calls `burnAll()`. **The CoinGecko/CMC filing is no longer required**; see BURN_VISIBILITY.md
+for the one case where it is still worth doing.
+
+---
+
+## 6.6 🔴 REQUIRED AT LAUNCH: hand $CHIP ownership to the Burner
+
+**Ordering matters and it is one-way-ish.** The Burner must exist before the token is handed
+to it, and the hand-off can only happen after Bankr's launch has put ownership in our hands.
+
+```
+1. Deploy ChipBurner(MULTISIG, CHIP)                        # before launch is fine
+2. Bankr launches $CHIP                                     # ownership lands with us
+3. chip.transferOwnership(<ChipBurner>)                     # THE STEP
+4. chip.owner() == <ChipBurner>                             # verify
+```
+
+**Verify the token's ABI before step 3, not after.** `ChipBurner` encodes three signatures by
+string — `burn(uint256)`, `updateTokenURI(string)`, `transferOwnership(address)`. A mismatch
+would not be discovered until the first burn, by which point the token is already owned by a
+contract that cannot drive it.
+
+```
+cast code <CHIP> --rpc-url $BASE_RPC_URL | grep -c 42966c68     # burn(uint256)
+cast sig "updateTokenURI(string)"                                # cross-check against the
+cast sig "transferOwnership(address)"                            # verified token source
+```
+
+**Then prove it end to end, once, with a small amount:**
+
+```
+chip.transfer(<ChipBurner>, 1e18)
+burner.burnAll()                       # permissionless, anyone
+chip.totalSupply()                     # must have FALLEN by 1e18 - a real burn
+burner.totalBurned()                   # == 1e18
+burner.burnCount()                     # == 1
+```
+
+**`burnAll` is `nonReentrant` since `-22`, and `totalBurned` is bounded by the Burner's own
+balance drop as well as by the fall in supply.** Neither changes anything for a well-behaved
+token; both exist so that the published figure cannot be inflated by the token it burns. See
+`test/ChipBurnerReentrancy.t.sol`.
+
+**What the Burner deliberately cannot do.** It has no `transfer`, no sweep, no rescue and no
+generic call: $CHIP that arrives can only ever leave by being destroyed, and the multisig
+cannot move it either. `mintInflation`, `updateMintRate` and `lockPool`/`unlockPool` are **not
+exposed** — a permissionless burner that can also mint is a contradiction. If any of them is
+ever genuinely needed, `transferTokenOwnership` moves the token to a new wrapper, visibly and
+deliberately. That escape hatch is why leaving them out is safe.
+
+**Until step 3 lands, `burnAll()` reverts** — the token's `burn` is owner-gated. App burn paths
+that send $CHIP to the Burner before then will simply accumulate a balance that gets destroyed
+on the first successful call. Nothing is lost; the burn is just deferred.
 
 ---
 
@@ -389,9 +531,25 @@ rounds.finalizeRound(id)
 
 **Weekly:** `claims.sweepExpired(...)` for any round past `expiresAt`.
 
-**Watch for:** a stock skipped with reason `stale feed` — that is `maxFeedAge` doing its job
-(the budget carried, nothing lost), but a stock skipping repeatedly means a genuinely dead
-feed, not a weekend.
+**Watch for TWO things, and they have opposite causes:**
+
+1. **A stock skipped with reason `stale feed`** — that is `maxFeedAge` doing its job (the
+   budget carried, nothing lost), but a stock skipping repeatedly means a genuinely dead feed,
+   not a weekend.
+2. 🔴 **A stock where `isEnabled() == true` but `clearsMinLiquidity() == false`.** One
+   `liquidityReport()` call returns every stock, its measured depth, its threshold and whether
+   it clears, so this is one read per cycle:
+
+   ```
+   registry.liquidityReport()    # alert on any row where enabled && !ok
+   ```
+
+   **The depth gate is checked once, when a stock is enabled, and never again** — see
+   OPEN_ITEMS 28. A pool that drains leaves the stock enabled and buying. Nothing announces it,
+   because the per-buy protection (`_minOutFor` against the Chainlink mark) fails *safe*: the
+   buy is refused in full and the slice carries. So the symptom is a stock that quietly stops
+   filling, not a bad fill. **The response is `setEnabled(token, false)`** — instant, not
+   timelocked, and reversible the moment depth returns.
 
 ---
 
@@ -406,3 +564,13 @@ feed, not a weekend.
   terms make that more urgent, not less. OPEN_ITEMS 10.
 - **Compound share redemption** has no path. Phase 2, and it should be answered before
   auto-compound is marketed. OPEN_ITEMS 7.
+
+## Issue #5 deployment update
+
+Follow DEPLOY.md's executable-depth configuration section before enabling any stock.
+For B20 factory B use the QuoterV2 interface at `0x514c8B5f54112481E28028F1166Bd78501089259`. Configure probe amount, oracle bound, mandatory feed age,
+and a minimum in probe USD. Use eth_call for reports and maxSpendFor.
+
+Retain the launch $1,000 round cap using `setMaxRoundBudget(1_000e6)` and configure
+tighter per-stock limits with `setMaxStockSpend` where required. Quotes do not replace
+these controls. Missing or failed quote configuration fails closed even at zero minimum.

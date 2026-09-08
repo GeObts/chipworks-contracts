@@ -54,6 +54,10 @@ contract FullSystemForkTest is Test {
     address internal constant UNIV3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
     address internal constant UNIV3_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
     address internal constant SLIPSTREAM_FACTORY = 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A;
+    /// @dev The Slipstream router bound to factory A, to match the registry above. NOT the
+    ///      factory-B router the B20 stocks need -- this suite's registry is on A, and
+    ///      `setRouters` now refuses a router that does not match it.
+    address internal constant SLIPSTREAM_ROUTER_A = 0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5;
     address internal constant SLIPSTREAM_NPM = 0x827922686190790b37229fd06084350E74485b72;
     address internal constant WETH_USDC_UNI_500 = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
     address internal constant AERO_USD_FEED = 0x4EC5970fC728C5f65ba413992CD5fF6FD70fcfF0;
@@ -89,8 +93,15 @@ contract FullSystemForkTest is Test {
         registry = new StockRegistry(multisig, USDC, UNIV3_FACTORY, SLIPSTREAM_FACTORY);
         adapter = new ClutchVaultAdapter(multisig, [uint32(10_000), 12_500, 16_000, 20_000, 33_300]);
         claims = new ChipClaims(multisig, address(registry));
-        rounds =
-            new ChipRounds(multisig, address(registry), address(pot), address(adapter), address(claims), 5_000 ether);
+        rounds = new ChipRounds(
+            multisig,
+            address(registry),
+            address(pot),
+            address(adapter),
+            address(claims),
+            5_000 ether,
+            0x000000000000000000000000000000000000dEaD
+        );
         polTreasury = new POLTreasury(multisig, USDC, SLIPSTREAM_NPM, address(splitter), UNIV3_FACTORY, AERO_VOTER);
         router = new ClaimRouter(multisig, address(claims), 1_000_000);
 
@@ -128,10 +139,10 @@ contract FullSystemForkTest is Test {
 
         rounds.setCollectionBaseBps(address(basedNouns), 10_000);
         rounds.setCollectionBaseBps(address(darkNouns), 20_000);
-        rounds.setRoundParams(24 hours, 2 hours, 250e6, 10_000e6);
-        rounds.setRouters(UNIV3_ROUTER, address(0));
+        rounds.setRoundParams(24 hours, 2 hours, 250e6);
+        rounds.setRouters(UNIV3_ROUTER, SLIPSTREAM_ROUTER_A);
         rounds.setPolTreasury(address(polTreasury));
-        rounds.setChip(address(chipToken), address(0xdead));
+        rounds.setChip(address(chipToken));
         rounds.setHoldbackBps(1_500);
         claims.setCreditExpiry(30 days);
 
