@@ -1,0 +1,23 @@
+StockRegistry executable-depth gate
+├── given no configuration, missing pool state, or zero active liquidity
+│   └── reject enabling even when the minimum is zero and balances are donated
+├── given a canonical venue quote
+│   ├── when CALL is required by the quoter
+│   │   └── support reverting swap simulation without STATICCALL
+│   ├── when a quote fails, runs out of gas, is malformed, zero, or overflows
+│   │   └── report zero and fail the gate without reverting the report
+│   ├── when the feed is unusable, stale, future dated, or uninitialized
+│   │   └── fail closed
+│   ├── when execution lies outside either Chainlink deviation bound
+│   │   └── fail closed
+│   └── when a finite probe executes within the bound
+│       ├── report the configured input USD notional without extrapolation
+│       ├── accept exactly the configured minimum threshold
+│       └── quote once per report entry
+├── given donation of either token on either venue
+│   ├── increase informational balances and TVL
+│   └── preserve active liquidity, executable depth, and failing enablement
+└── given governance configuration
+    ├── reject unauthorized callers, wrong factories, and unsafe bounds
+    ├── disable on probe configuration changes
+    └── invalidate configuration on venue changes

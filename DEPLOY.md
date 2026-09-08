@@ -367,13 +367,10 @@ node in ASSUMPTIONS A-13 and A-18, and asserted in `test/fork/ChainlinkFeeds.t.s
 All thirteen need `tokenDecimals = 8` and a `minLiquidityUsd` you choose (see below). The four
 with pools also need their Chainlink feed, which is still outstanding (ASSUMPTIONS A-13).
 
-**minLiquidityUsd: $50,000 default, overridable per stock.** Deploy every stock with
-`minLiquidityUsd = 50_000e18` unless a specific one is given a different value. The
-reasoning: `poolLiquidityUsd` reports total pool TVL, but Uniswap v3 is concentrated, so
-depth tradeable near spot is a fraction of it. A $10k round across four stocks is a ~$2,500
-slice, and $50k is roughly 20x that — enough cushion for the concentration haircut. Today
-only GOOGL is anywhere near clearing it, which is the correct answer for a market four days
-old. Raise or lower per stock with `setMinLiquidityUsd`.
+**Issue #5 changes the measurement and configuration.** Configure a finite executable
+probe before enabling. The former $25k/$50k TVL thresholds are not compatible defaults.
+See the executable-depth configuration section below for units, canonical quoters, caps,
+and required calls. Raw balances now appear only in `poolTvlUsd` and `poolBalances`.
 
 **Enabling, at launch week:**
 ```
@@ -663,10 +660,10 @@ COIN, CRCL and INTC as `Venue.None` because they have no pool on either factory 
 `test/fork/B20RegistryConfig.t.sol` re-derives every pool below from factory B on each run, and
 asks each pool what factory it thinks it belongs to, so this table cannot silently go stale.
 
-Depth is `poolLiquidityUsd` — both sides, stock valued at its Chainlink mark. Measured
+Historical TVL is the raw-balance sum (now `poolTvlUsd`), not executable depth. Measured
 2026-09-07 at the latest block.
 
-| Ticker | Token | Chainlink feed | Venue | Pool (factory B, ts=10) | Depth USD |
+| Ticker | Token | Chainlink feed | Venue | Pool (factory B, ts=10) | Historical TVL USD |
 |---|---|---|---|---|---|
 | NVDA | `0xb20000000000000000000078ee7ce2fE4908108C` | `0x04689a41629776563E6822F76f2e57D148d28513` | Slipstream | `0x853F5f1B92b16714Fe6CDA67CAad0856B83C7ab9` | **2,455,345** |
 | GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | Slipstream | `0xB1987CAD1682841b4b641d50E520777eC5Ab5542` | **1,597,689** |
@@ -697,37 +694,17 @@ rather than relying on a ticker happening to be empty.
 
 ### Which of these can actually be enabled
 
-**At a 25,000 USD threshold, ten of thirteen — everything with a pool.** The smallest, MSTR at
-$117k, clears by more than four times; the deepest four are over $1M each.
-
-**This is the single biggest change the factory correction made.** Against the Uniswap pools
-only GOOGL and SPCX cleared the same threshold and the whole set totalled a little over $200k.
-The B20 secondary market on Base is roughly 35x deeper than the old table showed, because the
-old table was looking at the wrong venue.
-
-Two consequences for the launch runbook, both unchanged in substance:
-
-1. **Enable per ticker, on the day, from `liquidityReport()`.** Do not assume the table above
-   still holds. This matters less than it did at $12k depths, but `poolLiquidityUsd` is still
-   headline TVL across both sides rather than tradeable depth near spot.
-2. **The per-buy protection is the Chainlink-derived minimum output, and it is
-   all-or-nothing.** `ChipRounds._minOutFor` requires a buy to clear the stock's Chainlink
-   mark less `maxSlippageBps` (2% by default); a buy that cannot is refused *in full* by the
-   router, and the whole slice carries back to the Pot. Setting `minLiquidityUsd` low to get
-   more tickers enabled does not make thin pools tradeable — it just moves the refusal from
-   the registry to the swap, where the symptom is a stock that silently never fills.
-
-   > **CORRECTION.** An earlier revision of this line claimed a "per-stock max-impact check
-   > in `ChipRounds`". **There is no such check and there never has been** — no `maxImpactBps`
-   > exists anywhere in `src/`. The sentence was written during the B20 registry work and
-   > asserted a protection that does not exist, which is exactly the failure SEC-RTR-001 was
-   > about. The real behaviour is described above and asserted in `test/UncappedRounds.t.sol`.
-   > A genuine impact cap that *trims* a buy rather than refusing it is OPEN_ITEMS 26.
+The former balance-based check reported ten of thirteen above $25,000, while the
+wrong-factory Uniswap table reported only two. Those figures describe historical
+token balances; they do not prove executable capacity or current enablement.
+Configure a probe per stock and read `liquidityReport()` through eth_call at launch.
+Settlement re-quotes the probe, sizes a bounded buy, and carries any unspent remainder.
+The Chainlink swap floor and independent round/stock hard caps apply as well.
 
 The three pool-less tickers **cannot be enabled at all**, at any threshold including zero,
 because `setEnabled(true)` requires a venue before it reaches the number
 (`test_theEnableGateBlocksThePoollessTickersByConstruction`). When their pools appear it is
-`setVenue` then `setEnabled`, and the gate re-measures.
+`setVenue`, `setDepthConfig`, then `setEnabled`, and the gate re-measures.
 
 ---
 
@@ -1093,3 +1070,64 @@ forge verify-contract --chain base <address> src/FeeSplitter.sol:FeeSplitter \
   --constructor-args $(cast abi-encode "constructor(address,address,address,uint32,uint32)" \
   $MULTISIG $POT $OPS_WALLET 2000 2000)
 ```
+
+## Issue #5: executable-depth configuration
+
+`poolLiquidityUsd(token)` now validates a configured finite quote-to-stock buy probe and
+returns its input notional in 18-decimal USD, or zero. `poolTvlUsd` is the renamed raw
+balance metric and is informational only. Historical TVL tables cannot establish
+enablement or a spending ceiling. Recalibrate `minLiquidityUsd` in validated probe USD.
+
+Before enabling, the multisig calls
+`setDepthConfig(token, quoter, probeAmount, maxDeviationBps, maxFeedAge)`.
+`probeAmount` is in raw quote-token units (USDC: 6dp). Start with a 200-bps deviation
+including fees (maximum 500) and 120-hour feed age (minimum 72 hours, never disabled).
+Select the finite probe and minimum together based on actual executable quotes, then
+validate the resulting buy size and gas costs. No probe, failed/zero/malformed quote,
+invalid pool state, unusable feed, future timestamp, or stale feed means a failed gate,
+even when the minimum is zero. Changing venue clears probe configuration; changing probe
+configuration disables the stock until explicitly re-enabled.
+
+Canonical Base deployments, checked against their official sources:
+
+| Venue/factory | QuoterV2 |
+|---|---|
+| Uniswap V3 `0x33128a8fC17869897dcE68Ed026d694621f6FDfD` | `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a` |
+| Slipstream A `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A` | `0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0` |
+| Slipstream B `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` (B20) | `0x514c8B5f54112481E28028F1166Bd78501089259` |
+
+Sources: [Uniswap deployments](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments)
+and [Aerodrome deployments](https://github.com/aerodrome-finance/slipstream#deployments).
+The factory getter check catches mismatches but does not prove canonical bytecode;
+governance must verify the selected deployment.
+
+`poolLiquidityUsd`, `clearsMinLiquidity`, `liquidityReport`, and `maxSpendFor` are non-view
+because canonical quoters simulate reverting swaps. Use `eth_call` for off-chain reads,
+not EVM STATICCALL. `CheckDepth.s.sol` already uses eth_call. Allow roughly 1.4M gas per
+registry report entry and 1.5M for a round's depth call; a quote itself is capped at 1M.
+
+`ChipRounds` re-quotes at settlement. `maxImpactBps` is an additional conservative
+fraction of the validated probe notional, not a constant-product impact estimate:
+the default 25 bps of a $1,000 probe permits $2.50 per buy. Do not extrapolate TVL from
+this result. `maxSpendFor` clamps to the independent round cap and any tighter stock cap;
+settlement also clamps to its slice and committed quote. Set the hard round limit with
+`setMaxRoundBudget`; the constructor defaults to 10,000 whole quote tokens. The launch
+runbook's $1,000 policy uses `setMaxRoundBudget(1_000e6)`. `setMaxStockSpend(stock, amount)`
+sets a tighter stock limit; zero falls back to the round cap. Neither cap is inferred
+from a quote. The existing three-argument `setRoundParams` remains valid.
+
+Failed depth measurements produce an isolated `StockSkipped(..., "no depth")`, leaving
+committed quote untouched. Successful swaps retain actual balance-delta accounting;
+unspent slices return to the Pot. Chainlink minimum swap output is unchanged. The depth
+gate's mandatory freshness remains active if the separate round freshness check is off.
+
+Spot manipulation, flash liquidity, tick-crossing gas, quoter availability, issuer transfer
+policies, stale-but-within-window marks, and quote-token depegs remain limitations. This
+is not a TWAP or an anti-MEV guarantee; independent caps remain necessary. A stock's
+enabled flag may persist as the market changes, but every buy now re-quotes capacity.
+
+The factory-B deployment is named Quoter in its deployment list but exposes the
+QuoterV2 tuple ABI on chain; this is asserted by the real B20 fork test. Settlement
+requires enough gas for the full depth allowance plus EIP-150 overhead and bookkeeping
+(approximately 1.73M remaining at the probe). Underfunded calls revert without marking
+the stock settled, so they can be retried with sufficient gas.

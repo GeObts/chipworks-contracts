@@ -55,6 +55,10 @@ contract ChipActivationParityTest is ChipRewardsBase {
         vm.warp(block.timestamp + 48 hours);
         vm.prank(multisig);
         activation.executeCosts(collection);
+        // The 48h setup warps model governance, not a dead market feed.
+        nvdaFeed.setAnswer(int256(NVDA_USD * 1e8));
+        googlFeed.setAnswer(int256(GOOGL_USD * 1e8));
+        aaplFeed.setAnswer(int256(AAPL_USD * 1e8));
     }
 
     /// @dev Pricing three collections costs three 48h warps, so this fixture starts outside

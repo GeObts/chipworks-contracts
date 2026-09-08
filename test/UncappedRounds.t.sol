@@ -2,32 +2,14 @@
 pragma solidity ^0.8.24;
 
 import {ChipRewardsBase} from "./ChipRewardsBase.t.sol";
+import {MockDepthQuoter, MockDepthPool} from "test/mocks/MockDepthQuoter.sol";
 import {ChipRounds} from "../src/ChipRounds.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IUniswapV3SwapRouter, ISlipstreamSwapRouter} from "../src/interfaces/ISwapRouters.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
-/// @title UncappedRoundsTest
-/// @notice The depth-aware impact trim, and the round cap coming off on top of it.
-///
-/// @dev WHY THESE TWO CHANGES BELONG IN ONE SUITE. `maxRoundBudget` was not caution — it was
-///      the mitigation two accepted findings named. EXT-R-L-1 and SEC-POT-002 were both
-///      accepted on the written condition that *"the round cap does not go above $10,000
-///      until dynamic slippage or private routing is in place"*, because `maxSlippageBps` is
-///      a FIXED 2%: a sandwicher's take is bounded by it and grows linearly with the slice,
-///      while the defence does not move at all. Removing the cap without replacing that is
-///      what would have reopened both findings.
-///
-///      `maxImpactBps` is the replacement, and it is a different KIND of bound. It sizes each
-///      buy from `poolLiquidityUsd` — the same measured depth the registry's enable-gate
-///      already uses — so exposure per buy is a function of the POOL, not of the round.
-///      Doubling the round no longer doubles what is extractable from any one stock; it
-///      spreads the same bounded buys over more rounds. That is what lets the cap go.
-///
-///      THE BEHAVIOUR CHANGE IS THE POINT. Before the trim, a slice too large for its pool
-///      bought NOTHING — the router refused the whole thing on `amountOutMinimum` and the
-///      entire slice carried. Now it buys up to the safe size and carries only the remainder,
-///      so thin names distribute instead of being skipped.
+/// @notice Executable-depth trim with an independent restored round cap (issue #5).
+/// @dev The historical suite name is retained; donations do not change the quote model.
 contract UncappedRoundsTest is ChipRewardsBase {
     ShallowPoolRouter internal shallow;
     ShallowPoolRouter internal shallowSlip;
@@ -53,18 +35,26 @@ contract UncappedRoundsTest is ChipRewardsBase {
         address pool = registry.getStock(stock).pool;
         deal(address(usdc), pool, quoteReserve);
         deal(stock, pool, stockReserve);
+        // Simulate a finite 1%-of-reserves probe at the same x*y=k rate as the router.
+        uint128 probe = uint128(quoteReserve / 100);
+        MockDepthQuoter q = new MockDepthQuoter(address(uniFactory));
+        q.setQuote(stock, probe, stockReserve, quoteReserve + probe);
+        vm.startPrank(multisig);
+        registry.setDepthConfig(stock, address(q), probe, 200, 120 hours);
+        registry.setEnabled(stock, true);
+        vm.stopPrank();
     }
 
     /* ------------------------------------------------------------------ */
     /*                        NO CEILING, ONLY A FLOOR                      */
     /* ------------------------------------------------------------------ */
 
-    function test_openRoundTakesTheWholePotWithNoCap() public {
+    function test_openRoundRetainsAnIndependentHardCap() public {
         _fundPot(500_000e6);
         _chip(basedNouns, basedVault, 1, alice, 0);
         uint256 id = _openAndAccumulate(_ids(1));
-        assertEq(rounds.getRound(id).budget, 500_000e6, "no cap, the whole pot");
-        assertEq(pot.available(), 0, "nothing held back");
+        assertEq(rounds.getRound(id).budget, 10_000e6, "independent cap");
+        assertEq(pot.available(), 490_000e6, "excess stays in the Pot");
     }
 
     function test_theFloorIsTheOnlyRemainingSizeGate() public {
@@ -150,6 +140,7 @@ contract UncappedRoundsTest is ChipRewardsBase {
         address pool = registry.getStock(address(nvda)).pool;
         deal(address(usdc), pool, 0);
         deal(address(nvda), pool, 0);
+        MockDepthPool(pool).setLiquidity(0);
         assertEq(rounds.maxSpendFor(address(nvda)), 0);
 
         _fundPot(10_000e6);
@@ -256,7 +247,7 @@ contract UncappedRoundsTest is ChipRewardsBase {
         _useShallowPool(address(nvda), 2_000e6, 10e8); // arbitrage restores the peg
         vm.warp(block.timestamp + 24 hours);
         uint256 id2 = _openAndAccumulate(_ids(1));
-        assertEq(rounds.getRound(id2).budget, carried, "the carried money, uncapped");
+        assertEq(rounds.getRound(id2).budget, rounds.maxRoundBudget(), "carried money remains capped");
         rounds.settleStock(id2, address(nvda));
         rounds.finalizeRound(id2);
         assertGt(claims.claimable(id2, address(nvda), alice), 0, "and bought again");
@@ -265,6 +256,8 @@ contract UncappedRoundsTest is ChipRewardsBase {
     /// @notice A deep pool is not trimmed at all: the whole slice fills, so the trim is a
     ///         bound and not a tax.
     function test_aDeepPoolIsNotTrimmed() public {
+        vm.prank(multisig);
+        rounds.setMaxRoundBudget(20_000e6);
         _fundPot(20_000e6); // the default fixture pools are ~$10m a pair
         _chip(basedNouns, basedVault, 1, alice, 0);
         _setSplit(address(basedNouns), 1, alice, _one(address(nvda)), _one(uint8(100)));

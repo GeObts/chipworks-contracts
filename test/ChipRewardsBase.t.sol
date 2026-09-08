@@ -8,6 +8,7 @@ import {ChipRounds} from "../src/ChipRounds.sol";
 import {ChipClaims} from "../src/ChipClaims.sol";
 import {Round, RoundState} from "../src/interfaces/IChipRounds.sol";
 import {Pot} from "../src/Pot.sol";
+import {MockDepthQuoter, MockDepthPool} from "test/mocks/MockDepthQuoter.sol";
 import {StockRegistry} from "../src/StockRegistry.sol";
 import {ClutchVaultAdapter} from "../src/adapters/ClutchVaultAdapter.sol";
 import {Venue} from "../src/interfaces/IStockRegistry.sol";
@@ -132,6 +133,7 @@ abstract contract ChipRewardsBase is Test {
     }
 
     function _registerStocks() internal {
+        MockDepthQuoter depthQuoter = new MockDepthQuoter(address(uniFactory));
         address[3] memory toks = [address(nvda), address(googl), address(aapl)];
         address[3] memory feeds = [address(nvdaFeed), address(googlFeed), address(aaplFeed)];
         for (uint256 i; i < 3; ++i) {
@@ -150,6 +152,12 @@ abstract contract ChipRewardsBase is Test {
                     tokenDecimals: STOCK_DEC
                 })
             );
+            vm.etch(pool, address(new MockDepthPool()).code);
+            MockDepthPool(pool).setLiquidity(1e18);
+            (uint256 mark,) = registry.priceUsd(toks[i]);
+            depthQuoter.setQuote(toks[i], 10_000_000e6, 1e20, mark);
+            vm.prank(multisig);
+            registry.setDepthConfig(toks[i], address(depthQuoter), 10_000_000e6, 200, 120 hours);
             vm.prank(multisig);
             registry.setEnabled(toks[i], true);
         }
@@ -183,6 +191,16 @@ abstract contract ChipRewardsBase is Test {
         address pool = registry.getStock(stock).pool;
         usdc.mint(pool, 5_000_000e6);
         MockERC20(stock).mint(pool, (5_000_000 / priceUsd) * 1e8);
+    }
+
+    /// @dev Caller is already pranking the multisig when registering an extra hostile token.
+    function _configureExtraStockDepth(address token, address pool) internal {
+        MockDepthQuoter extraQuoter = new MockDepthQuoter(address(uniFactory));
+        vm.etch(pool, address(new MockDepthPool()).code);
+        MockDepthPool(pool).setLiquidity(1e18);
+        (uint256 mark,) = registry.priceUsd(token);
+        extraQuoter.setQuote(token, 10_000_000e6, 1e20, mark);
+        registry.setDepthConfig(token, address(extraQuoter), 10_000_000e6, 200, 120 hours);
     }
 
     function _wire() internal {

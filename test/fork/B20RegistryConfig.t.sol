@@ -6,6 +6,8 @@ import {Test, console2} from "forge-std/Test.sol";
 import {StockRegistry} from "../../src/StockRegistry.sol";
 import {Stock, Venue} from "../../src/interfaces/IStockRegistry.sol";
 import {EtchableERC20} from "../mocks/EtchableERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ISlipstreamQuoterV2} from "src/interfaces/IVenueQuoters.sol";
 
 /// @title B20RegistryConfigTest
 /// @notice The full thirteen-ticker B20 set, registered against live Base with the REAL
@@ -44,9 +46,8 @@ contract B20RegistryConfigTest is Test {
     /// @dev Every B20 pool on factory B is at this tick spacing, fee 500.
     int24 internal constant B20_TICK_SPACING = 10;
 
-    /// @dev A launch threshold with the concentration haircut already in mind. The registry's
-    ///      figure is headline TVL across both sides; tradeable depth near spot is a fraction
-    ///      of it, and `ChipRounds`' per-stock max-impact check is the real protection.
+    /// @dev Historical threshold retained for the registration test. A $1 quote probe does
+    ///      not certify $25k capacity; enabling needs separately reviewed configuration.
     uint128 internal constant LAUNCH_MIN_USD = 25_000e18;
 
     struct Cfg {
@@ -347,7 +348,7 @@ contract B20RegistryConfigTest is Test {
         }
 
         console2.log("clearing the 25k launch threshold:", clearing, "of 13");
-        assertEq(clearing, 10, "every ticker with a factory-B pool clears the launch threshold");
+        assertEq(clearing, 0, "$1 probes cannot certify the historical $25k TVL threshold");
         assertLt(clearing, 13, "the gate is still doing something");
     }
 
@@ -364,6 +365,7 @@ contract B20RegistryConfigTest is Test {
 
         uint256 measured = registry.poolLiquidityUsd(c.token);
         assertGt(measured, 0, "NVDA has depth");
+        _assertDonationsDoNotChangeQuote(c, measured);
 
         vm.prank(multisig);
         registry.setMinLiquidityUsd(c.token, uint128(measured + 1e18));
@@ -417,6 +419,37 @@ contract B20RegistryConfigTest is Test {
 
     /* -------------------------------- helpers -------------------------------- */
 
+    /// @dev Real factory-B pool/quoter; only the B20 precompile's ERC20 transfer is etched.
+    function _assertDonationsDoNotChangeQuote(Cfg memory c, uint256 measured) internal {
+        ISlipstreamQuoterV2 q = ISlipstreamQuoterV2(0x514c8B5f54112481E28028F1166Bd78501089259);
+        ISlipstreamQuoterV2.QuoteExactInputSingleParams memory p =
+            ISlipstreamQuoterV2.QuoteExactInputSingleParams(USDC, c.token, 1e6, c.tickSpacing, 0);
+        (uint256 beforeOut,,,) = q.quoteExactInputSingle(p);
+        bytes32 beforeState = _poolState(c.pool);
+        uint256 beforeQuoteBalance = IERC20(USDC).balanceOf(c.pool);
+        deal(USDC, address(this), 1_000_000e6);
+        assertTrue(IERC20(USDC).transfer(c.pool, 1_000_000e6));
+        assertEq(IERC20(USDC).balanceOf(c.pool), beforeQuoteBalance + 1_000_000e6);
+        (uint256 afterQuoteDonation,,,) = q.quoteExactInputSingle(p);
+        assertEq(afterQuoteDonation, beforeOut);
+        assertEq(registry.poolLiquidityUsd(c.token), measured);
+        uint256 beforeStockBalance = IERC20(c.token).balanceOf(c.pool);
+        EtchableERC20(c.token).mint(address(this), 1_000_000e8);
+        assertTrue(IERC20(c.token).transfer(c.pool, 1_000_000e8));
+        assertEq(IERC20(c.token).balanceOf(c.pool), beforeStockBalance + 1_000_000e8);
+        (uint256 afterStockDonation,,,) = q.quoteExactInputSingle(p);
+        assertEq(afterStockDonation, beforeOut);
+        assertEq(_poolState(c.pool), beforeState);
+        assertEq(registry.poolLiquidityUsd(c.token), measured);
+    }
+
+    function _poolState(address pool) internal view returns (bytes32) {
+        (bool a, bytes memory liquidity) = pool.staticcall(abi.encodeWithSignature("liquidity()"));
+        (bool b, bytes memory slot) = pool.staticcall(abi.encodeWithSignature("slot0()"));
+        assertTrue(a && b);
+        return keccak256(abi.encode(liquidity, slot));
+    }
+
     function _registerAll() internal {
         for (uint256 i; i < cfg.length; ++i) {
             Cfg memory c = cfg[i];
@@ -436,6 +469,10 @@ contract B20RegistryConfigTest is Test {
                     tokenDecimals: 8
                 })
             );
+            if (c.pool != address(0)) {
+                vm.prank(multisig);
+                registry.setDepthConfig(c.token, 0x514c8B5f54112481E28028F1166Bd78501089259, 1e6, 500, 120 hours);
+            }
         }
     }
 

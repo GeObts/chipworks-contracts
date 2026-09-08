@@ -10,7 +10,10 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 import {MockUniswapV3Factory, MockSlipstreamFactory} from "./mocks/MockFactories.sol";
 
-contract StockRegistryTest is Test {
+import {MockDepthQuoter, MockDepthPool} from "test/mocks/MockDepthQuoter.sol";
+
+abstract contract StockRegistryFixture is Test {
+    MockDepthQuoter internal quoter;
     StockRegistry internal registry;
 
     address internal multisig = makeAddr("multisig");
@@ -56,6 +59,11 @@ contract StockRegistryTest is Test {
         slipFactory.setPool(address(nvda), address(usdc), TICK_100, nvdaSlipPool);
 
         registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
+        quoter = new MockDepthQuoter(address(uniFactory));
+        vm.etch(nvdaPool, address(new MockDepthPool()).code);
+        vm.etch(googlPool, address(new MockDepthPool()).code);
+        quoter.setQuote(address(nvda), 10_330.8e6, 1e8, 180e6);
+        quoter.setQuote(address(googl), 10_330.8e6, 1e8, 250e6);
     }
 
     /* ----------------------------- helpers ----------------------------- */
@@ -76,12 +84,21 @@ contract StockRegistryTest is Test {
         );
     }
 
-    /// @notice Put real depth in the NVDA pool: 16.06 shares at $180 plus $7,440 USDC.
+    function _configureDepth(address token, uint128 amount) internal {
+        vm.prank(multisig);
+        registry.setDepthConfig(token, address(quoter), amount, 200, 120 hours);
+    }
+
+    /// @notice Seed balances and independently configure executable probe capacity.
     function _fundNvdaPool() internal {
         nvda.mint(nvdaPool, 16.06e8);
         usdc.mint(nvdaPool, 7_440e6);
+        MockDepthPool(nvdaPool).setLiquidity(1e18);
+        _configureDepth(address(nvda), 10_330.8e6);
     }
+}
 
+contract StockRegistryTest is StockRegistryFixture {
     /* ------------------------------------------------------------------ */
     /*                           CONSTRUCTOR                                */
     /* ------------------------------------------------------------------ */
@@ -353,7 +370,7 @@ contract StockRegistryTest is Test {
         assertEq(updatedAt, fridayClose, "caller can judge staleness itself");
     }
 
-    function test_poolLiquidityUsd_valuesBothSidesAcrossDecimals() public {
+    function test_poolTvlUsd_valuesBothSidesAcrossDecimals() public {
         _addNvda(0);
         _fundNvdaPool();
 
@@ -362,16 +379,53 @@ contract StockRegistryTest is Test {
         assertEq(quoteBal, 7_440e6);
 
         // 16.06 shares * $180 = $2,890.80, plus $7,440 = $10,330.80
-        assertEq(registry.poolLiquidityUsd(address(nvda)), 10_330.8e18);
+        assertEq(registry.poolTvlUsd(address(nvda)), 10_330.8e18);
     }
 
-    function test_poolLiquidityUsd_tracksThePriceFeed() public {
+    function test_poolTvlUsd_tracksThePriceFeed() public {
         _addNvda(0);
         _fundNvdaPool();
-        uint256 before = registry.poolLiquidityUsd(address(nvda));
+        uint256 before = registry.poolTvlUsd(address(nvda));
 
         nvdaFeed.setAnswer(90e8); // stock halves
-        assertEq(registry.poolLiquidityUsd(address(nvda)), before - 1_445.4e18);
+        assertEq(registry.poolTvlUsd(address(nvda)), before - 1_445.4e18);
+    }
+
+    /// @notice A concentrated-liquidity pool's ERC20 balances are not its active liquidity.
+    ///         A direct transfer changes the former while leaving the latter untouched.
+    ///         This is the accounting distinction a depth gate must preserve.
+    function test_poolTvlUsd_inflatesOnDonationWithoutIncreasingActiveLiquidity() public {
+        MockConcentratedAccountingPool pool = new MockConcentratedAccountingPool(1e18);
+        uniFactory.setPool(address(nvda), address(usdc), FEE_030, address(pool));
+        nvdaPool = address(pool);
+        _addNvda(1_000_000e18);
+        _configureDepth(address(nvda), 10_330.8e6);
+        address donor = makeAddr("donor");
+        nvda.mint(donor, 50e8);
+        usdc.mint(donor, 1_001_000e6);
+        vm.startPrank(donor);
+        nvda.transfer(address(pool), 50e8);
+        usdc.transfer(address(pool), 1_000e6);
+        vm.stopPrank();
+        uint128 activeBefore = pool.liquidity();
+        uint256 depthBefore = registry.poolLiquidityUsd(address(nvda));
+        assertGt(depthBefore, 0);
+        assertEq(registry.poolTvlUsd(address(nvda)), 10_000e18);
+        assertFalse(registry.clearsMinLiquidity(address(nvda)));
+        vm.prank(donor);
+        usdc.transfer(address(pool), 1_000_000e6);
+        assertEq(pool.liquidity(), activeBefore);
+        assertEq(usdc.balanceOf(address(pool)), 1_001_000e6);
+        assertEq(registry.poolTvlUsd(address(nvda)), 1_010_000e18);
+        assertEq(registry.poolLiquidityUsd(address(nvda)), depthBefore);
+        assertFalse(registry.clearsMinLiquidity(address(nvda)));
+        vm.prank(multisig);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StockRegistry.InsufficientLiquidity.selector, address(nvda), depthBefore, uint256(1_000_000e18)
+            )
+        );
+        registry.setEnabled(address(nvda), true);
     }
 
     function test_poolBalances_revertsWithoutPool() public {
@@ -415,7 +469,11 @@ contract StockRegistryTest is Test {
         _addNvda(20_000e18);
         _fundNvdaPool();
 
-        usdc.mint(nvdaPool, 10_000e6); // depth grows past the bar
+        usdc.mint(nvdaPool, 10_000e6);
+        // A position change increases executable capacity separately from raw balances.
+        MockDepthPool(nvdaPool).setLiquidity(2e18);
+        quoter.setQuote(address(nvda), 20_330.8e6, 1e8, 180e6);
+        _configureDepth(address(nvda), 20_330.8e6);
 
         assertTrue(registry.clearsMinLiquidity(address(nvda)));
         vm.expectEmit(true, false, false, true, address(registry));
@@ -556,6 +614,8 @@ contract StockRegistryTest is Test {
         );
         googl.mint(googlPool, 145.68e8);
         usdc.mint(googlPool, 48_309e6);
+        MockDepthPool(googlPool).setLiquidity(1e18);
+        _configureDepth(address(googl), 10_330.8e6);
 
         assertEq(registry.allTokens().length, 2);
         assertEq(registry.enabledTokens().length, 0, "none enabled yet");
@@ -642,7 +702,7 @@ contract StockRegistryTest is Test {
         uint256 expectedStockSide = (uint256(stockUnits) * (uint256(priceRaw) * 1e10)) / 1e8;
         uint256 expectedQuoteSide = (uint256(quoteUnits) * 1e18) / 1e6;
 
-        assertEq(registry.poolLiquidityUsd(address(nvda)), expectedStockSide + expectedQuoteSide);
+        assertEq(registry.poolTvlUsd(address(nvda)), expectedStockSide + expectedQuoteSide);
     }
 
     function testFuzz_enableGateIsExactlyTheThreshold(uint128 threshold) public {
@@ -667,5 +727,15 @@ contract StockRegistryTest is Test {
             );
             registry.setEnabled(address(nvda), true);
         }
+    }
+}
+
+/// @dev Small faithful accounting double: CL pools track active liquidity separately from
+///      ERC20 balances, and unsolicited transfers update only the latter.
+contract MockConcentratedAccountingPool {
+    uint128 public immutable liquidity;
+
+    constructor(uint128 activeLiquidity) {
+        liquidity = activeLiquidity;
     }
 }

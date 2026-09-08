@@ -305,6 +305,8 @@ contract NounLoansIntegrationTest is ChipRewardsBase {
         loans.liquidate(loanId);
 
         rounds.closeAccumulation(id);
+        // The loan deadline warp does not model a dead price feed.
+        nvdaFeed.setAnswer(int256(NVDA_USD * 1e8));
         rounds.settleStock(id, address(nvda));
         rounds.finalizeRound(id);
 

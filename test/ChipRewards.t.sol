@@ -33,13 +33,12 @@ contract ChipRewardsTest is ChipRewardsBase {
         rounds.openRound();
     }
 
-    /// @notice A round takes the WHOLE pot. The $10k cap was the pre-audit blast radius and
-    ///         is gone; this test asserts the opposite of what it used to.
-    function test_openRound_takesTheWholePotWithNoCap() public {
+    /// @notice Executable quotes do not replace the independent per-round hard cap.
+    function test_openRound_retainsIndependentRoundCap() public {
         _fundPot(25_000e6);
         uint256 id = rounds.openRound();
-        assertEq(rounds.getRound(id).budget, 25_000e6, "the whole pot, uncapped");
-        assertEq(pot.available(), 0, "nothing held back");
+        assertEq(rounds.getRound(id).budget, 10_000e6, "capped independently of quotes");
+        assertEq(pot.available(), 15_000e6, "remainder held in the Pot");
     }
 
     /// @notice And the floor survives, because it is a different thing: it stops a round

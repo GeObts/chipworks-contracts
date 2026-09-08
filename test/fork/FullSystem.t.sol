@@ -127,10 +127,11 @@ contract FullSystemForkTest is Test {
                 pool: WETH_USDC_UNI_500,
                 fee: 500,
                 tickSpacing: 0,
-                minLiquidityUsd: 50_000e18,
+                minLiquidityUsd: 1_000e18,
                 tokenDecimals: 18
             })
         );
+        registry.setDepthConfig(WETH, 0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a, 1_000e6, 200, 120 hours);
         registry.setEnabled(WETH, true);
 
         adapter.setVault(address(basedNouns), address(basedVault));
@@ -438,9 +439,9 @@ contract FullSystemForkTest is Test {
     }
 
     /// @notice The registry depth gate against a real pool.
-    function test_depthGateUsesRealPoolLiquidity() public view {
+    function test_depthGateUsesRealPoolLiquidity() public {
         uint256 measured = registry.poolLiquidityUsd(WETH);
-        assertGt(measured, 50_000e18, "the real WETH/USDC pool clears the $50k bar");
+        assertEq(measured, 1_000e18, "the real WETH/USDC pool executes the configured $1k probe");
         assertTrue(registry.clearsMinLiquidity(WETH));
         console2.log("WETH/USDC 0.05% pool depth, USD:", measured / 1e18);
     }

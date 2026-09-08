@@ -120,6 +120,7 @@ contract ChipRewardsHoldbackTest is ChipRewardsBase {
                 tokenDecimals: 8
             })
         );
+        _configureExtraStockDepth(address(liar), pool);
         registry.setEnabled(address(liar), true);
         rounds.setHoldbackBps(1_500);
         vm.stopPrank();

@@ -42,6 +42,8 @@ interface IStockRegistry {
     function enabledTokens() external view returns (address[] memory);
     function allTokens() external view returns (address[] memory);
     function priceUsd(address token) external view returns (uint256 price1e18, uint256 updatedAt);
-    function poolLiquidityUsd(address token) external view returns (uint256);
-    function clearsMinLiquidity(address token) external view returns (bool);
+    /// @notice Validated buy-probe notional in 18-decimal USD, zero when unavailable.
+    /// @dev Non-view for canonical quoter simulation; off-chain callers use eth_call.
+    function poolLiquidityUsd(address token) external returns (uint256);
+    function clearsMinLiquidity(address token) external returns (bool);
 }

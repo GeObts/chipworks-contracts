@@ -149,7 +149,7 @@ contract FrozenFeedTest is ChipRewardsBase {
 
     /* ------------------------------ off by default --------------------------- */
 
-    function test_theCheckIsOffByDefaultAndCanBeSwitchedBackOff() public {
+    function test_disablingRoundFreshnessDoesNotDisableDepthFreshness() public {
         vm.prank(multisig);
         rounds.setMaxFeedAge(0);
         assertEq(rounds.maxFeedAge(), 0);
@@ -161,7 +161,7 @@ contract FrozenFeedTest is ChipRewardsBase {
         rounds.settleStock(id, address(nvda));
         rounds.settleStock(id, address(googl));
         rounds.finalizeRound(id);
-        assertFalse(rounds.stockSkipped(id, address(nvda)));
+        assertTrue(rounds.stockSkipped(id, address(nvda)), "mandatory depth freshness still applies");
     }
 
     function test_onlyTheMultisigCanSetIt() public {

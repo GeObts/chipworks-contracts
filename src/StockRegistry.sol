@@ -5,6 +5,8 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IUniswapV3QuoterV2, ISlipstreamQuoterV2} from "src/interfaces/IVenueQuoters.sol";
 
 import {IStockRegistry, Stock, Venue} from "./interfaces/IStockRegistry.sol";
 import {IAggregatorV3} from "./interfaces/IAggregatorV3.sol";
@@ -51,6 +53,19 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     /// @dev Bounds the loss when the probe hits a non-executable address. See {_checkedDecimals}.
     uint256 public constant DECIMALS_PROBE_GAS = 50_000;
 
+    /// @notice Each measurement makes one bounded venue quote. Gas exhaustion fails closed.
+    uint256 public constant DEPTH_QUOTE_GAS = 1_000_000;
+    uint256 public constant DEPTH_READ_GAS = 100_000;
+
+    struct DepthConfig {
+        address quoter;
+        uint128 probeAmount; // raw quote-token units, never inferred from pool balances
+        uint16 maxDeviationBps; // includes fees; both sides of the Chainlink mark
+        uint64 maxFeedAge; // mandatory; allow equity-market closures
+    }
+
+    mapping(address token => DepthConfig) public depthConfig;
+
     mapping(address token => Stock) internal _stocks;
     address[] internal _tokenList;
 
@@ -59,6 +74,9 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     event FeedUpdated(address indexed token, address indexed previousFeed, address indexed newFeed);
     event MinLiquidityUpdated(address indexed token, uint128 previousMin, uint128 newMin);
     event EnabledUpdated(address indexed token, bool enabled);
+    event DepthConfigUpdated(
+        address indexed token, address quoter, uint128 probeAmount, uint16 maxDeviationBps, uint64 maxFeedAge
+    );
 
     error ZeroAddress();
     error AlreadyRegistered(address token);
@@ -71,6 +89,7 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     error InsufficientLiquidity(address token, uint256 measuredUsd, uint256 requiredUsd);
     error BadFeedAnswer(address token);
     error AlreadyInThatState();
+    error InvalidDepthConfig();
 
     /// @param multisig            Owner.
     /// @param quoteToken_         USDC on Base.
@@ -148,6 +167,36 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
         _setFeed(token, feed);
     }
 
+    /// @notice Configure a finite buy probe using the canonical quoter for this venue.
+    /// @dev Factory identity catches configuration errors, not a malicious owner-selected
+    ///      quoter. Governance must verify deployed canonical bytecode. Re-enable explicitly.
+    function setDepthConfig(
+        address token,
+        address quoter,
+        uint128 probeAmount,
+        uint16 maxDeviationBps,
+        uint64 maxFeedAge
+    ) external onlyOwner {
+        _requireRegistered(token);
+        Stock storage s = _stocks[token];
+        if (
+            s.venue == Venue.None || quoter.code.length == 0 || probeAmount == 0 || maxDeviationBps > 500
+                || maxFeedAge < 72 hours || s.tokenDecimals > 36 || quoteDecimals > 24
+        ) revert InvalidDepthConfig();
+        address expected = s.venue == Venue.UniswapV3 ? uniswapV3Factory : slipstreamFactory;
+        (bool ok, bytes memory ret) = quoter.staticcall{gas: DEPTH_READ_GAS}(abi.encodeWithSignature("factory()"));
+        if (!ok || ret.length != 32 || abi.decode(ret, (uint256)) != uint256(uint160(expected))) {
+            revert InvalidDepthConfig();
+        }
+        if (Math.mulDiv(probeAmount, 1e18, 10 ** quoteDecimals) == 0) revert InvalidDepthConfig();
+        depthConfig[token] = DepthConfig(quoter, probeAmount, maxDeviationBps, maxFeedAge);
+        if (s.enabled) {
+            s.enabled = false;
+            emit EnabledUpdated(token, false);
+        }
+        emit DepthConfigUpdated(token, quoter, probeAmount, maxDeviationBps, maxFeedAge);
+    }
+
     /// @notice Change the depth a stock must clear before it can be enabled. Multisig only.
     function setMinLiquidityUsd(address token, uint128 newMin) external onlyOwner {
         _requireRegistered(token);
@@ -169,7 +218,7 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
             if (s.feed == address(0)) revert FeedNotSet(token);
             if (s.pool == address(0) || s.venue == Venue.None) revert PoolNotSet(token);
             uint256 measured = poolLiquidityUsd(token);
-            if (measured < s.minLiquidityUsd) {
+            if (measured == 0 || measured < s.minLiquidityUsd) {
                 revert InsufficientLiquidity(token, measured, s.minLiquidityUsd);
             }
         }
@@ -236,7 +285,7 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
         updatedAt = updatedAt_;
     }
 
-    /// @notice Raw token balances sitting in the stock's pool.
+    /// @notice Informational raw balances only. Donations are included; never a depth gate.
     function poolBalances(address token) public view returns (uint256 stockBalance, uint256 quoteBalance) {
         Stock storage s = _stocks[token];
         if (s.pool == address(0)) revert PoolNotSet(token);
@@ -248,9 +297,8 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     /// @dev Both sides valued: the quote side at par, the stock side at the Chainlink mark.
     ///      This is a headline TVL figure. It is NOT tradeable depth: Uniswap v3 and
     ///      Slipstream are concentrated, so the amount actually buyable near spot is a
-    ///      fraction of this. Set `minLiquidityUsd` with that haircut in mind, and keep
-    ///      the per-stock max-impact check in the round logic as the real protection.
-    function poolLiquidityUsd(address token) public view override returns (uint256) {
+    ///      fraction of this. No safety decision consumes this diagnostic value.
+    function poolTvlUsd(address token) public view returns (uint256) {
         (uint256 stockBalance, uint256 quoteBalance) = poolBalances(token);
         (uint256 price1e18,) = priceUsd(token);
         Stock storage s = _stocks[token];
@@ -260,14 +308,78 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
         return stockSideUsd + quoteSideUsd;
     }
 
+    /// @notice Validated configured buy-probe notional in 18-decimal USD, or zero on failure.
+    /// @dev A finite capacity certificate, NOT total depth or an extrapolated spend ceiling.
+    ///      The probe must return stock within the configured Chainlink deviation. Uses CALL
+    ///      because canonical quoters simulate reverting swaps. Off-chain use eth_call.
+    ///      No ERC20 balance is read here. Quote failure is isolated by a bounded self-call.
+    function poolLiquidityUsd(address token) public override returns (uint256) {
+        try this.measureExecutableDepth{gas: DEPTH_QUOTE_GAS + 4 * DEPTH_READ_GAS}(token) returns (uint256 depth) {
+            return depth;
+        } catch {
+            return 0;
+        }
+    }
+
+    /// @dev External boundary catches malformed return data and arithmetic failures as well
+    ///      as venue reverts. This function stores nothing and grants no token approvals.
+    function measureExecutableDepth(address token) external returns (uint256) {
+        Stock memory s = _stocks[token];
+        DepthConfig memory c = depthConfig[token];
+        if (!s.registered || s.pool == address(0) || s.feed == address(0) || c.quoter == address(0)) return 0;
+        (uint256 price, uint256 updatedAt) = this.priceUsd{gas: DEPTH_READ_GAS}(token);
+        if (updatedAt == 0 || updatedAt > block.timestamp || block.timestamp - updatedAt > c.maxFeedAge) return 0;
+
+        // Both venues expose liquidity(); it is only a missing/empty-state check. The
+        // quote below measures finite execution across ticks, never liquidity() alone.
+        {
+            (bool stateOk, bytes memory state) =
+                s.pool.staticcall{gas: DEPTH_READ_GAS}(abi.encodeWithSignature("liquidity()"));
+            if (!stateOk || state.length != 32) return 0;
+            uint256 active = abi.decode(state, (uint256));
+            if (active == 0 || active > type(uint128).max) return 0;
+        }
+
+        uint256 amountOut = _quoteDepth(token, s, c);
+        if (amountOut == 0) return 0;
+        uint256 probeUsd = Math.mulDiv(c.probeAmount, 1e18, 10 ** quoteDecimals);
+        uint256 outputUsd = Math.mulDiv(amountOut, price, 10 ** s.tokenDecimals);
+        uint256 tolerance = Math.mulDiv(probeUsd, c.maxDeviationBps, 10_000);
+        if (outputUsd < probeUsd - tolerance || outputUsd > probeUsd + tolerance) return 0;
+        return probeUsd;
+    }
+
+    function _quoteDepth(address token, Stock memory s, DepthConfig memory c) internal returns (uint256) {
+        bytes memory data;
+        if (s.venue == Venue.UniswapV3) {
+            data = abi.encodeCall(
+                IUniswapV3QuoterV2.quoteExactInputSingle,
+                (IUniswapV3QuoterV2.QuoteExactInputSingleParams(quoteToken, token, c.probeAmount, s.fee, 0))
+            );
+        } else if (s.venue == Venue.Slipstream) {
+            data = abi.encodeCall(
+                ISlipstreamQuoterV2.quoteExactInputSingle,
+                (ISlipstreamQuoterV2.QuoteExactInputSingleParams(quoteToken, token, c.probeAmount, s.tickSpacing, 0))
+            );
+        } else {
+            return 0;
+        }
+        (bool ok, bytes memory result) = c.quoter.call{gas: DEPTH_QUOTE_GAS}(data);
+        if (!ok) return 0;
+        if (result.length != 128) return 0;
+        (uint256 amountOut, uint160 sqrtAfter,,) = abi.decode(result, (uint256, uint160, uint32, uint256));
+        if (amountOut == 0 || sqrtAfter == 0) return 0;
+        return amountOut;
+    }
+
     /// @notice Whether this stock would pass the depth gate right now.
     /// @dev Never reverts. Returns false when the stock is unconfigured or the feed is bad,
     ///      so a deploy-time script can sweep the whole registry in one call.
-    function clearsMinLiquidity(address token) public view override returns (bool) {
+    function clearsMinLiquidity(address token) public override returns (bool) {
         Stock storage s = _stocks[token];
         if (!s.registered || s.pool == address(0) || s.feed == address(0) || s.venue == Venue.None) return false;
         try this.poolLiquidityUsd(token) returns (uint256 measured) {
-            return measured >= s.minLiquidityUsd;
+            return measured != 0 && measured >= s.minLiquidityUsd;
         } catch {
             return false;
         }
@@ -277,7 +389,6 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     ///         depth, its threshold, and whether it clears.
     function liquidityReport()
         external
-        view
         returns (address[] memory tokens, uint256[] memory measuredUsd, uint256[] memory requiredUsd, bool[] memory ok)
     {
         uint256 len = _tokenList.length;
@@ -293,7 +404,7 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
             } catch {
                 measuredUsd[i] = 0;
             }
-            ok[i] = clearsMinLiquidity(t);
+            ok[i] = measuredUsd[i] != 0 && measuredUsd[i] >= requiredUsd[i];
         }
     }
 
@@ -336,6 +447,8 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
         s.pool = pool;
         s.fee = fee;
         s.tickSpacing = tickSpacing;
+        // A quoter/probe belongs to the old venue. Reconfigure after any venue change.
+        delete depthConfig[token];
 
         // A venue change can invalidate the depth that justified enabling. Force a
         // fresh, explicit re-enable rather than silently carrying the flag across.

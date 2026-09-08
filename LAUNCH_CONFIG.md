@@ -171,7 +171,7 @@ constant**, so they lift when the audit lands without touching a contract.
 | Cap | Value | Where |
 |---|---|---|
 | Round minimum | **$100** | `ChipRounds.setRoundParams` — `minPot = 100e6` |
-| Round maximum | **$1,000** | `ChipRounds.setRoundParams` — `maxBudget = 1_000e6` |
+| Round maximum | **$1,000** | `ChipRounds.setMaxRoundBudget(1_000e6)` |
 | POL holdback | **15%** — unchanged | `ChipRounds.setHoldbackBps(1500)` |
 | NounLoans `maxPrincipal` | **≈60% of the Anvil queue price**, per collection, denominated in $CHIP | `NounLoans.setMaxPrincipal` |
 | NounLoans pool | seeded from the initial buy (§3) | `NounLoans.depositPool` |
@@ -225,7 +225,7 @@ anywhere and register as `Venue.None`.
 stockCount() == 13 ; enabledTokens().length == 0
 getStock(NVDAc).venue == Slipstream ; getStock(NVDAc).tickSpacing == 10
 setEnabled(CRCLc, true)  -> reverts PoolNotSet     # no market yet
-liquidityReport()        # ten clearing $25k, the deepest four over $1M
+liquidityReport()        # after setDepthConfig; validates probes, not historical TVL
 ```
 
 **3. Pot** — `(MULTISIG, USDC, UNIV3_FACTORY)`, then `setConversionConfig`, `setRoute(AERO)`
@@ -564,3 +564,13 @@ rounds.finalizeRound(id)
   terms make that more urgent, not less. OPEN_ITEMS 10.
 - **Compound share redemption** has no path. Phase 2, and it should be answered before
   auto-compound is marketed. OPEN_ITEMS 7.
+
+## Issue #5 deployment update
+
+Follow DEPLOY.md's executable-depth configuration section before enabling any stock.
+For B20 factory B use the QuoterV2 interface at `0x514c8B5f54112481E28028F1166Bd78501089259`. Configure probe amount, oracle bound, mandatory feed age,
+and a minimum in probe USD. Use eth_call for reports and maxSpendFor.
+
+Retain the launch $1,000 round cap using `setMaxRoundBudget(1_000e6)` and configure
+tighter per-stock limits with `setMaxStockSpend` where required. Quotes do not replace
+these controls. Missing or failed quote configuration fails closed even at zero minimum.

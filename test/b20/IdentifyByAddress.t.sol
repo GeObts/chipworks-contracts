@@ -94,20 +94,8 @@ contract IdentifyByAddressTest is Test {
     }
 
     function _has(string memory haystack, string memory needle) internal pure returns (bool) {
-        bytes memory h = bytes(haystack);
-        bytes memory n = bytes(needle);
-        if (n.length == 0 || n.length > h.length) return false;
-
-        for (uint256 i; i <= h.length - n.length; ++i) {
-            bool ok = true;
-            for (uint256 j; j < n.length; ++j) {
-                if (h[i + j] != n[j]) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) return true;
-        }
-        return false;
+        // Scan host-side: doing six byte-by-byte EVM scans exhausted the test gas
+        // allowance as src/ grew. The forbidden patterns and file coverage are unchanged.
+        return bytes(needle).length != 0 && vm.contains(haystack, needle);
     }
 }

@@ -721,7 +721,11 @@ withdrawn. If the artifact is genuinely gone, the honest resolution is a fresh p
 
 ---
 
-## 26. RESOLVED: the depth-aware impact trim — and with it, items 17 and 18
+## 26. Historical impact trim — measurement corrected by issue #5
+
+**Issue #5 update:** the discussion below records the earlier balance-based design.
+The fix uses finite executable quotes and restores independent hard caps. The old
+TVL-derived figures and uncapped-round rationale do not describe the fixed implementation.
 
 **Closed in `launch-candidate-16`.** `ChipRounds` now sizes every per-stock buy from measured
 pool depth: a buy spends at most `poolLiquidityUsd(stock) * maxImpactBps / BPS`, defaulting to
@@ -912,7 +916,7 @@ Bankr refused a continuous depth gate partly on this ground:
 
 **That is a description of code that already shipped, at `launch-candidate-16`.**
 `ChipRounds.settleStock` calls `_maxSpendFor(stock)`, which staticcalls
-`registry.poolLiquidityUsd(stock)` — **live pool token balances** — and a zero reading skips the
+`registry.poolLiquidityUsd(stock)` — **historically live pool token balances; executable probes after issue #5** — and a zero reading skips the
 stock outright with reason `"no depth"`. The depth-aware impact trim (item 26, which closed
 EXT-R-L-1 and SEC-POT-002) put a manipulable depth reading inside the execution loop, and the
 `-22` reasoning treats the execution loop as if it were clean.
@@ -951,3 +955,14 @@ The question to put:
 **Until that is answered, §4's conclusion is not settled**, and this item is the reason. The
 verdict on the five contracts stands regardless — nothing here is a finding against the code
 that was scanned.
+
+## Issue #5 — donation-resistant enablement and spending
+
+The proposed fix quotes a finite probe for each stock, re-quotes at settlement, and applies
+independent round/stock caps. See `review/ISSUE_5.md` for validation and residual risks.
+Raw balances are informational TVL only. This supersedes historical statements in items
+26/28 that a balance-derived trim establishes executable capacity or justifies removing caps.
+
+Review deployment probe sizes, thresholds, canonical factory/quoter versions, mandatory
+feed ages, and keeper gas on the target node. Flash liquidity and spot manipulation remain
+possible; this change addresses donation-based inflation and does not alter audit status.

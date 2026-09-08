@@ -157,7 +157,7 @@ contract StockRegistryForkTest is Test {
         assertEq(registry.getStock(NVDA).tokenDecimals, 8, "fell back to the supplied value");
     }
 
-    /// @notice The depth gate, exercised with the true on-chain balances. Balances are
+    /// @notice The executable quote gate with a real pool and quoter. B20 balances are
     ///         read from the real node via raw RPC, then replayed into etched stand-in
     ///         tokens so the forked EVM can run the registry's arithmetic over them.
     function test_depthGateAgainstRealMeasuredBalances() public {
@@ -172,6 +172,11 @@ contract StockRegistryForkTest is Test {
         EtchableERC20(NVDA).init("NVIDIA Corporation", "NVDAc", 8);
         EtchableERC20(NVDA).mint(NVDA_POOL, realStock);
 
+        vm.startPrank(multisig);
+        registry.setFeed(NVDA, 0x04689a41629776563E6822F76f2e57D148d28513);
+        registry.setDepthConfig(NVDA, 0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a, 1e6, 500, 120 hours);
+        vm.stopPrank();
+
         (uint256 stockBal, uint256 quoteBal) = registry.poolBalances(NVDA);
         assertEq(stockBal, realStock);
         // Compared against the FORK's value, not the RPC's. `_rpcBalanceOf` queries "latest"
@@ -184,6 +189,7 @@ contract StockRegistryForkTest is Test {
         assertApproxEqRel(quoteBal, realUsdc, 0.02e18, "and the two sources agree within a whisker");
 
         uint256 measured = registry.poolLiquidityUsd(NVDA);
+        assertEq(measured, 1e18, "real quote executes the $1 probe within its oracle bound");
         console2.log("NVDA pool depth, USD:", measured / 1e18);
 
         // Threshold just above measured: must refuse. Just below: must allow.

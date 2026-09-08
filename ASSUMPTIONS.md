@@ -782,12 +782,12 @@ RPC (B20 tokens are precompiles, A-15), and prices the stock side at its live fe
 **These are 7–16x lower than the figures supplied from the Aerodrome UI** (which gave NVDA
 $20.9M, GOOGL $12.9M, SPCX $2.9M). The UI is not showing pool TVL — most likely concentrated
 `liquidity`, a virtual quantity much larger than the tokens actually in the contract.
-`StockRegistry.poolLiquidityUsd` measures balances, so the table above is what the depth gate
-and the impact trim will see. **Do not size parameters from the UI number.**
+`StockRegistry.poolTvlUsd` preserves these historical balance measurements. After issue #5,
+the gate and impact trim use finite executable quotes, so this table cannot size them. **Do not size parameters from the UI number.**
 
-Even so, this changes the launch completely: against the old wrong-factory Uniswap figures only
-GOOGL and SPCX cleared a $25,000 threshold. **All ten of these clear it**, the smallest by four
-times.
+The former balance-based gate reported all ten above $25,000, compared with only GOOGL
+and SPCX on the wrong-factory Uniswap figures. That historical comparison cannot establish
+which stocks clear the executable-probe gate; configure and remeasure each one at launch.
 
 ### The router — **SETTLED 2026-09-07, and proved with a real buy**
 
@@ -828,8 +828,9 @@ Three settings, no contract change:
 first time — a registry built on factory A cannot register a single B20 stock as Slipstream, and
 `test_aFactoryARegistryCannotRegisterTheB20Venue` is the proof it fails loudly rather than
 quietly. The whole thirteen-ticker config is re-derived from factory B every run in
-`test/fork/B20RegistryConfig.t.sol`; ten clear the $25,000 gate, three have no pool anywhere and
-register as `Venue.None`.
+`test/fork/B20RegistryConfig.t.sol`; ten have a factory-B pool, while three register as
+`Venue.None`. Its small configured probes do not clear the historical $25,000 threshold;
+the exact gate is tested separately against a successful live quote.
 
 ### POL stays on factory A, on purpose
 
@@ -840,3 +841,13 @@ pairs, which exist on factory A and are what the NPM and the Voter's gauges know
 buys are one-shot swaps against B20 pools, which exist only on factory B. Nothing reads across
 the two — `POLTreasury` never consults `StockRegistry`, and `ChipRounds._buy` never touches the
 NPM. The only thing to avoid is assuming one address serves both.
+
+## Issue #5 — measurement assumptions
+
+See DEPLOY.md's executable-depth configuration section and `review/ISSUE_5.md`.
+The metric certifies a configured finite buy probe within a Chainlink deviation bound.
+It does not estimate total TVL, extrapolate capacity, or promise immunity to flash liquidity.
+Quoters must match the registered factory and venue-specific QuoterV2 ABI.
+Canonical quoter simulations require CALL and revert pool writes; bounded failure returns
+zero. Both enablement and settlement consume this path. Historical balance-based
+calculations and claims about removal of independent caps are superseded by this fix.
