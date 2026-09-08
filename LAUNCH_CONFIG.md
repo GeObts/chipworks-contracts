@@ -531,9 +531,25 @@ rounds.finalizeRound(id)
 
 **Weekly:** `claims.sweepExpired(...)` for any round past `expiresAt`.
 
-**Watch for:** a stock skipped with reason `stale feed` — that is `maxFeedAge` doing its job
-(the budget carried, nothing lost), but a stock skipping repeatedly means a genuinely dead
-feed, not a weekend.
+**Watch for TWO things, and they have opposite causes:**
+
+1. **A stock skipped with reason `stale feed`** — that is `maxFeedAge` doing its job (the
+   budget carried, nothing lost), but a stock skipping repeatedly means a genuinely dead feed,
+   not a weekend.
+2. 🔴 **A stock where `isEnabled() == true` but `clearsMinLiquidity() == false`.** One
+   `liquidityReport()` call returns every stock, its measured depth, its threshold and whether
+   it clears, so this is one read per cycle:
+
+   ```
+   registry.liquidityReport()    # alert on any row where enabled && !ok
+   ```
+
+   **The depth gate is checked once, when a stock is enabled, and never again** — see
+   OPEN_ITEMS 28. A pool that drains leaves the stock enabled and buying. Nothing announces it,
+   because the per-buy protection (`_minOutFor` against the Chainlink mark) fails *safe*: the
+   buy is refused in full and the slice carries. So the symptom is a stock that quietly stops
+   filling, not a bad fill. **The response is `setEnabled(token, false)`** — instant, not
+   timelocked, and reversible the moment depth returns.
 
 ---
 

@@ -796,3 +796,77 @@ when a keeper happens to call `burnAll()`. The **aggregator filing** is what bec
 **Remaining work is operational, not code**: LAUNCH_CONFIG §6.6 carries the ownership hand-off,
 including the ABI check that must happen **before** it. Until `chip.owner()` is the Burner,
 `burnAll()` reverts and burns simply accumulate — nothing is lost, the burn is deferred.
+
+---
+
+## 28. NEW: the depth gate is point-in-time, and depth drifts
+
+**This is a known gap being carried deliberately, not an oversight.** It is here so it is not
+lost if the PR that partially addressed it is never merged.
+
+**`StockRegistry.setEnabled(token, true)` checks depth once, at the moment of enabling, and
+nothing re-checks it afterwards.** A stock enabled at $200,000 of measured depth stays enabled
+at $20,000, at $2,000, and at zero. `clearsMinLiquidity()` will say `false` the whole way down
+while `isEnabled()` keeps saying `true`, and rounds keep buying it.
+
+**Two ways to reach the inconsistent state, and only one of them was ever proposed for a fix:**
+
+| How | Covered? |
+|---|---|
+| Governance **raises** `minLiquidityUsd` above a stock's measured depth | An external PR proposes re-checking inside `setMinLiquidityUsd`. **Not merged** — see below |
+| The pool **drains** below an unchanged `minLiquidityUsd` | **Nothing addresses this**, and it is the far more likely one |
+
+The second is the real gap. Nobody has to do anything for it to happen — one LP leaving is
+enough, and these are not deep pools by the standards of the rest of DeFi.
+
+### Why it is not a hole in the money path
+
+**The depth gate is not the per-buy protection and never was.** What actually stands between a
+round and a bad fill is `ChipRounds._minOutFor`: every buy must clear the stock's Chainlink mark
+less `maxSlippageBps` (2% by default), and a buy that cannot is refused **in full** by the
+router, with the whole slice carrying back to the Pot. That check reads live state on every
+buy and cannot go stale.
+
+So a drained pool does not produce a bad purchase. It produces a stock that **silently stops
+filling** — the slice carries, round after round, and nothing announces why. That is a
+**liveness and observability** problem, not a solvency one, which is why it is an open item
+rather than a blocker.
+
+### The mitigation until it is built
+
+**Operational, and it belongs on the deploy checklist:**
+
+- **The keeper reads `liquidityReport()` on every cycle** — it is one call that returns every
+  registered stock, its measured depth, its threshold and whether it clears — and **alerts on
+  any stock where `isEnabled() == true` and `clearsMinLiquidity() == false`.** That pair
+  disagreeing is the whole signal, and it is cheap to watch.
+- **`setEnabled(token, false)` is the response**, it is instant and not timelocked, and it is
+  reversible the moment depth returns.
+- **Watch for the softer signal too**: a stock that skips repeatedly on `_minOutFor` without
+  its feed being stale is a pool that has gone thin, and it will show up there before anybody
+  looks at the report.
+
+LAUNCH_CONFIG §8 already tells the keeper to watch for stocks skipping on a stale feed. This is
+the second thing to watch for, and it has the opposite cause.
+
+### Why the open PR was not merged
+
+An external PR (#4) re-checks the gate inside `setMinLiquidityUsd` and disables an enabled stock
+that no longer clears. The change is fail-closed, `onlyOwner` is untouched, it merges cleanly
+and its tests pass — it is competent work.
+
+It was held for two reasons, neither of them about quality:
+
+1. **It closes the smaller of the two doors.** The drift case, which is the likely one, is
+   untouched by it.
+2. **It changes `StockRegistry` in the middle of a live re-scan.** RESCAN_NOTE tells Bankr that
+   `StockRegistry`'s runtime bytecode is unchanged since `launch-candidate-14`, and that claim
+   is load-bearing — it is why two of the five contracts are in scope for their environment
+   rather than their code. Merging mid-flight would invalidate the note in the reviewer's hands.
+
+**The question is with Bankr instead**, in RESCAN_NOTE §4: should the gate be continuous, and
+where. Their answer decides the shape — re-check on config change only, re-check inside the buy
+path, or leave it operational — and whatever it is, it lands deliberately with tests and comes
+back through the same re-scan. **Do not close this item by merging PR #4 alone**; that would
+leave the drift case open while looking like it was handled, which is the failure mode this
+file exists to prevent.
