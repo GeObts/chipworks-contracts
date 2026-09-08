@@ -24,6 +24,7 @@ import {Furnace} from "../../src/furnace/Furnace.sol";
 import {NounLoans} from "../../src/loans/NounLoans.sol";
 import {Anvil} from "../../src/anvil/Anvil.sol";
 
+import {VerifyOwnership} from "../../script/VerifyOwnership.s.sol";
 import {MockNoun} from "../mocks/MockNoun.sol";
 import {DopplerLikeChip} from "../ChipBurner.t.sol";
 
@@ -134,6 +135,57 @@ contract DeployScriptForkTest is Test {
         assertEq(ChipRounds(rounds).owner(), multisig, "P4: rounds owner");
         assertEq(Furnace(furnace).owner(), multisig, "P4: furnace owner");
         assertEq(NounLoans(loans).owner(), multisig, "P4: loans owner");
+    }
+
+    /// @notice The ownership audit passes on a correctly finished deploy, and catches the two
+    ///         ways it can be wrong.
+    ///
+    /// @dev The second half is the point. `owner()` alone would pass while a half-finished
+    ///      two-step transfer sat waiting for someone else to call `acceptOwnership()`, so the
+    ///      audit checks `pendingOwner()` too. This proves that check actually bites.
+    function test_theOwnershipAuditPassesClean_andCatchesADanglingTransfer() public {
+        (address splitter, address registry, address pot, address polTreasury) = new DeployPhase1PreChip().run();
+        vm.setEnv("FEE_SPLITTER", vm.toString(splitter));
+        vm.setEnv("STOCK_REGISTRY", vm.toString(registry));
+        vm.setEnv("POT", vm.toString(pot));
+        vm.setEnv("POL_TREASURY", vm.toString(polTreasury));
+
+        address burner = new DeployPhase2Burner().run();
+        vm.setEnv("CHIP_BURNER", vm.toString(burner));
+
+        address activation = new DeployPhase3Activation().run();
+        vm.setEnv("CHIP_ACTIVATION", vm.toString(activation));
+
+        (address claims, address rounds, address claimRouter, address furnace, address loans, address anvil) =
+            new DeployPhase4Core().run();
+        vm.setEnv("CHIP_CLAIMS", vm.toString(claims));
+        vm.setEnv("CHIP_ROUNDS", vm.toString(rounds));
+        vm.setEnv("CLAIM_ROUTER", vm.toString(claimRouter));
+        vm.setEnv("FURNACE", vm.toString(furnace));
+        vm.setEnv("NOUN_LOANS", vm.toString(loans));
+        vm.setEnv("ANVIL", vm.toString(anvil));
+        vm.setEnv("DEPLOY_WALLET", vm.toString(address(this)));
+
+        // the two Safe calls the audit reads: section 6.6, and replacing the placeholder pot
+        chip.transferOwnership(burner);
+        vm.prank(multisig);
+        FeeSplitter(payable(splitter)).setPot(pot);
+
+        VerifyOwnership audit = new VerifyOwnership();
+        audit.run(); // passes
+
+        // Now break it the way `owner()` alone would not see: start a two-step transfer of
+        // ChipRounds to somebody else and never accept it.
+        address attacker = makeAddr("someoneElse");
+        vm.prank(multisig);
+        ChipRounds(rounds).transferOwnership(attacker);
+
+        assertEq(ChipRounds(rounds).owner(), multisig, "owner() STILL looks correct - that is the trap");
+        assertEq(ChipRounds(rounds).pendingOwner(), attacker, "but a pending owner is waiting");
+
+        VerifyOwnership audit2 = new VerifyOwnership();
+        vm.expectRevert(bytes("OWNERSHIP AUDIT FAILED - see the log above"));
+        audit2.run();
     }
 
     /// @notice THE DEPLOY WALLET CANNOT CONFIGURE ANYTHING, AND THAT IS THE WHOLE POINT.
