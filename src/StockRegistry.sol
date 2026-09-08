@@ -42,10 +42,10 @@ contract StockRegistry is IStockRegistry, Ownable2Step {
     uint8 public immutable override quoteDecimals;
 
     /// @notice Uniswap v3 factory used to verify `Venue.UniswapV3` pools.
-    address public immutable uniswapV3Factory;
+    address public immutable override uniswapV3Factory;
 
     /// @notice Aerodrome Slipstream factory used to verify `Venue.Slipstream` pools.
-    address public immutable slipstreamFactory;
+    address public immutable override slipstreamFactory;
 
     /// @notice Gas cap for the optional `decimals()` cross-check in {addStock}.
     /// @dev Bounds the loss when the probe hits a non-executable address. See {_checkedDecimals}.

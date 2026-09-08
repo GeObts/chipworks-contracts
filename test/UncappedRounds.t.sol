@@ -30,6 +30,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 ///      so thin names distribute instead of being skipped.
 contract UncappedRoundsTest is ChipRewardsBase {
     ShallowPoolRouter internal shallow;
+    ShallowPoolRouter internal shallowSlip;
 
     /// @dev Points BOTH the router and the registry's measured depth at the same reserves, so
     ///      the trim and the fill model one pool rather than disagreeing about it. Wiring only
@@ -39,8 +40,12 @@ contract UncappedRoundsTest is ChipRewardsBase {
     function _useShallowPool(address stock, uint256 quoteReserve, uint256 stockReserve) internal {
         if (address(shallow) == address(0)) {
             shallow = new ShallowPoolRouter();
+            // `setRouters` checks each router against the registry's factory for that venue.
+            shallow.setFactory(address(uniFactory));
+            shallowSlip = new ShallowPoolRouter();
+            shallowSlip.setFactory(address(slipFactory));
             vm.prank(multisig);
-            rounds.setRouters(address(shallow), address(shallow));
+            rounds.setRouters(address(shallow), address(shallowSlip));
         }
         shallow.setReserves(address(usdc), stock, quoteReserve, stockReserve);
         MockERC20(stock).mint(address(shallow), stockReserve);
@@ -288,6 +293,15 @@ contract UncappedRoundsTest is ChipRewardsBase {
 /// @dev The stock `MockSwapRouter` is a fixed-rate double — it fills any size at the same
 ///      price, so it cannot express "too big for this pool" and could never have caught this.
 contract ShallowPoolRouter {
+    /// @notice The factory this router claims to belong to.
+    /// @dev `ChipRounds.setRouters` refuses any router whose `factory()` is not the one the
+    ///      registry derives that venue's pools from, so a test double has to answer it.
+    address public factory;
+
+    function setFactory(address f) external {
+        factory = f;
+    }
+
     mapping(address => mapping(address => uint256)) public reserveIn;
     mapping(address => mapping(address => uint256)) public reserveOut;
 

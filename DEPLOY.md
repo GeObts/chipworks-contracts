@@ -576,6 +576,12 @@ Needs: `MULTISIG`, `StockRegistry`, `Pot`, `ChipActivation`, **`ChipClaims`**.
 | `splitChangeFeeChip_` | `5000e18` (5,000 CHIP) |
 | `chipBurnTarget_` | **`ChipBurner` from step 0** — where the split-change fee is sent. Immutable, non-zero. |
 
+> **`setRouters` now validates, so run it AFTER the registry is deployed and BEFORE the first
+> round.** It reads `registry.uniswapV3Factory()` and `registry.slipstreamFactory()` and
+> requires each router to report the matching one. That makes the router and the registry a
+> matched pair by construction: if the registry is ever redeployed onto a different factory,
+> the old router stops being accepted. There is no way to set only one of the two.
+
 Then configure, all from the multisig:
 
 | Call | Recommended value |
@@ -585,7 +591,7 @@ Then configure, all from the multisig:
 | `setCollectionBaseBps(LIL_NOUNS, 5000)` | Lil = 0.5x |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |
 | `setCollectionBaseBps(DARK_NOUNS, 20000)` | Dark = 2.0x |
-| `setRouters(uniswapRouter, slipstreamRouter)` | `0x2626664c2603336E57B271c5C0b26F421741e481` (Uniswap v3 SwapRouter02) and **`0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F`** — the Slipstream router bound to **factory B**. The better-known `0xBE6D8f…18a5` serves factory A and **every B20 buy through it reverts**; proved both ways in `test/fork/FactoryBRouter.t.sol`. |
+| `setRouters(uniswapRouter, slipstreamRouter)` | `0x2626664c2603336E57B271c5C0b26F421741e481` (Uniswap v3 SwapRouter02) and **`0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F`** — the Slipstream router bound to **factory B**. The better-known `0xBE6D8f…18a5` serves factory A and could never reach a B20 pool; proved both ways in `test/fork/FactoryBRouter.t.sol`. **Since `-22` this is enforced on chain**: each router's `factory()` is checked against the matching factory on the registry, and neither may be zero, so a wrong router reverts here instead of reverting every buy later. |
 | `setPolTreasury(polTreasury)` | after step 6 — receives the holdback |
 | `setChip(chipToken)` | after the $CHIP launch. **One argument** — the burn destination is `chipBurnTarget`, a constructor argument, and there is deliberately no setter for it. |
 | `setHoldbackBps(1500)` | the spec's 15%. Range 0–2500, ceiling immutable |

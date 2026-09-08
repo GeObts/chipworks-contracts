@@ -108,6 +108,93 @@ interface IERC20 {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
 }
 
+// lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/ReentrancyGuard.sol)
+
+/**
+ * @dev Contract module that helps prevent reentrant calls to a function.
+ *
+ * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier
+ * available, which can be applied to functions to make sure there are no nested
+ * (reentrant) calls to them.
+ *
+ * Note that because there is a single `nonReentrant` guard, functions marked as
+ * `nonReentrant` may not call one another. This can be worked around by making
+ * those functions `private`, and then adding `external` `nonReentrant` entry
+ * points to them.
+ *
+ * TIP: If EIP-1153 (transient storage) is available on the chain you're deploying at,
+ * consider using {ReentrancyGuardTransient} instead.
+ *
+ * TIP: If you would like to learn more about reentrancy and alternative ways
+ * to protect against it, check out our blog post
+ * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
+ */
+abstract contract ReentrancyGuard {
+    // Booleans are more expensive than uint256 or any type that takes up a full
+    // word because each write operation emits an extra SLOAD to first read the
+    // slot's contents, replace the bits taken up by the boolean, and then write
+    // back. This is the compiler's defense against contract upgrades and
+    // pointer aliasing, and it cannot be disabled.
+
+    // The values being non-zero value makes deployment a bit more expensive,
+    // but in exchange the refund on every call to nonReentrant will be lower in
+    // amount. Since refunds are capped to a percentage of the total
+    // transaction's gas, it is best to keep them low in cases like this one, to
+    // increase the likelihood of the full refund coming into effect.
+    uint256 private constant NOT_ENTERED = 1;
+    uint256 private constant ENTERED = 2;
+
+    uint256 private _status;
+
+    /**
+     * @dev Unauthorized reentrant call.
+     */
+    error ReentrancyGuardReentrantCall();
+
+    constructor() {
+        _status = NOT_ENTERED;
+    }
+
+    /**
+     * @dev Prevents a contract from calling itself, directly or indirectly.
+     * Calling a `nonReentrant` function from another `nonReentrant`
+     * function is not supported. It is possible to prevent this from happening
+     * by making the `nonReentrant` function external, and making it call a
+     * `private` function that does the actual work.
+     */
+    modifier nonReentrant() {
+        _nonReentrantBefore();
+        _;
+        _nonReentrantAfter();
+    }
+
+    function _nonReentrantBefore() private {
+        // On the first call to nonReentrant, _status will be NOT_ENTERED
+        if (_status == ENTERED) {
+            revert ReentrancyGuardReentrantCall();
+        }
+
+        // Any calls to nonReentrant after this point will fail
+        _status = ENTERED;
+    }
+
+    function _nonReentrantAfter() private {
+        // By storing the original value once again, a refund is triggered (see
+        // https://eips.ethereum.org/EIPS/eip-2200)
+        _status = NOT_ENTERED;
+    }
+
+    /**
+     * @dev Returns true if the reentrancy guard is currently set to "entered", which indicates there is a
+     * `nonReentrant` function in the call stack.
+     */
+    function _reentrancyGuardEntered() internal view returns (bool) {
+        return _status == ENTERED;
+    }
+}
+
 // lib/openzeppelin-contracts/contracts/access/Ownable.sol
 
 // OpenZeppelin Contracts (last updated v5.0.0) (access/Ownable.sol)
@@ -308,13 +395,16 @@ abstract contract Ownable2Step is Ownable {
 ///      needed, {transferTokenOwnership} is the escape hatch: move the token to a new wrapper
 ///      that implements it, deliberately and visibly. That is the reason the ownership
 ///      pass-through exists at all, and it is why leaving it out would have been the mistake.
-contract ChipBurner is Ownable2Step {
+contract ChipBurner is Ownable2Step, ReentrancyGuard {
     /// @notice The token this contract owns and burns.
     IERC20 public immutable chipToken;
 
     /// @notice Running total of $CHIP destroyed by this contract, in wei.
-    /// @dev Measured by the fall in `totalSupply`, never by the amount requested — a token
-    ///      that under-burns or lies would otherwise inflate the figure the site publishes.
+    /// @dev Measured, never requested — a token that under-burns or lies would otherwise
+    ///      inflate the figure the site publishes. Specifically it is the SMALLER of the fall
+    ///      in `totalSupply` and the fall in this contract's own balance, so it cannot be
+    ///      inflated by a burn happening elsewhere in the same call, nor by tokens that merely
+    ///      moved without being destroyed. See {burnAll}.
     uint256 public totalBurned;
 
     /// @notice How many times {burnAll} has actually destroyed something.
@@ -326,6 +416,7 @@ contract ChipBurner is Ownable2Step {
 
     error NothingToBurn();
     error BurnDidNotReduceSupply(uint256 before, uint256 nowSupply);
+    error BurnDidNotReduceBalance(uint256 before, uint256 nowBalance);
     error PassThroughFailed(bytes reason);
     error ZeroAddress();
 
@@ -352,18 +443,46 @@ contract ChipBurner is Ownable2Step {
     ///      {totalBurned} a number the site can publish: it counts what left existence, not
     ///      what we asked to leave. A token that silently no-ops its own burn cannot quietly
     ///      turn this contract into the `0xdead` address with extra steps.
+    ///
+    ///      **`nonReentrant`, AND THE REASON IS THE ACCOUNTING, NOT THE FUNDS.** `burn` is a
+    ///      call into a token this contract does not control, and `burned` is derived from a
+    ///      `totalSupply` reading that spans it. A token that re-entered here would have its
+    ///      inner call credit {totalBurned}, and then the outer call would compute its own
+    ///      figure from a supply delta covering *both* burns and credit it a second time. No
+    ///      $CHIP could be stolen or stranded — it is destroyed either way, and there is still
+    ///      no path that moves it out — but the published number would be wrong, and that
+    ///      number is the entire reason this contract exists. Slither reports this as
+    ///      `reentrancy-benign`; it is benign for funds and not benign for the figure.
+    ///
+    ///      The guard is also the consistent choice. Everything else here refuses to trust the
+    ///      token — the burn is verified by reading supply rather than believing a return
+    ///      value — so relying on that same token not to re-enter would have been the one
+    ///      place the contract took it at its word.
+    ///
+    ///      BOUNDED BY OUR OWN BALANCE AS WELL AS BY SUPPLY. `burned` is the **smaller** of
+    ///      the fall in `totalSupply` and the fall in this contract's own balance. The supply
+    ///      delta alone would credit us for any other burn that happened during the call;
+    ///      the balance delta alone would credit us for tokens that merely moved. Taking the
+    ///      lesser of the two cannot over-report in either direction, whatever the token does.
     /// @return burned How much $CHIP ceased to exist.
-    function burnAll() external returns (uint256 burned) {
-        uint256 balance = chipToken.balanceOf(address(this));
-        if (balance == 0) revert NothingToBurn();
+    function burnAll() external nonReentrant returns (uint256 burned) {
+        uint256 balanceBefore = chipToken.balanceOf(address(this));
+        if (balanceBefore == 0) revert NothingToBurn();
 
         uint256 supplyBefore = chipToken.totalSupply();
-        IChipOwnable(address(chipToken)).burn(balance);
+        IChipOwnable(address(chipToken)).burn(balanceBefore);
         uint256 supplyAfter = chipToken.totalSupply();
+        uint256 balanceAfter = chipToken.balanceOf(address(this));
 
         if (supplyAfter >= supplyBefore) revert BurnDidNotReduceSupply(supplyBefore, supplyAfter);
+        // A token that handed us MORE than it burned has not given anything up on our behalf.
+        // Checked before the subtraction, which would otherwise underflow.
+        if (balanceAfter >= balanceBefore) revert BurnDidNotReduceBalance(balanceBefore, balanceAfter);
 
-        burned = supplyBefore - supplyAfter;
+        uint256 supplyDrop = supplyBefore - supplyAfter;
+        uint256 balanceDrop = balanceBefore - balanceAfter;
+        burned = supplyDrop < balanceDrop ? supplyDrop : balanceDrop;
+
         totalBurned += burned;
         ++burnCount;
 

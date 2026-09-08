@@ -250,6 +250,8 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
     error InsufficientExcess(address token, uint256 requested, uint256 available);
     error Insolvent(address token);
     error BadConfig();
+    error NotAContract(address target);
+    error RouterNotOnFactory(address router, address expectedFactory, address actualFactory);
     /// @notice Less $CHIP reached `0xdead` than the fee required.
     error ChipBurnShortfall(uint256 delivered, uint256 required);
 
@@ -326,11 +328,60 @@ contract ChipRounds is Ownable2Step, ReentrancyGuard {
         emit AddressUpdated("chipToken", token);
     }
 
+    /// @notice Point the engine at the two swap routers. Multisig only.
+    ///
+    /// @dev **BOTH ROUTERS ARE VERIFIED AGAINST THE REGISTRY'S OWN FACTORIES.** A router is
+    ///      only useful if it derives pool addresses from the same factory the registry
+    ///      resolved those pools from; one bound to a different factory cannot reach a single
+    ///      registered pool, and **every buy reverts, on every round, for every ticker**.
+    ///
+    ///      THIS USED TO BE UNVALIDATED, AND THE VENUE FLIP IS WHY IT STOPPED BEING SURVIVABLE.
+    ///      There was no zero check and no `factory()` check here. That was tolerable only
+    ///      while the Slipstream branch was dead code — every B20 stock registered as
+    ///      `Venue.UniswapV3`, so a wrong Slipstream router was never called. Since A-22 the
+    ///      B20 pools are known to live on Aerodrome CL **factory B**, ten of thirteen tickers
+    ///      register as `Venue.Slipstream`, and this is the live buy path. Two Aerodrome CL
+    ///      routers exist, they are the same bytecode with different constructor arguments,
+    ///      and only one reaches factory B. Getting it wrong is easy and the symptom — a round
+    ///      that buys nothing — reads like a depth problem rather than a wiring one.
+    ///
+    ///      `ConversionRoutes._setRoute` has had exactly this guard since SEC-POT-001. That
+    ///      finding was about the Pot's conversion path and never covered this one; this is
+    ///      the same protection applied to the contract that now needs it.
+    ///
+    ///      THE EXPECTED FACTORIES ARE READ FROM THE REGISTRY, NOT HARDCODED. They are
+    ///      immutables over there, so the pair can never drift apart: whatever factory the
+    ///      registry derives pools from is the factory a router must belong to. A registry
+    ///      redeploy onto a different factory automatically re-scopes this check.
+    ///
+    ///      NEITHER ROUTER MAY BE ZERO, even if only one venue is in use today. `Venue` is
+    ///      per-stock and nothing stops the next listing landing on the other one; a zero
+    ///      router would then fail at buy time instead of here.
     function setRouters(address uni, address slip) external onlyOwner {
+        _requireRouterOnFactory(uni, registry.uniswapV3Factory());
+        _requireRouterOnFactory(slip, registry.slipstreamFactory());
+
         uniswapRouter = IUniswapV3SwapRouter(uni);
         slipstreamRouter = ISlipstreamSwapRouter(slip);
         emit AddressUpdated("uniswapRouter", uni);
         emit AddressUpdated("slipstreamRouter", slip);
+    }
+
+    /// @dev Rejects at configuration time rather than at buy time. Not gas-capped and not
+    ///      tolerant of failure, exactly like `ConversionRoutes._requireUniswapV3Router`: this
+    ///      is a multisig call, and a router that cannot answer `factory()` is one we should
+    ///      not be pointing a round's budget at.
+    function _requireRouterOnFactory(address router, address expectedFactory) internal view {
+        if (router == address(0)) revert ZeroAddress();
+        if (router.code.length == 0) revert NotAContract(router);
+
+        (bool ok, bytes memory ret) = router.staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok || ret.length < 32) revert RouterNotOnFactory(router, expectedFactory, address(0));
+
+        address actualFactory = abi.decode(ret, (address));
+        if (actualFactory != expectedFactory) {
+            revert RouterNotOnFactory(router, expectedFactory, actualFactory);
+        }
     }
 
     function setCollectionBaseBps(address collection, uint32 bps) external onlyOwner {

@@ -29,6 +29,14 @@ struct Stock {
 interface IStockRegistry {
     function quoteToken() external view returns (address);
     function quoteDecimals() external view returns (uint8);
+
+    /// @notice The factory each venue's pools are derived from. Immutable on the registry.
+    /// @dev Exposed so a consumer can check that a ROUTER it is about to be pointed at belongs
+    ///      to the same factory this registry resolves pools from. `ChipRounds.setRouters`
+    ///      does exactly that: a router on the wrong factory cannot reach a single pool the
+    ///      registry registered, and would revert every buy.
+    function uniswapV3Factory() external view returns (address);
+    function slipstreamFactory() external view returns (address);
     function isEnabled(address token) external view returns (bool);
     function getStock(address token) external view returns (Stock memory);
     function enabledTokens() external view returns (address[] memory);

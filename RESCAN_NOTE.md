@@ -1,62 +1,156 @@
-# RESCAN_NOTE.md — targeted re-review for `launch-candidate-21`
+# RESCAN_NOTE.md — targeted re-review for `launch-candidate-22`
 
 For Bankr. **This is the last audit step before deploy.**
 
-Scope is **five contracts**, and it is deliberately not the same shape as the last re-scan:
-two of the five have not changed a single byte. They are in scope because their *environment*
-changed underneath them, which is the harder thing to catch.
+`-22` is `-21` plus the two fixes we flagged to you ourselves in the `-21` note. Nothing else in
+`src/` moved. If you already started on `-21`, the delta is small and named in §0.
 
-| Contract | Code changed since `-19`? | Why it is in scope |
+Scope is **five contracts**, and two of them still have no behavioural change at all — they are
+in scope because their *environment* changed, which is the harder thing to catch.
+
+| Contract | Changed since `-19`? | Why it is in scope |
 |---|---|---|
-| `ChipBurner.sol` | **NEW — never reviewed by anyone** | Becomes the **owner of the $CHIP token**. Largest single authority in the system |
-| `ChipActivation.sol` | yes, +56 −19 | $CHIP burns re-routed to an immutable target |
-| `ChipRounds.sol` | yes, +37 −17 | Same re-route, a public constant removed, **and its Slipstream branch went from dead code to the live buy path** |
-| `StockRegistry.sol` | **no — byte-identical since `-14`** | Never externally reviewed (OPEN_ITEMS 25a), and it is now what stands between a correct venue config and a dead one |
+| `ChipBurner.sol` | **NEW, and changed again at `-22`** | Becomes the **owner of the $CHIP token**. Largest single authority in the system |
+| `ChipRounds.sol` | yes, and again at `-22` | Burn re-route, a public constant removed, **its Slipstream branch is now the live buy path**, and `setRouters` is now validated |
+| `ChipActivation.sol` | yes, at `-21` only | $CHIP burns re-routed to an immutable target |
+| `StockRegistry.sol` | **runtime bytecode identical since `-14`** | Never externally reviewed (OPEN_ITEMS 25a); now what stands between a correct venue config and a dead one. Source gained two `override` keywords at `-22` — see §0 |
 | `POLTreasury.sol` | **no — byte-identical since `-14`** | Now sits on a *different Aerodrome factory* from the stock buys |
 
 ### Which ref to check out
 
-**Check out `rescan-21`.** It is this note, the regenerated flattened sources and the Slither
-artifacts, sitting on top of `launch-candidate-21`.
-
-**`launch-candidate-21` is the code under review and it has not moved.** `rescan-21` adds only
-documents and generated artifacts — `src/` is **byte-identical** between the two, and the first
-command below proves it rather than asking you to take it on trust.
+**Check out `launch-candidate-22`.** Unlike last time there is no separate package tag: the code
+and the review package land together, so this one tag is everything.
 
 ```bash
-git checkout rescan-21
+git checkout launch-candidate-22
 
-git diff launch-candidate-21 rescan-21 -- src/                      # EMPTY. The code is the tag's
-git diff launch-candidate-19 launch-candidate-21 -- src/            # the whole code delta
-git diff launch-candidate-19 launch-candidate-21 -- src/ChipRounds.sol
-git diff launch-candidate-19 launch-candidate-21 -- src/activation/ChipActivation.sol
+git diff launch-candidate-21 launch-candidate-22 -- src/     # the two fixes, and nothing else
+git diff launch-candidate-19 launch-candidate-21 -- src/     # the -21 delta, if you have not seen it
 
-# the two that did NOT change, to confirm it rather than take it on trust:
-git diff launch-candidate-14 launch-candidate-21 -- src/StockRegistry.sol   # empty
-git diff launch-candidate-14 launch-candidate-21 -- src/POLTreasury.sol     # empty
+# the one that did NOT change at all, to confirm rather than take on trust:
+git diff launch-candidate-14 launch-candidate-22 -- src/POLTreasury.sol     # empty
 
-forge test        # 791 tests, 49 suites, 0 failures (731 unit + 60 fork against live Base)
+forge test        # 807 tests, 51 suites, 0 failures (747 unit + 60 fork against live Base)
 ```
 
-Fork suites need `BASE_RPC_URL`. They are not optional here — the venue evidence in this note
-is produced by them, not asserted by it.
+Fork suites need `BASE_RPC_URL`. They are not optional here — the venue evidence in this note is
+produced by them, not asserted by it.
 
-**Flattened sources** for all five are in `review/flattened/`. Regenerated at this tag and
+**Flattened sources** for all five are in `review/flattened/`, regenerated at this tag and
 verified: each compiles standalone under the pinned settings (solc 0.8.24, cancun, optimizer
 200) and its **executable runtime code is byte-for-byte identical** to the in-repo build. Only
 the 53-byte CBOR metadata trailer differs, which it must — it encodes the source path.
 
-**The code delta contains a fourth file, `Furnace.sol` (+36 −9), which is NOT in this scope.**
-It received the identical $CHIP burn re-route as the other two. It sits outside the money path
-and outside the original eleven-contract audit, so it is excluded here — but if you would
-rather see the burn change in all three places at once, it is the same diff.
+---
+
+## 0. What changed at `-22`, and why
+
+**Both changes are ours, not a reviewer's.** We raised both in the `-21` note as things we
+wanted your verdict on; you have not seen them yet, so they arrive here as code rather than as
+questions. Neither was prompted by an external finding.
+
+### 0a. `ChipBurner.burnAll()` is now `nonReentrant`, and the figure is bounded
+
+The `-21` note flagged this and left it unfixed so the re-scan would see the frozen contract.
+It is fixed now.
+
+```solidity
+function burnAll() external nonReentrant returns (uint256 burned) {
+    uint256 balanceBefore = chipToken.balanceOf(address(this));
+    ...
+    IChipOwnable(address(chipToken)).burn(balanceBefore);
+    uint256 supplyAfter  = chipToken.totalSupply();
+    uint256 balanceAfter = chipToken.balanceOf(address(this));
+
+    if (supplyAfter  >= supplyBefore)  revert BurnDidNotReduceSupply(...);
+    if (balanceAfter >= balanceBefore) revert BurnDidNotReduceBalance(...);   // new
+
+    uint256 supplyDrop  = supplyBefore  - supplyAfter;
+    uint256 balanceDrop = balanceBefore - balanceAfter;
+    burned = supplyDrop < balanceDrop ? supplyDrop : balanceDrop;             // new
+```
+
+Two defects, neither of which could ever have cost anybody a $CHIP — the tokens are destroyed
+either way and there is still no path that moves them out. What both corrupt is the **published
+number**, which is the entire reason the contract exists.
+
+1. **Re-entry.** A token whose `burn` called back into `burnAll` would have the inner call
+   credit `totalBurned`, then the outer call would compute its own figure from a supply delta
+   spanning *both* burns and credit it again. `nonReentrant` closes it.
+2. **Somebody else's supply.** A token that destroyed another holder's balance during our
+   `burn` would widen the supply delta and the Burner would take credit for it. `burned` is now
+   the **smaller** of the supply drop and this contract's own balance drop, which cannot
+   over-report in either direction whatever the token does.
+
+**Why we did not accept Slither's "benign".** It is benign for funds and not benign for the
+figure. More to the point, the contract's whole premise is *do not trust the token* — it
+verifies the burn by reading `totalSupply` rather than believing a return value — so relying on
+that same token not to re-enter was the one place it took the token at its word.
+
+New tests: `test/ChipBurnerReentrancy.t.sol`, 5 tests. The re-entry test asserts the hostile
+token **actually re-entered and was actually refused** (`reentryAttempted`, `reentryReverted`),
+so it is not a vacuous pass, and the hostile token deliberately *swallows* the revert — a token
+that let it propagate would just fail the whole burn, which proves nothing about the accounting.
+
+### 0b. `ChipRounds.setRouters` is validated
+
+Also flagged by us at `-21`. It had no validation of any kind — no zero check, no `factory()`
+check — and the venue flip made it the live buy path.
+
+```solidity
+function setRouters(address uni, address slip) external onlyOwner {
+    _requireRouterOnFactory(uni,  registry.uniswapV3Factory());
+    _requireRouterOnFactory(slip, registry.slipstreamFactory());
+    ...
+}
+```
+
+`_requireRouterOnFactory` rejects zero, rejects an address with no code (`NotAContract`), and
+rejects a router whose `factory()` is not the expected one
+(`RouterNotOnFactory(router, expected, actual)`). It mirrors
+`ConversionRoutes._requireUniswapV3Router`, the SEC-POT-001 fix, deliberately: same shape, not
+gas-capped, not tolerant of failure, because this is configuration time.
+
+**The expected factories are read from the registry, not hardcoded.** They are immutables over
+there, so the router and the registry are a matched pair by construction — "can this router
+reach the pools we registered" rather than "is this a specific address". A registry redeployed
+onto a different factory automatically re-scopes the check.
+
+**This is what forced the `StockRegistry` source change.** `IStockRegistry` gained
+`uniswapV3Factory()` and `slipstreamFactory()` getters, so the two public immutables gained the
+`override` keyword. **The runtime bytecode is unchanged** — we verified it byte-for-byte against
+the `-21` build, since a public immutable's getter already existed. It is a two-keyword source
+annotation and nothing else, but we are not going to describe a file as untouched when its
+source moved.
+
+New tests: `test/RouterGuards.t.sol`, 11 tests, covering both slots in both directions, zero,
+an EOA, a contract with no `factory()`, access control, and that a rejected call leaves the
+existing pair in place.
+
+**Three test call sites had been passing invalid configurations** and now cannot: two shared one
+mock router across both venue slots, and the full-system fork test passed `address(0)` for the
+Slipstream slot. They were updated, not weakened — the fork test now uses the real factory-A
+Slipstream router, which is what its registry is built on.
+
+### What to attack in the fixes themselves
+
+- Can the `min(supplyDrop, balanceDrop)` bound ever **under**-report a legitimate burn? We
+  believe not for any token that simply burns what it was asked to.
+- `nonReentrant` on a permissionless function is a griefing surface in principle — can anyone
+  use it to block a legitimate `burnAll`? (Within one transaction only; there is no cross-tx
+  lock.)
+- Does reading the factories from the registry create a circular or stale-config hazard we have
+  not seen?
+- `ChipRounds` grew by 633 bytes to **22,582**, leaving **1,994** under the EIP-170 limit. The
+  `CodeSizeTest` guard still passes. Is that headroom enough for anything you would ask us to
+  add?
 
 ---
 
-## 1. `ChipBurner.sol` — NEW. Read this first.
+## 1. `ChipBurner.sol` — NEW at `-21`. Read this first.
 
-**It becomes the owner of the $CHIP token.** That is the highest-authority thing in this
-system, and it has never been reviewed.
+**It becomes the owner of the $CHIP token.** That is the highest-authority thing in this system,
+and outside of §0a it has never been reviewed.
 
 **Why it exists.** The premise of every prior document was that $CHIP could never be truly
 burned — Bankr's Doppler token exposes no `burn`, so every burn was a `transfer` to `0xdead`:
@@ -67,8 +161,8 @@ reason this contract exists.** The token has no *public* `burn`; it has an **own
 **The trap it is designed around.** `transferOwnership` on the token moves **every** `onlyOwner`
 power, not just `burn` — `updateTokenURI`, `updateMintRate`, `lockPool`/`unlockPool`,
 `mintInflation`, and `transferOwnership` itself. A burn-only sink would therefore be a one-way
-door: the token's metadata could never be updated again and ownership could never be moved,
-by anyone, forever. So this is an owner **wrapper**, not a sink.
+door: the token's metadata could never be updated again and ownership could never be moved, by
+anyone, forever. So this is an owner **wrapper**, not a sink.
 
 **Two roles, asymmetric on purpose:**
 - **Anyone** may call `burnAll()`. It can only ever destroy this contract's own balance.
@@ -79,9 +173,6 @@ by anyone, forever. So this is an owner **wrapper**, not a sink.
 - **Can any path move $CHIP out of the Burner without destroying it?** The claim is no: there is
   no `transfer`, no sweep, no rescue, and deliberately no generic `call(bytes)`. Not even the
   multisig can move it. If that claim is false anywhere, it is the finding.
-- **`burnAll` verifies by supply, not by return value** — it reads `totalSupply` before and
-  after and reverts unless it fell. Can a token satisfy that check without really burning? This
-  is what makes `totalBurned` publishable, so it matters more than it looks.
 - **`mintInflation` is deliberately not exposed.** A permissionless burner that can also mint is
   a contradiction, and "gated behind the multisig with an event" still means the capability
   exists. Is leaving it out actually safe given `transferTokenOwnership` is the escape hatch —
@@ -120,12 +211,12 @@ have already seen; flagging it so it is not read as an accident.
   reaching `0xdead` — through any path?
 - All five sites are **delta-verified**: balance of the target read before and after, reverting
   `ChipBurnShortfall` if less arrived than was owed. Can a token defeat that?
-- `chipBurnedToDead()` now sums **two** balances (`0xdead` + `chipBurnTarget`), and returns the
-  single balance when they are the same address. Can it double-count?
+- `chipBurnedToDead()` sums **two** balances (`0xdead` + `chipBurnTarget`), returning the single
+  balance when they are the same address. Can it double-count?
 - `effectiveChipSupply()` counts $CHIP queued at the Burner as already gone. Is that honest
   across the moment `burnAll()` runs, in both directions?
 
-## 3. 🔴 `ChipRounds.sol` — the Slipstream branch is now the LIVE buy path
+## 3. 🔴 `ChipRounds.sol` — the Slipstream branch is the LIVE buy path
 
 **This is the change most likely to produce a finding, and it is not visible in the diff.**
 
@@ -136,33 +227,10 @@ All thirteen B20 pools are on the other one, `0xf8f2eB…061Ef`, at tick spacing
 7–16x deeper than the Uniswap pools we were going to use. ASSUMPTIONS A-22 carries the
 correction; A-16 carries the original error with a supersede header, kept deliberately.
 
-So at `launch-candidate-21`: **ten of thirteen tickers register as `Venue.Slipstream` and the
-Slipstream branch is the live buy path for all of them.** The Uniswap branch is now the one that
-goes unexercised.
+So: **ten of thirteen tickers register as `Venue.Slipstream` and the Slipstream branch is the
+live buy path for all of them.** The Uniswap branch is now the one that goes unexercised.
 
-### The finding we are handing you rather than waiting for you to find
-
-**`ChipRounds.setRouters(uni, slip)` performs no validation of any kind.** No zero check, and no
-`factory()` check.
-
-```solidity
-function setRouters(address uni, address slip) external onlyOwner {
-    uniswapRouter = IUniswapV3SwapRouter(uni);
-    slipstreamRouter = ISlipstreamSwapRouter(slip);
-    ...
-}
-```
-
-Compare `ConversionRoutes._setRoute`, which — as the fix for **SEC-POT-001** — requires
-`router.factory() == uniswapV3Factory` and rejects the misconfiguration at configuration time.
-`ChipRounds` never got the equivalent guard, because when SEC-POT-001 was triaged the Slipstream
-path was not being used. **It is being used now.** Point `slip` at the wrong router and every
-stock buy reverts, on every round, for every ticker — and the symptom reads like a depth problem
-rather than a wiring one.
-
-**Please treat this as in scope and tell us the right shape of fix.** The obvious one is to
-mirror `_setRoute`, but `ChipRounds` holds no factory immutable to check against, and the two
-routers belong to two different factories, so it is not a one-line copy.
+§0b closes the configuration hole this opened. The path itself still wants your eyes.
 
 ### Do not conflate this with SEC-POT-001
 
@@ -179,23 +247,23 @@ distinction inline under that finding.
   identical call. Is the shape right in every case, not just that one?
 - `_minOutFor` is the only per-buy protection and it is all-or-nothing. Does it behave the same
   on the Slipstream path as on the Uniswap one?
-- Is there anywhere that still assumes stocks are on Uniswap, or that one router serves both
-  venues?
+- Is there anywhere that still assumes stocks are on Uniswap?
 
-## 4. `StockRegistry.sol` — unchanged code, newly load-bearing
+## 4. `StockRegistry.sol` — no behavioural change, newly load-bearing
 
-**Byte-identical since `launch-candidate-14`, and it has never had an external review**
+**Runtime bytecode identical since `launch-candidate-14`** (the `-22` source change is the two
+`override` keywords in §0b and nothing else), **and it has never had an external review**
 (OPEN_ITEMS 25a). It was already the largest un-reviewed surface. The venue flip makes it more
 so.
 
-`_setVenue` is now what stands between a correct config and a dead one. For a Slipstream venue
-it requires `tickSpacing != 0` and verifies
+`_setVenue` is what stands between a correct config and a dead one. For a Slipstream venue it
+requires `tickSpacing != 0` and verifies
 `ISlipstreamFactory(slipstreamFactory).getPool(token, quoteToken, tickSpacing) == pool`.
 
 🔴 **`slipstreamFactory` is `immutable`.** A registry deployed against the wrong Aerodrome
 factory cannot register a single B20 stock as Slipstream and must be redeployed. It does fail
 loudly — `PoolNotFoundInFactory` — and `test_aFactoryARegistryCannotRegisterTheB20Venue` pins
-that. This is now the one deploy argument in the system that cannot be corrected after the fact.
+that. This is the one deploy argument in the system that cannot be corrected after the fact.
 
 **What to attack:**
 - Can a pool be registered that the factory does not actually derive? Can the check be passed
@@ -203,11 +271,13 @@ that. This is now the one deploy argument in the system that cannot be corrected
 - `poolLiquidityUsd` is venue-agnostic — it reads balances. Is that still right for a
   concentrated Slipstream pool, where headline TVL across both sides overstates tradeable depth
   near spot by more than it does on Uniswap?
-- The depth gate is the input the launch decision is made from. Ten of thirteen now clear
-  $25,000, the smallest by more than four times, where only two cleared before. Is anything
-  about that gate weaker than it looks?
+- **The enable gate is a point-in-time check, not a continuous one.** `setEnabled` verifies
+  depth at the moment of enabling; nothing re-checks it afterwards, so a stock whose pool
+  drains stays enabled until somebody notices. An external PR proposed re-checking inside
+  `setMinLiquidityUsd`; we have not merged it, and the general case is untouched either way.
+  Tell us whether you think the gate should be continuous, and where.
 
-## 5. `POLTreasury.sol` — unchanged code, now on a different factory from the buys
+## 5. `POLTreasury.sol` — unchanged code, on a different factory from the buys
 
 **Byte-identical since `launch-candidate-14`.** In scope for one reason: **POL positions and
 stock buys now sit on different Aerodrome CL factories.**
@@ -232,70 +302,56 @@ mismatch to fix — they are different books:
 
 ---
 
-## 6. Slither — the delta, and one finding we want your verdict on
+## 6. Slither — the delta, and why the new High is not a new risk
 
-Slither 0.11.6 was re-run at both ends so the delta isolates *this* change rather than
-everything since the artifacts were last generated. `review/slither-raw.md` and
-`review/slither-findings.txt` are the `-21` run.
+Slither 0.11.6 was re-run at each tag so every delta isolates one change.
+`review/slither-raw.md` and `review/slither-findings.txt` are the `-22` run.
 
-> The 168-finding baseline triaged in `TRIAGE.md` is from `f0d6421` (2026-09-03) and is **seven
-> tags stale** — diffing against it conflates the impact trim, the cap removal, the flat-rate
-> activation and the Furnace true-burn work with the change under review. So `-19` was re-run
-> from a worktree to get a like-for-like baseline. Against `f0d6421` the total is +44; against
-> `-19` it is **+6**, and that +6 is what this change actually did.
+> The 168-finding baseline triaged in `TRIAGE.md` is from `f0d6421` (2026-09-03) and is stale by
+> several tags; diffing against it conflates unrelated work. `-19` and `-21` were re-run from
+> worktrees to get like-for-like baselines.
 
-| | `-19` | `-21` | delta |
+| | `-19` | `-21` | `-22` |
 |---|---:|---:|---:|
-| **TOTAL** | 206 | 212 | **+6** |
-| `reentrancy-events` (Low) | 2 | 5 | +3 |
-| `incorrect-equality` (Medium) | 12 | 13 | +1 |
-| `low-level-calls` (Info) | 24 | 25 | +1 |
-| `reentrancy-benign` (Low) | 8 | 9 | +1 |
-| every other detector | — | — | **0** |
+| **TOTAL** | 206 | 212 | **213** |
 
-**All seven new findings are in `ChipBurner.sol`. Not one is in `ChipRounds` or
-`ChipActivation`** — the burn re-route added no new static-analysis surface, which is the result
-we wanted from a change that touched five money-adjacent call sites.
+**`-19` → `-21`: +6, all seven new findings in `ChipBurner`.** Nothing new in `ChipRounds` or
+`ChipActivation` — the burn re-route added no static-analysis surface across five money-adjacent
+call sites.
 
-Our first-pass triage, for you to overturn:
+**`-21` → `-22`: +1 net.** Four new, three gone (the three are the same `burnAll` findings
+re-reported at new line numbers).
 
-| Finding | Ours | Reasoning |
+| New at `-22` | Impact | Ours |
 |---|---|---|
-| `incorrect-equality` — `burnAll()` | **Info** | It is `if (balance == 0) revert NothingToBurn()`. A zero guard, not a value comparison driving logic |
-| `low-level-calls` — `_passThrough` | **Info, deliberate** | It bubbles the token's revert reason instead of swallowing it. Documented, and deliberately **not** a generic `execute(bytes)` |
-| `reentrancy-events` x3 | **Info** | Events after external calls in `burnAll`, `updateTokenUri`, `transferTokenOwnership` |
-| `pragma` | **Pre-existing** | Present at `-19` too; the text shifts because the version list changed |
-| `reentrancy-benign` — `burnAll()` | **⚠️ see below — we do not think this one is benign** | |
+| `reentrancy-balance` — `burnAll()` | **High** | **Expected. It is describing the fix.** |
+| `reentrancy-benign` — `burnAll()` | Low | Noise; see below |
+| `incorrect-equality` — `burnAll()` | Medium | The `balanceBefore == 0` guard |
+| `low-level-calls` — `_requireRouterOnFactory` | Info | The `factory()` staticcall, deliberate |
 
-### 🔴 `burnAll()` is not `nonReentrant`, and `totalBurned` spans the external call
+### The new High is the guard, not a hole
 
-```solidity
-uint256 supplyBefore = chipToken.totalSupply();
-IChipOwnable(address(chipToken)).burn(balance);   // <-- external, untrusted
-uint256 supplyAfter  = chipToken.totalSupply();
-burned = supplyBefore - supplyAfter;
-totalBurned += burned;
+```
+Reentrancy in ChipBurner.burnAll():
+  Balance read before the call:  balanceBefore = chipToken.balanceOf(address(this))
+  Possible stale balance used after the call in a condition: balanceAfter >= balanceBefore
 ```
 
-`ChipBurner` is `Ownable2Step` only — **there is no `ReentrancyGuard`**. If $CHIP's `burn` can
-re-enter `burnAll`, the inner call burns whatever balance it sees and credits `totalBurned`;
-the outer call then computes `burned` from a supply delta that spans **both** burns and credits
-it again. `totalBurned` and `burnCount` come out wrong.
+That **is** the fix from §0a: read the balance before, compare it after, take the smaller delta.
+Slither cannot tell a deliberate before/after measurement from an accidental stale read.
 
-**No $CHIP can be stolen or stranded by this** — the tokens are destroyed either way, and there
-is still no path that moves $CHIP out of this contract. What breaks is the **published number**,
-which is the one thing this contract exists to make trustworthy. The site displays it.
+It is also **the fourth instance of a pattern already accepted three times** — the other three
+`reentrancy-balance` findings at `-22` are all `ConversionRoutes._convert`, which measures
+exactly the same way and was triaged on exactly these grounds. The same before/after shape is
+what `ChipBurnShortfall` uses at all five $CHIP burn sites.
 
-**Why we are flagging it rather than dismissing it.** For a stock Doppler ERC-20 with no
-transfer hooks this is not reachable, and Slither's "benign" is defensible on that basis. But
-the contract's entire design premise is *do not trust the token*: it verifies the burn by
-reading `totalSupply` rather than believing a return value, precisely because a token could
-lie. Relying on that same untrusted token not to re-enter is inconsistent with its own threat
-model. A `nonReentrant` on `burnAll` is a few hundred gas on a permissionless keeper call.
+### Slither does not honour `nonReentrant` in this repo
 
-**We have not applied a fix** — the contract is frozen at `launch-candidate-21` for this
-re-scan. Tell us whether you want it, and we will land it as `-22` with the guard and a test
-that drives a re-entrant token through it.
+Worth knowing before reading any reentrancy finding here. `ChipRounds.settleStock`,
+`ChipRounds.openRound`, `ChipRounds.finalizeRound` and `Furnace._forge` are **all**
+`nonReentrant` and **all** still appear under `reentrancy-benign` in this run. So `burnAll`
+continuing to appear there after being guarded is the same noise, not evidence the guard did
+not take. `test/ChipBurnerReentrancy.t.sol` is the evidence that it did.
 
 ---
 
@@ -307,11 +363,20 @@ the update under SEC-POT-001 narrows a citation, it does not change a dispositio
 **The weight and payout arithmetic was not touched.** Neither was `ChipClaims`, `Pot`,
 `FeeSplitter`, `ClaimRouter`, `NounLoans` or `Anvil` — all byte-identical.
 
-**The Furnace recipe numbers are now settled** (25 Chiplets for a Based Noun, 50 for a
-DarkNOUN), but they are constructor arguments, not code.
+**`Furnace.sol` changed at `-21`** (+36 −9), taking the identical $CHIP burn re-route, and is
+**not** in this scope — outside the money path and outside the original eleven-contract audit.
+Say the word if you would rather see the burn change in all three places at once.
+
+**The Furnace recipe numbers are settled** (25 Chiplets for a Based Noun, 50 for a DarkNOUN),
+but they are constructor arguments, not code.
 
 **$CHIP is still not a contract in this repo**, and neither is Chiplets. We hold only their
 addresses. The Burner assumes exactly three signatures on $CHIP and nothing else.
+
+**Two external PRs are open and neither is merged.** One is documentation-only and stale; one
+proposes re-checking the depth gate inside `StockRegistry.setMinLiquidityUsd` (§4). Neither is
+in `-22`. If either is folded in it will be deliberate, with tests, and it will come back
+through this same process.
 
 ## Still open, and not introduced by these changes
 

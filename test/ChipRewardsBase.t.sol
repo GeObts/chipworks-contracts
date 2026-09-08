@@ -56,6 +56,7 @@ abstract contract ChipRewardsBase is Test {
     MockSlipstreamFactory internal slipFactory;
     MockSwapRouter internal router;
 
+    MockSwapRouter internal slipRouter;
     // collections
     MockNoun internal basedNouns;
     MockNoun internal darkNouns;
@@ -93,7 +94,16 @@ abstract contract ChipRewardsBase is Test {
 
         uniFactory = new MockUniswapV3Factory();
         slipFactory = new MockSlipstreamFactory();
+
+        // Two routers, because `setRouters` now checks each one against the factory the
+        // REGISTRY resolves that venue's pools from, and a single double cannot answer
+        // `factory()` with two different addresses. Only `router` is ever swapped through --
+        // every stock in this base registers as `Venue.UniswapV3` -- but the Slipstream slot
+        // has to hold something that belongs to the Slipstream factory.
         router = new MockSwapRouter();
+        router.setFactory(address(uniFactory));
+        slipRouter = new MockSwapRouter();
+        slipRouter.setFactory(address(slipFactory));
 
         registry = new StockRegistry(multisig, address(usdc), address(uniFactory), address(slipFactory));
         pot = new Pot(multisig, address(usdc), address(uniFactory));
@@ -187,7 +197,7 @@ abstract contract ChipRewardsBase is Test {
         rounds.setCollectionBaseBps(address(darkNouns), 20_000); // 2.0x
         rounds.setCollectionBaseBps(address(lilNouns), 5_000); // 0.5x
         rounds.setRoundParams(24 hours, 2 hours, MIN_POT);
-        rounds.setRouters(address(router), address(router));
+        rounds.setRouters(address(router), address(slipRouter));
         rounds.setPolTreasury(polTreasury);
         rounds.setChip(address(chip));
         vm.stopPrank();

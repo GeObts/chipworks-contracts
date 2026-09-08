@@ -288,12 +288,20 @@ setRouters(0x2626664c2603336E57B271c5C0b26F421741e481,
 slipstreamRouter() == 0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F
 ```
 
-> 🔴 **THE SLIPSTREAM ROUTER MUST BE THE FACTORY-B ONE.** `0x698Cb2…A92F` is bound to factory
-> B and is the only router that can reach a B20 pool. The better-known `0xBE6D8f…18a5` serves
-> factory A: point `ChipRounds` at it and **every stock buy reverts**, on every round, for
-> every ticker. Unlike the registry this one is fixable with a single `setRouters` call — but
-> the symptom is a round that buys nothing, which reads like a depth problem rather than a
-> wiring one. Both directions are proved in `test/fork/FactoryBRouter.t.sol`.
+> ✅ **THE SLIPSTREAM ROUTER MUST BE THE FACTORY-B ONE — AND SINCE `-22` THE CONTRACT
+> ENFORCES IT.** `0x698Cb2…A92F` is bound to factory B and is the only router that can reach a
+> B20 pool. The better-known `0xBE6D8f…18a5` serves factory A.
+>
+> `setRouters` now reads the factories off the registry and refuses any router that does not
+> match, so **the wrong address reverts at set-time** with `RouterNotOnFactory(router,
+> expected, actual)` naming both. Neither router may be zero, and an EOA is refused with
+> `NotAContract`.
+>
+> This used to be the entry with the worst failure mode in this runbook: no validation at all,
+> and the symptom of getting it wrong was a round that bought nothing, which reads like a depth
+> problem rather than a wiring one. It is now a loud failure in the transaction that causes it.
+> Both directions are still proved on a live fork in `test/fork/FactoryBRouter.t.sol`, and the
+> guard itself in `test/RouterGuards.t.sol`.
 
 > **⚠️ WIRING CHECK — `claims.setRounds(rounds)`**
 > Until this is called, **every round reverts at the first `contributeWeights`**, because the
@@ -448,7 +456,13 @@ chip.transfer(<ChipBurner>, 1e18)
 burner.burnAll()                       # permissionless, anyone
 chip.totalSupply()                     # must have FALLEN by 1e18 - a real burn
 burner.totalBurned()                   # == 1e18
+burner.burnCount()                     # == 1
 ```
+
+**`burnAll` is `nonReentrant` since `-22`, and `totalBurned` is bounded by the Burner's own
+balance drop as well as by the fall in supply.** Neither changes anything for a well-behaved
+token; both exist so that the published figure cannot be inflated by the token it burns. See
+`test/ChipBurnerReentrancy.t.sol`.
 
 **What the Burner deliberately cannot do.** It has no `transfer`, no sweep, no rescue and no
 generic call: $CHIP that arrives can only ever leave by being destroyed, and the multisig

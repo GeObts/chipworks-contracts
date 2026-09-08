@@ -17,18 +17,26 @@ Reentrancy in ConversionRoutes._convert(address,uint256) (src/base/ConversionRou
 	External call allowing reentrancy:
 	- IUniswapV3SwapRouter(r.router).exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:token,tokenOut:quoteToken,fee:r.fee,recipient:address(this),amountIn:amountIn,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/base/ConversionRoutes.sol#238-249)
 	Balance read before the call:
-	- before = IERC20(quoteToken).balanceOf(address(this)) (src/base/ConversionRoutes.sol#235)
-	Possible stale balance used after the call in a condition:
-	- quoteOut < minOut (src/base/ConversionRoutes.sol#254)
-		- stale variable `quoteOut`
-Reentrancy in ConversionRoutes._convert(address,uint256) (src/base/ConversionRoutes.sol#216-257):
-	External call allowing reentrancy:
-	- IUniswapV3SwapRouter(r.router).exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:token,tokenOut:quoteToken,fee:r.fee,recipient:address(this),amountIn:amountIn,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/base/ConversionRoutes.sol#238-249)
-	Balance read before the call:
 	- amountIn = nextConversionAmount(token) (src/base/ConversionRoutes.sol#219)
 	Possible stale balance used after the call in a condition:
 	- quoteOut < minOut (src/base/ConversionRoutes.sol#254)
 		- stale variable `minOut`
+Reentrancy in ConversionRoutes._convert(address,uint256) (src/base/ConversionRoutes.sol#216-257):
+	External call allowing reentrancy:
+	- IUniswapV3SwapRouter(r.router).exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:token,tokenOut:quoteToken,fee:r.fee,recipient:address(this),amountIn:amountIn,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/base/ConversionRoutes.sol#238-249)
+	Balance read before the call:
+	- before = IERC20(quoteToken).balanceOf(address(this)) (src/base/ConversionRoutes.sol#235)
+	Possible stale balance used after the call in a condition:
+	- quoteOut < minOut (src/base/ConversionRoutes.sol#254)
+		- stale variable `quoteOut`
+Reentrancy in ChipBurner.burnAll() (src/ChipBurner.sol#114-136):
+	External call allowing reentrancy:
+	- IChipOwnable(address(chipToken)).burn(balanceBefore) (src/ChipBurner.sol#119)
+	Balance read before the call:
+	- balanceBefore = chipToken.balanceOf(address(this)) (src/ChipBurner.sol#115)
+	Possible stale balance used after the call in a condition:
+	- balanceAfter >= balanceBefore (src/ChipBurner.sol#126)
+		- stale variable `balanceBefore`
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities
 INFO:Detectors:
 Detector: reentrancy-eth
@@ -69,12 +77,12 @@ Reentrancy in FeeSplitter._splitETH(uint256) (src/FeeSplitter.sol#312-318):
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-1
 INFO:Detectors:
 Detector: divide-before-multiply
-ChipRounds._minOutFor(address,uint256) (src/ChipRounds.sol#834-846) performs a multiplication on the result of a division:
-	- spendUsd = (spendAmount * 1e18) / (10 ** registry.quoteDecimals()) (src/ChipRounds.sol#843)
-	- expectedOut = (spendUsd * (10 ** dec)) / price1e18 (src/ChipRounds.sol#844)
-ChipRounds._minOutFor(address,uint256) (src/ChipRounds.sol#834-846) performs a multiplication on the result of a division:
-	- expectedOut = (spendUsd * (10 ** dec)) / price1e18 (src/ChipRounds.sol#844)
-	- (expectedOut * (BPS - maxSlippageBps(stock))) / BPS (src/ChipRounds.sol#845)
+ChipRounds._minOutFor(address,uint256) (src/ChipRounds.sol#885-897) performs a multiplication on the result of a division:
+	- spendUsd = (spendAmount * 1e18) / (10 ** registry.quoteDecimals()) (src/ChipRounds.sol#894)
+	- expectedOut = (spendUsd * (10 ** dec)) / price1e18 (src/ChipRounds.sol#895)
+ChipRounds._minOutFor(address,uint256) (src/ChipRounds.sol#885-897) performs a multiplication on the result of a division:
+	- expectedOut = (spendUsd * (10 ** dec)) / price1e18 (src/ChipRounds.sol#895)
+	- (expectedOut * (BPS - maxSlippageBps(stock))) / BPS (src/ChipRounds.sol#896)
 POLTreasury._requirePoolOnMark(address,address) (src/POLTreasury.sol#726-734) performs a multiplication on the result of a division:
 	- mark = (_readFeed(a.feed,a.maxFeedAge) * (10 ** quoteDecimals)) / (10 ** a.feedDecimals) (src/POLTreasury.sol#728)
 	- tolerance = (mark * a.maxDeviationBps) / BPS (src/POLTreasury.sol#731)
@@ -88,10 +96,10 @@ IERC721Approve (src/POLTreasury.sol#783-785) has incorrect ERC20 function interf
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#incorrect-erc20-interface
 INFO:Detectors:
 Detector: incorrect-equality
-ChipBurner.burnAll() (src/ChipBurner.sol#88-103) uses a dangerous strict equality:
-	- balance == 0 (src/ChipBurner.sol#90)
-ChipRounds.nextRoundOpensAt() (src/ChipRounds.sol#517-519) uses a dangerous strict equality:
-	- lastRoundOpenedAt == 0 (src/ChipRounds.sol#518)
+ChipBurner.burnAll() (src/ChipBurner.sol#114-136) uses a dangerous strict equality:
+	- balanceBefore == 0 (src/ChipBurner.sol#116)
+ChipRounds.nextRoundOpensAt() (src/ChipRounds.sol#568-570) uses a dangerous strict equality:
+	- lastRoundOpenedAt == 0 (src/ChipRounds.sol#569)
 FeeSplitter._payEth(address,uint256) (src/FeeSplitter.sol#323-331) uses a dangerous strict equality:
 	- amount == 0 (src/FeeSplitter.sol#324)
 FeeSplitter._payToken(IERC20,address,uint256) (src/FeeSplitter.sol#368-374) uses a dangerous strict equality:
@@ -117,15 +125,15 @@ Pot.sweepNonQuote(address,address) (src/Pot.sol#211-218) uses a dangerous strict
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities
 INFO:Detectors:
 Detector: reentrancy-no-eth
-Reentrancy in ChipRounds.contributeWeights(uint256,address,uint256[]) (src/ChipRounds.sol#552-574):
+Reentrancy in ChipRounds.contributeWeights(uint256,address,uint256[]) (src/ChipRounds.sol#603-625):
 	External calls:
-	- added += _allocate(roundId,collection,tokenId,owner,weight) (src/ChipRounds.sol#569)
-		- claims.creditWeight(roundId,stock,owner,weight) (src/ChipRounds.sol#623)
+	- added += _allocate(roundId,collection,tokenId,owner,weight) (src/ChipRounds.sol#620)
+		- claims.creditWeight(roundId,stock,owner,weight) (src/ChipRounds.sol#674)
 	State variables written after the call(s):
-	- r.totalWeight += added (src/ChipRounds.sol#572)
+	- r.totalWeight += added (src/ChipRounds.sol#623)
 	ChipRounds._rounds (src/ChipRounds.sol#199) can be used in cross function reentrancies:
-	- ChipRounds.getRound(uint256) (src/ChipRounds.sol#508-510)
-	- counted[roundId][collection][tokenId] = true (src/ChipRounds.sol#568)
+	- ChipRounds.getRound(uint256) (src/ChipRounds.sol#559-561)
+	- counted[roundId][collection][tokenId] = true (src/ChipRounds.sol#619)
 	ChipRounds.counted (src/ChipRounds.sol#204) can be used in cross function reentrancies:
 	- ChipRounds.counted (src/ChipRounds.sol#204)
 Reentrancy in Furnace.depositStock(address,uint256[]) (src/furnace/Furnace.sol#503-510):
@@ -139,25 +147,25 @@ Reentrancy in Furnace.depositStock(address,uint256[]) (src/furnace/Furnace.sol#5
 	- Furnace.queueStockSkip(address) (src/furnace/Furnace.sol#548-557)
 	- Furnace.stockQueue(address) (src/furnace/Furnace.sol#477-484)
 	- Furnace.stockRemainingFor(address) (src/furnace/Furnace.sol#462-464)
-Reentrancy in ChipRounds.openRound() (src/ChipRounds.sol#522-547):
+Reentrancy in ChipRounds.openRound() (src/ChipRounds.sol#573-598):
 	External calls:
-	- got = pot.pullBudget(availableInPot) (src/ChipRounds.sol#531)
+	- got = pot.pullBudget(availableInPot) (src/ChipRounds.sol#582)
 	State variables written after the call(s):
-	- lastRoundOpenedAt = uint64(block.timestamp) (src/ChipRounds.sol#543)
+	- lastRoundOpenedAt = uint64(block.timestamp) (src/ChipRounds.sol#594)
 	ChipRounds.lastRoundOpenedAt (src/ChipRounds.sol#195) can be used in cross function reentrancies:
 	- ChipRounds.lastRoundOpenedAt (src/ChipRounds.sol#195)
-	- ChipRounds.nextRoundOpensAt() (src/ChipRounds.sol#517-519)
-Reentrancy in ChipRounds.settleStock(uint256,address) (src/ChipRounds.sol#657-732):
+	- ChipRounds.nextRoundOpensAt() (src/ChipRounds.sol#568-570)
+Reentrancy in ChipRounds.settleStock(uint256,address) (src/ChipRounds.sol#708-783):
 	External calls:
-	- (executed,received,quoteSpent,reason) = _buy(stock,spend) (src/ChipRounds.sol#699)
-		- uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#898-912)
-		- slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#914-929)
-	- heldBack = _sendHoldback(stock,received) (src/ChipRounds.sol#713)
-		- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(treasury,target))) (src/ChipRounds.sol#809)
+	- (executed,received,quoteSpent,reason) = _buy(stock,spend) (src/ChipRounds.sol#750)
+		- uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#949-963)
+		- slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#965-980)
+	- heldBack = _sendHoldback(stock,received) (src/ChipRounds.sol#764)
+		- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(treasury,target))) (src/ChipRounds.sol#860)
 	State variables written after the call(s):
-	- r.spent += uint128(quoteSpent) (src/ChipRounds.sol#717)
+	- r.spent += uint128(quoteSpent) (src/ChipRounds.sol#768)
 	ChipRounds._rounds (src/ChipRounds.sol#199) can be used in cross function reentrancies:
-	- ChipRounds.getRound(uint256) (src/ChipRounds.sol#508-510)
+	- ChipRounds.getRound(uint256) (src/ChipRounds.sol#559-561)
 Reentrancy in Anvil.shelve(address,uint256[]) (src/anvil/Anvil.sol#446-455):
 	External calls:
 	- IERC721(collection).transferFrom(msg.sender,address(this),id) (src/anvil/Anvil.sol#451)
@@ -199,32 +207,32 @@ Reentrancy in Anvil.unshelve(address,uint256,address) (src/anvil/Anvil.sol#476-5
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-2
 INFO:Detectors:
 Detector: uninitialized-local
-ChipRounds._buy(address,uint256).ok (src/ChipRounds.sol#896) is a local variable never initialized
-StockRegistry._setVenue(address,Venue,address,uint24,int24).expected (src/StockRegistry.sol#321) is a local variable never initialized
+ChipRounds.setSplit(address,uint256,address[],uint8[]).fee (src/ChipRounds.sol#538) is a local variable never initialized
+ChipRounds._minOutFor(address,uint256).price1e18 (src/ChipRounds.sol#887) is a local variable never initialized
+ChipRounds.contributeWeights(uint256,address,uint256[]).added (src/ChipRounds.sol#607) is a local variable never initialized
+Anvil.shelfQueue(address).k (src/anvil/Anvil.sol#395) is a local variable never initialized
+ChipRounds.contributeWeights(uint256,address,uint256[]).accepted (src/ChipRounds.sol#608) is a local variable never initialized
 Anvil.unshelve(address,uint256,address).id (src/anvil/Anvil.sol#494) is a local variable never initialized
-ChipRounds._deliver(uint256,address,uint256).sent (src/ChipRounds.sol#773) is a local variable never initialized
-ChipRounds.setSplit(address,uint256,address[],uint8[]).p (src/ChipRounds.sol#473) is a local variable never initialized
-ChipRounds.setSplit(address,uint256,address[],uint8[]).fee (src/ChipRounds.sol#487) is a local variable never initialized
-ChipRounds.setSplit(address,uint256,address[],uint8[]).s (src/ChipRounds.sol#472) is a local variable never initialized
+StockRegistry._setVenue(address,Venue,address,uint24,int24).expected (src/StockRegistry.sol#321) is a local variable never initialized
+ClaimRouter.claimEverything(ClaimRouter.ChipClaim[]).failed (src/ClaimRouter.sol#152) is a local variable never initialized
+Furnace._forge(uint8,uint256[],uint256,bool).trueBurned (src/furnace/Furnace.sol#361) is a local variable never initialized
+ChipRounds._deliver(uint256,address,uint256).sent (src/ChipRounds.sol#824) is a local variable never initialized
+ChipRounds._buy(address,uint256).ok (src/ChipRounds.sol#947) is a local variable never initialized
 StockRegistry.enabledTokens().n (src/StockRegistry.sol#211) is a local variable never initialized
 StockRegistry.enabledTokens().k (src/StockRegistry.sol#217) is a local variable never initialized
-ChipRounds.setSplit(address,uint256,address[],uint8[]).sum (src/ChipRounds.sol#471) is a local variable never initialized
-ChipRounds._minOutFor(address,uint256).price1e18 (src/ChipRounds.sol#836) is a local variable never initialized
-Anvil.shelfQueue(address).k (src/anvil/Anvil.sol#395) is a local variable never initialized
-ChipRounds.contributeWeights(uint256,address,uint256[]).added (src/ChipRounds.sol#556) is a local variable never initialized
-Furnace._forge(uint8,uint256[],uint256,bool).trueBurned (src/furnace/Furnace.sol#361) is a local variable never initialized
-ChipRounds.contributeWeights(uint256,address,uint256[]).accepted (src/ChipRounds.sol#557) is a local variable never initialized
-ClaimRouter.claimEverything(ClaimRouter.ChipClaim[]).failed (src/ClaimRouter.sol#152) is a local variable never initialized
+ChipRounds.setSplit(address,uint256,address[],uint8[]).s (src/ChipRounds.sol#523) is a local variable never initialized
+ChipRounds.setSplit(address,uint256,address[],uint8[]).p (src/ChipRounds.sol#524) is a local variable never initialized
+ChipRounds.setSplit(address,uint256,address[],uint8[]).sum (src/ChipRounds.sol#522) is a local variable never initialized
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#uninitialized-local-variables
 INFO:Detectors:
 Detector: unused-return
 ChipClaims._usdValue(address,uint256) (src/ChipClaims.sol#633-640) ignores return value by (price1e18) = registry.priceUsd(token) (src/ChipClaims.sol#635-639)
-ChipRounds.isFeedStale(address) (src/ChipRounds.sol#819-830) ignores return value by (updatedAt) = registry.priceUsd(stock) (src/ChipRounds.sol#822-829)
-ChipRounds._minOutFor(address,uint256) (src/ChipRounds.sol#834-846) ignores return value by (p) = registry.priceUsd(stock) (src/ChipRounds.sol#837-841)
-ChipRounds._buy(address,uint256) (src/ChipRounds.sol#872-943) ignores return value by uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#898-912)
-ChipRounds._buy(address,uint256) (src/ChipRounds.sol#872-943) ignores return value by slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#914-929)
-ChipRounds.finalizeRound(uint256) (src/ChipRounds.sol#947-973) ignores return value by claims.freezeSchedule(roundId) (src/ChipRounds.sol#967)
-ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1011-1027) ignores return value by (price1e18) = registry.priceUsd(stock) (src/ChipRounds.sol#1020-1025)
+ChipRounds.isFeedStale(address) (src/ChipRounds.sol#870-881) ignores return value by (updatedAt) = registry.priceUsd(stock) (src/ChipRounds.sol#873-880)
+ChipRounds._minOutFor(address,uint256) (src/ChipRounds.sol#885-897) ignores return value by (p) = registry.priceUsd(stock) (src/ChipRounds.sol#888-892)
+ChipRounds._buy(address,uint256) (src/ChipRounds.sol#923-994) ignores return value by uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#949-963)
+ChipRounds._buy(address,uint256) (src/ChipRounds.sol#923-994) ignores return value by slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#965-980)
+ChipRounds.finalizeRound(uint256) (src/ChipRounds.sol#998-1024) ignores return value by claims.freezeSchedule(roundId) (src/ChipRounds.sol#1018)
+ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1062-1078) ignores return value by (price1e18) = registry.priceUsd(stock) (src/ChipRounds.sol#1071-1076)
 ConversionRoutes._readFeed(address,uint64) (src/base/ConversionRoutes.sol#199-208) ignores return value by (None,raw,None,updatedAt,None) = IAggregatorV3(feed).latestRoundData() (src/base/ConversionRoutes.sol#202)
 ConversionRoutes._convert(address,uint256) (src/base/ConversionRoutes.sol#216-257) ignores return value by IUniswapV3SwapRouter(r.router).exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:token,tokenOut:quoteToken,fee:r.fee,recipient:address(this),amountIn:amountIn,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/base/ConversionRoutes.sol#238-249)
 ConversionRoutes._requireSequencerUp() (src/base/ConversionRoutes.sol#268-279) ignores return value by (None,up,startedAt,None,None) = IAggregatorV3(feed).latestRoundData() (src/base/ConversionRoutes.sol#272)
@@ -247,11 +255,11 @@ ChipClaims._claim(uint256,address,address).owner (src/ChipClaims.sol#273) shadow
 	- Ownable.owner() (lib/openzeppelin-contracts/contracts/access/Ownable.sol#54-56) (function)
 ChipClaims.sweepExpired(uint256,address,uint256).owner (src/ChipClaims.sol#346) shadows:
 	- Ownable.owner() (lib/openzeppelin-contracts/contracts/access/Ownable.sol#54-56) (function)
-ChipRounds.contributeWeights(uint256,address,uint256[]).owner (src/ChipRounds.sol#562) shadows:
+ChipRounds.contributeWeights(uint256,address,uint256[]).owner (src/ChipRounds.sol#613) shadows:
 	- Ownable.owner() (lib/openzeppelin-contracts/contracts/access/Ownable.sol#54-56) (function)
-ChipRounds._allocate(uint256,address,uint256,address,uint256).owner (src/ChipRounds.sol#598) shadows:
+ChipRounds._allocate(uint256,address,uint256,address,uint256).owner (src/ChipRounds.sol#649) shadows:
 	- Ownable.owner() (lib/openzeppelin-contracts/contracts/access/Ownable.sol#54-56) (function)
-ChipRounds._credit(uint256,address,address,uint256).owner (src/ChipRounds.sol#618) shadows:
+ChipRounds._credit(uint256,address,address,uint256).owner (src/ChipRounds.sol#669) shadows:
 	- Ownable.owner() (lib/openzeppelin-contracts/contracts/access/Ownable.sol#54-56) (function)
 ClaimRouter.claimEverything(ClaimRouter.ChipClaim[]).owner (src/ClaimRouter.sol#151) shadows:
 	- Ownable.owner() (lib/openzeppelin-contracts/contracts/access/Ownable.sol#54-56) (function)
@@ -266,8 +274,8 @@ ClutchVaultAdapter.activation(address,uint256).owner (src/adapters/ClutchVaultAd
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#local-variable-shadowing
 INFO:Detectors:
 Detector: missing-zero-check
-ChipRounds.setChip(address).token (src/ChipRounds.sol#324) lacks a zero-check on :
-		- chipToken = token (src/ChipRounds.sol#325)
+ChipRounds.setChip(address).token (src/ChipRounds.sol#326) lacks a zero-check on :
+		- chipToken = token (src/ChipRounds.sol#327)
 POLTreasury.setManager(address).newManager (src/POLTreasury.sol#210) lacks a zero-check on :
 		- manager = newManager (src/POLTreasury.sol#212)
 POLTreasury.setRewards(address).newRewards (src/POLTreasury.sol#221) lacks a zero-check on :
@@ -292,25 +300,25 @@ ChipClaims._usdValue(address,uint256) (src/ChipClaims.sol#633-640) has external 
 ChipClaims._claim(uint256,address,address) (src/ChipClaims.sol#273-309) has external calls inside a loop: (noted,None) = polTreasury.call{gas: PROBE_GAS}(abi.encodeWithSignature(notifyCompound(address,address,uint256,uint256),owner,stock,amount,usd)) (src/ChipClaims.sol#300-302)
 	Calls stack containing the loop:
 		ChipClaims.claimMany(uint256[],address[])
-ChipRounds.setSplit(address,uint256,address[],uint8[]) (src/ChipRounds.sol#463-502) has external calls inside a loop: ! registry.isEnabled(stocks[i]) (src/ChipRounds.sol#476)
-ChipRounds.contributeWeights(uint256,address,uint256[]) (src/ChipRounds.sol#552-574) has external calls inside a loop: (active,tierBps,owner) = activationSource.activation(collection,tokenId) (src/ChipRounds.sol#562)
-ChipRounds._credit(uint256,address,address,uint256) (src/ChipRounds.sol#618-624) has external calls inside a loop: claims.creditWeight(roundId,stock,owner,weight) (src/ChipRounds.sol#623)
+ChipRounds.setSplit(address,uint256,address[],uint8[]) (src/ChipRounds.sol#514-553) has external calls inside a loop: ! registry.isEnabled(stocks[i]) (src/ChipRounds.sol#527)
+ChipRounds.contributeWeights(uint256,address,uint256[]) (src/ChipRounds.sol#603-625) has external calls inside a loop: (active,tierBps,owner) = activationSource.activation(collection,tokenId) (src/ChipRounds.sol#613)
+ChipRounds._credit(uint256,address,address,uint256) (src/ChipRounds.sol#669-675) has external calls inside a loop: claims.creditWeight(roundId,stock,owner,weight) (src/ChipRounds.sol#674)
 	Calls stack containing the loop:
 		ChipRounds.contributeWeights(uint256,address,uint256[])
 		ChipRounds._allocate(uint256,address,uint256,address,uint256)
-ChipRounds._allocate(uint256,address,uint256,address,uint256) (src/ChipRounds.sol#598-616) has external calls inside a loop: registry.isEnabled(sp.stocks[i]) (src/ChipRounds.sol#612)
+ChipRounds._allocate(uint256,address,uint256,address,uint256) (src/ChipRounds.sol#649-667) has external calls inside a loop: registry.isEnabled(sp.stocks[i]) (src/ChipRounds.sol#663)
 	Calls stack containing the loop:
 		ChipRounds.contributeWeights(uint256,address,uint256[])
-ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1011-1027) has external calls inside a loop: amount = IChipClaimsView(address(claims)).acquired(roundId,stock) (src/ChipRounds.sol#1014)
+ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1062-1078) has external calls inside a loop: amount = IChipClaimsView(address(claims)).acquired(roundId,stock) (src/ChipRounds.sol#1065)
 	Calls stack containing the loop:
 		ChipRounds.finalizeRound(uint256)
-ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1011-1027) has external calls inside a loop: valueUsd += (amount * 1e18) / (10 ** registry.quoteDecimals()) (src/ChipRounds.sol#1017)
+ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1062-1078) has external calls inside a loop: valueUsd += (amount * 1e18) / (10 ** registry.quoteDecimals()) (src/ChipRounds.sol#1068)
 	Calls stack containing the loop:
 		ChipRounds.finalizeRound(uint256)
-ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1011-1027) has external calls inside a loop: (price1e18) = registry.priceUsd(stock) (src/ChipRounds.sol#1020-1025)
+ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1062-1078) has external calls inside a loop: (price1e18) = registry.priceUsd(stock) (src/ChipRounds.sol#1071-1076)
 	Calls stack containing the loop:
 		ChipRounds.finalizeRound(uint256)
-ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1011-1027) has external calls inside a loop: dec = registry.getStock(stock).tokenDecimals (src/ChipRounds.sol#1021)
+ChipRounds._roundValueUsd(uint256,address[]) (src/ChipRounds.sol#1062-1078) has external calls inside a loop: dec = registry.getStock(stock).tokenDecimals (src/ChipRounds.sol#1072)
 	Calls stack containing the loop:
 		ChipRounds.finalizeRound(uint256)
 ClaimRouter._claimChip(address,ClaimRouter.ChipClaim) (src/ClaimRouter.sol#210-215) has external calls inside a loop: (ok,ret) = address(rewards).call{gas: legGasLimit}(abi.encodeCall(IChipRewardsClaimable.claimFor,(owner,c.roundId,c.stock))) (src/ClaimRouter.sol#211-213)
@@ -413,18 +421,18 @@ Reentrancy in FeeSplitter._payEth(address,uint256) (src/FeeSplitter.sol#323-331)
 	State variables written after the call(s):
 	- owedEth[to] += amount (src/FeeSplitter.sol#328)
 	- totalOwedEth += amount (src/FeeSplitter.sol#329)
-Reentrancy in ChipBurner.burnAll() (src/ChipBurner.sol#88-103):
+Reentrancy in ChipBurner.burnAll() (src/ChipBurner.sol#114-136):
 	External calls:
-	- IChipOwnable(address(chipToken)).burn(balance) (src/ChipBurner.sol#93)
+	- IChipOwnable(address(chipToken)).burn(balanceBefore) (src/ChipBurner.sol#119)
 	State variables written after the call(s):
-	- ++ burnCount (src/ChipBurner.sol#100)
-	- totalBurned += burned (src/ChipBurner.sol#99)
-Reentrancy in ChipRounds.finalizeRound(uint256) (src/ChipRounds.sol#947-973):
+	- ++ burnCount (src/ChipBurner.sol#133)
+	- totalBurned += burned (src/ChipBurner.sol#132)
+Reentrancy in ChipRounds.finalizeRound(uint256) (src/ChipRounds.sol#998-1024):
 	External calls:
-	- pot.noteReturned(unspent) (src/ChipRounds.sol#963)
-	- claims.freezeSchedule(roundId) (src/ChipRounds.sol#967)
+	- pot.noteReturned(unspent) (src/ChipRounds.sol#1014)
+	- claims.freezeSchedule(roundId) (src/ChipRounds.sol#1018)
 	State variables written after the call(s):
-	- totalPaidUsd += valueUsd (src/ChipRounds.sol#970)
+	- totalPaidUsd += valueUsd (src/ChipRounds.sol#1021)
 Reentrancy in POLTreasury.mintPosition(INonfungiblePositionManager.MintParams) (src/POLTreasury.sol#371-396):
 	External calls:
 	- (tokenId,liquidity,amount0,amount1) = positionManager.mint(p) (src/POLTreasury.sol#389)
@@ -433,29 +441,29 @@ Reentrancy in POLTreasury.mintPosition(INonfungiblePositionManager.MintParams) (
 		- holdsPosition[tokenId] = true (src/POLTreasury.sol#677)
 	- _register(tokenId) (src/POLTreasury.sol#394)
 		- positionIds.push(tokenId) (src/POLTreasury.sol#678)
-Reentrancy in ChipRounds.openRound() (src/ChipRounds.sol#522-547):
+Reentrancy in ChipRounds.openRound() (src/ChipRounds.sol#573-598):
 	External calls:
-	- got = pot.pullBudget(availableInPot) (src/ChipRounds.sol#531)
+	- got = pot.pullBudget(availableInPot) (src/ChipRounds.sol#582)
 	State variables written after the call(s):
-	- _rounds[roundId] = Round({state:RoundState.Accumulating,openedAt:uint64(block.timestamp),finalizedAt:0,budget:uint128(got),spent:0,totalWeight:0}) (src/ChipRounds.sol#535-542)
-	- committedQuote += got (src/ChipRounds.sol#544)
-	- roundId = ++ roundCount (src/ChipRounds.sol#534)
-Reentrancy in ChipRounds.settleStock(uint256,address) (src/ChipRounds.sol#657-732):
+	- _rounds[roundId] = Round({state:RoundState.Accumulating,openedAt:uint64(block.timestamp),finalizedAt:0,budget:uint128(got),spent:0,totalWeight:0}) (src/ChipRounds.sol#586-593)
+	- committedQuote += got (src/ChipRounds.sol#595)
+	- roundId = ++ roundCount (src/ChipRounds.sol#585)
+Reentrancy in ChipRounds.settleStock(uint256,address) (src/ChipRounds.sol#708-783):
 	External calls:
-	- (executed,received,quoteSpent,reason) = _buy(stock,spend) (src/ChipRounds.sol#699)
-		- uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#898-912)
-		- slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#914-929)
+	- (executed,received,quoteSpent,reason) = _buy(stock,spend) (src/ChipRounds.sol#750)
+		- uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#949-963)
+		- slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#965-980)
 	State variables written after the call(s):
-	- stockSkipped[roundId][stock] = true (src/ChipRounds.sol#704)
-Reentrancy in ChipRounds.settleStock(uint256,address) (src/ChipRounds.sol#657-732):
+	- stockSkipped[roundId][stock] = true (src/ChipRounds.sol#755)
+Reentrancy in ChipRounds.settleStock(uint256,address) (src/ChipRounds.sol#708-783):
 	External calls:
-	- (executed,received,quoteSpent,reason) = _buy(stock,spend) (src/ChipRounds.sol#699)
-		- uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#898-912)
-		- slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#914-929)
-	- heldBack = _sendHoldback(stock,received) (src/ChipRounds.sol#713)
-		- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(treasury,target))) (src/ChipRounds.sol#809)
+	- (executed,received,quoteSpent,reason) = _buy(stock,spend) (src/ChipRounds.sol#750)
+		- uniswapRouter.exactInputSingle(IUniswapV3SwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,fee:s.fee,recipient:address(this),amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#949-963)
+		- slipstreamRouter.exactInputSingle(ISlipstreamSwapRouter.ExactInputSingleParams({tokenIn:quoteToken,tokenOut:stock,tickSpacing:s.tickSpacing,recipient:address(this),deadline:block.timestamp,amountIn:spendAmount,amountOutMinimum:minOut,sqrtPriceLimitX96:0})) (src/ChipRounds.sol#965-980)
+	- heldBack = _sendHoldback(stock,received) (src/ChipRounds.sol#764)
+		- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(treasury,target))) (src/ChipRounds.sol#860)
 	State variables written after the call(s):
-	- committedQuote -= quoteSpent (src/ChipRounds.sol#716)
+	- committedQuote -= quoteSpent (src/ChipRounds.sol#767)
 Reentrancy in Anvil.unshelve(address,uint256,address) (src/anvil/Anvil.sol#476-510):
 	External calls:
 	- IERC721(collection).transferFrom(address(this),to,id) (src/anvil/Anvil.sol#507)
@@ -472,28 +480,23 @@ Reentrancy in ConversionRoutes._convert(address,uint256) (src/base/ConversionRou
 	- IWETH(weth).deposit{value: amountIn - wethBalance}() (src/base/ConversionRoutes.sol#232)
 	Event emitted after the call(s):
 	- Converted(token,amountIn,quoteOut,minOut,msg.sender) (src/base/ConversionRoutes.sol#256)
-Reentrancy in ChipBurner.burnAll() (src/ChipBurner.sol#88-103):
-	External calls:
-	- IChipOwnable(address(chipToken)).burn(balance) (src/ChipBurner.sol#93)
-	Event emitted after the call(s):
-	- Burned(msg.sender,burned,supplyBefore,supplyAfter) (src/ChipBurner.sol#102)
 Reentrancy in Pot.sweepEth(address) (src/Pot.sol#221-227):
 	External calls:
 	- Address.sendValue(address(to),amount) (src/Pot.sol#225)
 	Event emitted after the call(s):
 	- EthSwept(to,amount) (src/Pot.sol#226)
-Reentrancy in ChipBurner.transferTokenOwnership(address) (src/ChipBurner.sol#132-136):
+Reentrancy in ChipBurner.transferTokenOwnership(address) (src/ChipBurner.sol#165-169):
 	External calls:
-	- _passThrough(abi.encodeWithSignature(transferOwnership(address),newOwner)) (src/ChipBurner.sol#134)
-		- (ok,ret) = address(chipToken).call(data) (src/ChipBurner.sol#145)
+	- _passThrough(abi.encodeWithSignature(transferOwnership(address),newOwner)) (src/ChipBurner.sol#167)
+		- (ok,ret) = address(chipToken).call(data) (src/ChipBurner.sol#178)
 	Event emitted after the call(s):
-	- TokenOwnershipTransferred(newOwner) (src/ChipBurner.sol#135)
-Reentrancy in ChipBurner.updateTokenUri(string) (src/ChipBurner.sol#117-120):
+	- TokenOwnershipTransferred(newOwner) (src/ChipBurner.sol#168)
+Reentrancy in ChipBurner.updateTokenUri(string) (src/ChipBurner.sol#150-153):
 	External calls:
-	- _passThrough(abi.encodeWithSignature(updateTokenURI(string),uri)) (src/ChipBurner.sol#118)
-		- (ok,ret) = address(chipToken).call(data) (src/ChipBurner.sol#145)
+	- _passThrough(abi.encodeWithSignature(updateTokenURI(string),uri)) (src/ChipBurner.sol#151)
+		- (ok,ret) = address(chipToken).call(data) (src/ChipBurner.sol#178)
 	Event emitted after the call(s):
-	- TokenUriUpdated(uri) (src/ChipBurner.sol#119)
+	- TokenUriUpdated(uri) (src/ChipBurner.sol#152)
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-4
 INFO:Detectors:
 Detector: return-bomb
@@ -501,10 +504,10 @@ ChipClaims._claim(uint256,address,address) (src/ChipClaims.sol#273-309) tries to
 	(noted,None) = polTreasury.call{gas: PROBE_GAS}(abi.encodeWithSignature(notifyCompound(address,address,uint256,uint256),owner,stock,amount,usd)) (src/ChipClaims.sol#300-302)
 ChipClaims._balanceOf(address,address) (src/ChipClaims.sol#643-647) tries to limit the gas of an external call that controls implicit decoding
 	(ok,ret) = token.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC20.balanceOf,(who))) (src/ChipClaims.sol#644)
-ChipRounds._maxSpendFor(address) (src/ChipRounds.sol#856-866) tries to limit the gas of an external call that controls implicit decoding
-	(ok,ret) = address(registry).staticcall{gas: DEPTH_PROBE_GAS}(abi.encodeCall(IStockRegistry.poolLiquidityUsd,(stock))) (src/ChipRounds.sol#857-858)
-ChipRounds._balanceOf(address,address) (src/ChipRounds.sol#1057-1061) tries to limit the gas of an external call that controls implicit decoding
-	(ok,ret) = token.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC20.balanceOf,(who))) (src/ChipRounds.sol#1058)
+ChipRounds._maxSpendFor(address) (src/ChipRounds.sol#907-917) tries to limit the gas of an external call that controls implicit decoding
+	(ok,ret) = address(registry).staticcall{gas: DEPTH_PROBE_GAS}(abi.encodeCall(IStockRegistry.poolLiquidityUsd,(stock))) (src/ChipRounds.sol#908-909)
+ChipRounds._balanceOf(address,address) (src/ChipRounds.sol#1108-1112) tries to limit the gas of an external call that controls implicit decoding
+	(ok,ret) = token.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC20.balanceOf,(who))) (src/ChipRounds.sol#1109)
 ClaimRouter._claimChip(address,ClaimRouter.ChipClaim) (src/ClaimRouter.sol#210-215) tries to limit the gas of an external call that controls implicit decoding
 	(ok,ret) = address(rewards).call{gas: legGasLimit}(abi.encodeCall(IChipRewardsClaimable.claimFor,(owner,c.roundId,c.stock))) (src/ClaimRouter.sol#211-213)
 ClaimRouter._sweep(address,address[]) (src/ClaimRouter.sol#236-253) tries to limit the gas of an external call that controls implicit decoding
@@ -567,25 +570,25 @@ ChipClaims.executeRounds() (src/ChipClaims.sol#519-526) uses timestamp for compa
 ChipClaims.executePolTreasury() (src/ChipClaims.sol#557-564) uses timestamp for comparisons
 	Dangerous comparisons:
 	- block.timestamp < p.executableAt (src/ChipClaims.sol#560)
-ChipRounds.nextRoundOpensAt() (src/ChipRounds.sol#517-519) uses timestamp for comparisons
+ChipRounds.nextRoundOpensAt() (src/ChipRounds.sol#568-570) uses timestamp for comparisons
 	Dangerous comparisons:
-	- lastRoundOpenedAt == 0 (src/ChipRounds.sol#518)
-ChipRounds.openRound() (src/ChipRounds.sol#522-547) uses timestamp for comparisons
+	- lastRoundOpenedAt == 0 (src/ChipRounds.sol#569)
+ChipRounds.openRound() (src/ChipRounds.sol#573-598) uses timestamp for comparisons
 	Dangerous comparisons:
-	- block.timestamp < openableAt (src/ChipRounds.sol#524)
-ChipRounds.closeAccumulation(uint256) (src/ChipRounds.sol#629-638) uses timestamp for comparisons
+	- block.timestamp < openableAt (src/ChipRounds.sol#575)
+ChipRounds.closeAccumulation(uint256) (src/ChipRounds.sol#680-689) uses timestamp for comparisons
 	Dangerous comparisons:
-	- block.timestamp < closesAt (src/ChipRounds.sol#633)
-ChipRounds.isFeedStale(address) (src/ChipRounds.sol#819-830) uses timestamp for comparisons
+	- block.timestamp < closesAt (src/ChipRounds.sol#684)
+ChipRounds.isFeedStale(address) (src/ChipRounds.sol#870-881) uses timestamp for comparisons
 	Dangerous comparisons:
-	- block.timestamp > updatedAt + maxAge (src/ChipRounds.sol#824)
-ChipRounds.finalizeRound(uint256) (src/ChipRounds.sol#947-973) uses timestamp for comparisons
+	- block.timestamp > updatedAt + maxAge (src/ChipRounds.sol#875)
+ChipRounds.finalizeRound(uint256) (src/ChipRounds.sol#998-1024) uses timestamp for comparisons
 	Dangerous comparisons:
-	- unspent != 0 (src/ChipRounds.sol#960)
-ChipRounds.cancelRound(uint256) (src/ChipRounds.sol#980-996) uses timestamp for comparisons
+	- unspent != 0 (src/ChipRounds.sol#1011)
+ChipRounds.cancelRound(uint256) (src/ChipRounds.sol#1031-1047) uses timestamp for comparisons
 	Dangerous comparisons:
-	- block.timestamp < abandonedAt (src/ChipRounds.sol#984)
-	- budget != 0 (src/ChipRounds.sol#990)
+	- block.timestamp < abandonedAt (src/ChipRounds.sol#1035)
+	- budget != 0 (src/ChipRounds.sol#1041)
 ChipActivation.isActive(address,uint256) (src/activation/ChipActivation.sol#560-564) uses timestamp for comparisons
 	Dangerous comparisons:
 	- recorded == address(0) (src/activation/ChipActivation.sol#562)
@@ -697,20 +700,22 @@ NounLoans.borrow(address,uint256,uint8,uint256) (src/loans/NounLoans.sol#270-342
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#cyclomatic-complexity
 INFO:Detectors:
 Detector: low-level-calls
-Low level call in ChipBurner._passThrough(bytes) (src/ChipBurner.sol#144-147):
-	- (ok,ret) = address(chipToken).call(data) (src/ChipBurner.sol#145)
+Low level call in ChipBurner._passThrough(bytes) (src/ChipBurner.sol#177-180):
+	- (ok,ret) = address(chipToken).call(data) (src/ChipBurner.sol#178)
 Low level call in ChipClaims._claim(uint256,address,address) (src/ChipClaims.sol#273-309):
 	- (noted,None) = polTreasury.call{gas: PROBE_GAS}(abi.encodeWithSignature(notifyCompound(address,address,uint256,uint256),owner,stock,amount,usd)) (src/ChipClaims.sol#300-302)
 Low level call in ChipClaims._balanceOf(address,address) (src/ChipClaims.sol#643-647):
 	- (ok,ret) = token.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC20.balanceOf,(who))) (src/ChipClaims.sol#644)
-Low level call in ChipRounds._deliver(uint256,address,uint256) (src/ChipRounds.sol#767-792):
-	- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(address(claims),amount))) (src/ChipRounds.sol#771)
-Low level call in ChipRounds._sendHoldback(address,uint256) (src/ChipRounds.sol#800-814):
-	- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(treasury,target))) (src/ChipRounds.sol#809)
-Low level call in ChipRounds._maxSpendFor(address) (src/ChipRounds.sol#856-866):
-	- (ok,ret) = address(registry).staticcall{gas: DEPTH_PROBE_GAS}(abi.encodeCall(IStockRegistry.poolLiquidityUsd,(stock))) (src/ChipRounds.sol#857-858)
-Low level call in ChipRounds._balanceOf(address,address) (src/ChipRounds.sol#1057-1061):
-	- (ok,ret) = token.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC20.balanceOf,(who))) (src/ChipRounds.sol#1058)
+Low level call in ChipRounds._requireRouterOnFactory(address,address) (src/ChipRounds.sol#374-385):
+	- (ok,ret) = router.staticcall(abi.encodeWithSignature(factory())) (src/ChipRounds.sol#378)
+Low level call in ChipRounds._deliver(uint256,address,uint256) (src/ChipRounds.sol#818-843):
+	- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(address(claims),amount))) (src/ChipRounds.sol#822)
+Low level call in ChipRounds._sendHoldback(address,uint256) (src/ChipRounds.sol#851-865):
+	- (ok,None) = stock.call(abi.encodeCall(IERC20.transfer,(treasury,target))) (src/ChipRounds.sol#860)
+Low level call in ChipRounds._maxSpendFor(address) (src/ChipRounds.sol#907-917):
+	- (ok,ret) = address(registry).staticcall{gas: DEPTH_PROBE_GAS}(abi.encodeCall(IStockRegistry.poolLiquidityUsd,(stock))) (src/ChipRounds.sol#908-909)
+Low level call in ChipRounds._balanceOf(address,address) (src/ChipRounds.sol#1108-1112):
+	- (ok,ret) = token.staticcall{gas: PROBE_GAS}(abi.encodeCall(IERC20.balanceOf,(who))) (src/ChipRounds.sol#1109)
 Low level call in ClaimRouter._claimChip(address,ClaimRouter.ChipClaim) (src/ClaimRouter.sol#210-215):
 	- (ok,ret) = address(rewards).call{gas: legGasLimit}(abi.encodeCall(IChipRewardsClaimable.claimFor,(owner,c.roundId,c.stock))) (src/ClaimRouter.sol#211-213)
 Low level call in ClaimRouter._sweep(address,address[]) (src/ClaimRouter.sol#236-253):
@@ -763,4 +768,4 @@ Detector: var-read-using-this
 The function StockRegistry.clearsMinLiquidity(address) (src/StockRegistry.sol#266-274) reads measured = this.poolLiquidityUsd(token) (src/StockRegistry.sol#269-273) with `this` which adds an extra STATICCALL.
 The function StockRegistry.liquidityReport() (src/StockRegistry.sol#278-298) reads m = this.poolLiquidityUsd(t) (src/StockRegistry.sol#291-295) with `this` which adds an extra STATICCALL.
 Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#public-variable-read-in-external-context
-INFO:Slither:. analyzed (52 contracts with 102 detectors), 212 result(s) found
+INFO:Slither:. analyzed (52 contracts with 102 detectors), 213 result(s) found
