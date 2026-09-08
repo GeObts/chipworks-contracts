@@ -169,6 +169,90 @@ was not. **Six Highs were found**, five fixed with a test and one accepted with 
 reasoning. There is no `/reports` directory: the triage below is the record, and the reviewers'
 original artifacts were relayed as messages rather than committed.
 
+### `launch-candidate-22` targeted re-scan — **all five cleared, one gap in the reasoning**
+
+Bankr re-scanned `ChipBurner`, `ChipRounds`, `ChipActivation`, `StockRegistry` and
+`POLTreasury` at `79d14ca`. **No findings. No change requested.** Verdict: *"all 5 contracts
+are structurally sound... the system is ready for deployment without moving the depth gate into
+the live execution loop."*
+
+Confirmed by them, and worth recording because each was a claim we made rather than proved:
+
+- **`ChipBurner` has no path to extract $CHIP** — no generic call, sweep, transfer or arbitrary
+  calldata, and no way to reach `mintInflation`. Omitting it while keeping
+  `transferTokenOwnership` was judged sound.
+- **`burnAll`'s `min(supplyDrop, balanceDrop)` bound holds** — `totalBurned` cannot be inflated
+  by external burns in the same call, nor by tokens that merely moved. Under-reporting happens
+  only when the token genuinely destroys less than asked, which they call the correct and
+  honest behaviour.
+- **`nonReentrant` on a permissionless function is not a DoS vector** — the lock is scoped to
+  the executing transaction; anyone can still flush at any time.
+- **The Slipstream `exactInputSingle` struct matches Aerodrome CL's requirement** field for
+  field, and `_minOutFor` applies identically across both venues.
+- **`_requireRouterOnFactory` secures the live buy path**, and reading the expected factories
+  from the registry rather than hardcoding keeps the pair consistent if the registry moves.
+- **The two Aerodrome books are fully decoupled** — `POLTreasury` never references
+  `StockRegistry`, factory B or stock tokens; `ChipRounds` never touches the NPM or Voter. A
+  factory-B pool handed to `POLTreasury` fails closed at the factory check.
+
+#### 🔴 THE ONE THING THEY GOT WRONG, AND IT IS IN THE REASONING, NOT THE VERDICT
+
+**Their §4 argument against a continuous depth gate is premised on the buy path not reading
+pool depth. It already does.**
+
+The argument was: *"an actor could execute a temporary swap or flash loan to suppress measured
+liquidity right before `settleStock` runs, forcing legitimate stock purchases to be skipped."*
+That is a good objection. It is also a description of code that shipped at
+`launch-candidate-16`:
+
+```solidity
+// ChipRounds.settleStock
+uint256 ceiling = _maxSpendFor(stock);        // -> registry.poolLiquidityUsd(stock)
+if (ceiling == 0) {
+    stockSkipped[roundId][stock] = true;
+    emit StockSkipped(roundId, stock, slice, "no depth");
+    return;                                    // the exact outcome they warn about
+}
+```
+
+`_maxSpendFor` reads **live pool token balances** on every settle, and a zero reading skips the
+stock outright. So the depth-aware impact trim (OPEN_ITEMS 26, which closed EXT-R-L-1 and
+SEC-POT-002) already puts a manipulable depth reading inside the execution loop.
+
+**We asked about this at `-19` and it was not answered.** That note's `ChipRounds` section
+says: *"can `_maxSpendFor` be made to over-report depth... Can a stock be made to skip
+permanently?"* — the over-reporting direction. The `-22` reasoning surfaces the mirror image,
+**under**-reporting, and neither has had a verdict.
+
+**Our own read of severity, pending theirs:**
+
+- **Griefing and liveness, not theft.** A suppressed reading trims or skips; nothing is spent,
+  the slice carries back to the Pot through `finalizeRound` and is re-split next round. No
+  funds move. That is why this is not being treated as a deploy blocker on our side.
+- **A flash loan is the wrong tool for it.** `poolLiquidityUsd` values *both* sides — stock at
+  the Chainlink mark plus USDC at par — so an ordinary swap rebalances the pool rather than
+  draining it and barely moves the total. The lever that actually works is **an LP withdrawing
+  liquidity** and re-adding after, which needs the attacker to be that LP. On the thinner B20
+  pools that is a small set of people.
+- So it is real, cheap for a dominant LP, and unglamorous. **Low severity, high relevance to
+  the exact question they were answering.**
+
+**This goes back to them as a question, not as a fix.** Their recommendation — keep depth out of
+the live execution path — may well mean the trim should change, and that would be a code change
+before deploy. We are not guessing at it. **§4's conclusion is not being treated as settled
+until they have answered knowing the trim exists.**
+
+#### Two imprecisions, neither of which changes a verdict
+
+- **The Chiplets 0.1x does not live in `ChipActivation`.** Their note describes it as "the 4th
+  collection with a fixed 0.1x weight multiplier" in that contract. `ChipActivation` reports a
+  flat `FLAT_TIER_BPS = 10_000` (1.00x); the 0.1x is
+  `ChipRounds.setCollectionBaseBps(CHIPLETS, 1_000)`, exactly as for Lil at 0.5x. The contract
+  says so in capitals for this reason. Harmless here, but a reviewer carrying that model into
+  the weight arithmetic would be looking in the wrong contract.
+- **"same block" should be "same transaction".** The `min()` bound and `nonReentrant` both
+  scope to the call, not the block. Their conclusion is right; the word is not.
+
 ### POLTreasury re-review — **both HIGHs confirmed closed**
 
 Bankr re-reviewed `POLTreasury` after `launch-candidate-10` and confirmed H-01 and H-02 are

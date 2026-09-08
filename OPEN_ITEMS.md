@@ -799,10 +799,21 @@ including the ABI check that must happen **before** it. Until `chip.owner()` is 
 
 ---
 
-## 28. NEW: the depth gate is point-in-time, and depth drifts
+## 28. ACCEPTED BY DESIGN: the depth gate is point-in-time, and depth drifts
 
-**This is a known gap being carried deliberately, not an oversight.** It is here so it is not
-lost if the PR that partially addressed it is never merged.
+**Ruled on by Bankr at the `launch-candidate-22` re-scan: the gate stays point-in-time, and
+monitoring is operational.** Their words: *"keep `setEnabled` as the administrative gate. If
+continuous pool monitoring is desired, manage it via off-chain keeper alerts or administrative
+scripts that trigger `setEnabled(stock, false)` if sustained pool drain occurs."*
+
+That is exactly the mitigation already written into LAUNCH_CONFIG §8, so **nothing needs
+building and this item is closed as accepted-by-design.** Their reasoning for refusing a
+continuous gate — that an on-chain depth read inside the buy path is manipulable and would let
+an actor suppress liquidity to force a skip — is recorded in TRIAGE, **along with the fact that
+the buy path already contains one.** See item 29; that part is not settled.
+
+The original description follows, because the gap itself has not gone away — it is being
+carried knowingly rather than fixed.
 
 **`StockRegistry.setEnabled(token, true)` checks depth once, at the moment of enabling, and
 nothing re-checks it afterwards.** A stock enabled at $200,000 of measured depth stays enabled
@@ -864,9 +875,79 @@ It was held for two reasons, neither of them about quality:
    is load-bearing — it is why two of the five contracts are in scope for their environment
    rather than their code. Merging mid-flight would invalidate the note in the reviewer's hands.
 
-**The question is with Bankr instead**, in RESCAN_NOTE §4: should the gate be continuous, and
-where. Their answer decides the shape — re-check on config change only, re-check inside the buy
-path, or leave it operational — and whatever it is, it lands deliberately with tests and comes
-back through the same re-scan. **Do not close this item by merging PR #4 alone**; that would
-leave the drift case open while looking like it was handled, which is the failure mode this
-file exists to prevent.
+**The question went to Bankr instead**, in RESCAN_NOTE §4, and the answer is above: leave it
+operational. So the drift case is closed by the keeper alert, not by code.
+
+**PR #4 IS NOT DISPOSED OF BY THAT RULING, AND IT WOULD BE EASY TO THINK IT WAS.** Bankr was
+asked whether the gate should be **continuous** — re-checked inside `settleStock` or `_buy` —
+and said no. PR #4 does not do that. It re-checks at **administrative** time, inside
+`setMinLiquidityUsd`, which is the zone Bankr explicitly endorsed keeping (*"keep `setEnabled`
+as the administrative gate"*). The ruling neither blesses nor rejects it, because it answers a
+question about a different place in the code.
+
+What remains true of PR #4 either way:
+
+- it closes only the raise-the-threshold door, never the drift door, which the keeper now
+  covers anyway;
+- it changes `StockRegistry`, whose unchanged-since-`-14` status was load-bearing during the
+  re-scan — **that constraint expires now the re-scan is complete**;
+- its silent-disable-on-unreadable-feed asymmetry against `setEnabled`'s loud revert is still
+  unresolved and still undiscussed in the PR.
+
+So it is now a small optional tidy-up in a zone the reviewer has blessed, not a fix the system
+needs. **Merging it would still not close this item** — the drift case is closed by the keeper
+alert, and PR #4 does not touch it.
+
+---
+
+## 29. NEW: the buy path already reads manipulable pool depth — and the reviewer's argument assumed it did not
+
+**Raised by us, out of Bankr's own `-22` reasoning.** It is the one thing the re-scan got wrong,
+and it is in the reasoning rather than the verdict.
+
+Bankr refused a continuous depth gate partly on this ground:
+
+> *"an actor could execute a temporary swap or flash loan to suppress measured liquidity right
+> before `settleStock` runs, forcing legitimate stock purchases to be skipped."*
+
+**That is a description of code that already shipped, at `launch-candidate-16`.**
+`ChipRounds.settleStock` calls `_maxSpendFor(stock)`, which staticcalls
+`registry.poolLiquidityUsd(stock)` — **live pool token balances** — and a zero reading skips the
+stock outright with reason `"no depth"`. The depth-aware impact trim (item 26, which closed
+EXT-R-L-1 and SEC-POT-002) put a manipulable depth reading inside the execution loop, and the
+`-22` reasoning treats the execution loop as if it were clean.
+
+**It was asked at `-19` and never answered.** That note asked whether `_maxSpendFor` could be
+made to **over**-report depth. The `-22` reasoning raises the mirror image — **under**-reporting
+— and neither direction has a verdict.
+
+### Our read of severity, pending theirs
+
+- **Griefing and liveness, not theft.** A suppressed reading trims or skips; nothing is spent,
+  and the slice carries back to the Pot through `finalizeRound` to be re-split next round. No
+  funds move and no holder loses a credit. This is why it is not being treated as a deploy
+  blocker on our side.
+- **A flash loan is the wrong tool.** `poolLiquidityUsd` values *both* sides — stock at the
+  Chainlink mark, USDC at par — so an ordinary swap rebalances the pool rather than draining it
+  and barely moves the total. The lever that works is **an LP withdrawing liquidity** before a
+  settle and re-adding after, which requires being that LP. On the thinner B20 pools
+  (MSTR at $117k, MSFT at $151k) that is a small set of people.
+- **Repeatable, and cheap for a dominant LP.** The cost is one withdraw/re-add per round; the
+  effect is that one stock takes no slice that round.
+
+### What needs to happen
+
+**This goes back to Bankr as a targeted question, not as a fix.** We are not guessing at the
+answer, because their recommendation — keep depth out of the live execution path — may mean the
+trim itself should change, and that would be a code change before deploy.
+
+The question to put:
+
+> `ChipRounds.settleStock` already reads `poolLiquidityUsd` per buy via `_maxSpendFor`, and
+> skips the stock when it reads zero. Does the §4 objection apply to it? If so, what shape do
+> you want: leave it, bound how far the ceiling may move between rounds, or drop the trim and
+> rely on `_minOutFor` alone?
+
+**Until that is answered, §4's conclusion is not settled**, and this item is the reason. The
+verdict on the five contracts stands regardless — nothing here is a finding against the code
+that was scanned.
