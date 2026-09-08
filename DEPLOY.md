@@ -586,7 +586,7 @@ Then configure, all from the multisig:
 
 | Call | Recommended value |
 |---|---|
-| `setRoundParams(duration, window, minPot, maxBudget)` | `86400, 7200, 250e6, 10000e6` |
+| `setRoundParams(duration, window, minPot)` | `86400, 7200, 100e6` — **three arguments; `maxBudget` was removed with the impact trim.** LAUNCH_CONFIG §5 |
 | `setCollectionBaseBps(CHIPLETS, 1000)` | **Chiplets = 0.1x.** This IS the 0.1x — `ChipActivation` reports a flat 1.00x and the base supplies the rate, exactly as for Lil. No code change was needed in `ChipRounds`. |
 | `setCollectionBaseBps(LIL_NOUNS, 5000)` | Lil = 0.5x |
 | `setCollectionBaseBps(BASED_NOUNS, 10000)` | Based = 1.0x |

@@ -20,6 +20,11 @@ would blur the line between what someone else audited and what nobody has yet. T
 §5 are what make the second sentence true — if you raise them before the audit lands, this
 line stops being accurate and has to come down.
 
+> ⚠️ **The line above is still accurate. Copy that names a per-round dollar cap is not.**
+> There is no round maximum any more — see the red box in §5. Before posting the launch
+> thread or shipping the site's launch-caps section, check both against §5's replacement
+> wording. This affects **external copy only**; no contract or setting changes.
+
 ---
 
 ## 1. The critical path, and what actually blocks it
@@ -40,8 +45,9 @@ observed price, so the timelock cannot start until price discovery finishes. Rea
 Day 0     $CHIP launches. Initial buy inside the window (§3).
           Deploy ChipBurner, then chip.transferOwnership(ChipBurner) (§6.6).
 Day 1–2   Observe. Do NOT compute the table from day-0 volatility.
-Day 2     Compute the cost table (§4). Deploy ChipActivation. Queue costs for
-          all three collections. Queue NounLoans terms. Queue Anvil prices.
+Day 2     Compute the cost table (§4). Deploy ChipActivation. setFlatRateCollection
+          (CHIPLETS), then queue costs for all FOUR collections. Queue NounLoans
+          terms. Queue Anvil prices.
           Queue both Furnace recipe prices (25 / 50 Chiplets).
 Day 4     Execute all queued config. Deploy the rest. Wire. Verify.
 Day 5     First round.
@@ -145,13 +151,23 @@ satisfies that, but a hand-edited table might not.
    Dark recipe the **60,000-shape** — i.e. 0.5x and 1.2x the base unit.
 5. **Split-change fee = 10% of the tier-0 chip cost.** At a 50,000 base that is 5,000 $CHIP,
    which is the `splitChangeFeeChip_` constructor argument on ChipRounds.
+6. **Chiplets activation = a FLAT 10% of the base unit.** At a 50,000 base that is **5,000
+   $CHIP**, and it is one price rather than a ladder: Chiplets are registered with
+   `setFlatRateCollection` and `queueCosts` demands **five equal entries**, so the whole table
+   is `[5_000e18 x5]`. Scale it with the base unit like everything else.
+
+   > It is the same **number** as the split-change fee at a 50,000 base, and they are not the
+   > same **thing** — one is what a Chiplet costs to activate, the other is what changing a
+   > split costs. They move together only because both are 10% of the base unit.
 
 ### Worked example, at a base unit of 50,000
 
 ```
+ChipActivation.setFlatRateCollection(CHIPLETS)          # FIRST, before its executeCosts
 ChipActivation.queueCosts(LIL_NOUNS,   [50_000e18, 110_000e18, 225_000e18, 450_000e18, 1_200_000e18])
 ChipActivation.queueCosts(BASED_NOUNS, [ same ])
 ChipActivation.queueCosts(DARK_NOUNS,  [ same ])
+ChipActivation.queueCosts(CHIPLETS,    [5_000e18, 5_000e18, 5_000e18, 5_000e18, 5_000e18])
 Furnace basedRecipe.chipCost =  25_000e18
 Furnace darkRecipe.chipCost  =  60_000e18
 ChipRounds splitChangeFeeChip_ = 5_000e18
@@ -170,18 +186,49 @@ constant**, so they lift when the audit lands without touching a contract.
 
 | Cap | Value | Where |
 |---|---|---|
-| Round minimum | **$100** | `ChipRounds.setRoundParams` — `minPot = 100e6` |
-| Round maximum | **$1,000** | `ChipRounds.setRoundParams` — `maxBudget = 1_000e6` |
+| Round minimum | **$100** | `ChipRounds.setRoundParams(86400, 7200, 100e6)` — `minPot` |
+| ~~Round maximum~~ | 🔴 **GONE. THERE IS NO ROUND CAP.** See below | — |
+| Per-buy impact bound | **0.25% of measured pool depth**, the replacement | `defaultMaxImpactBps`, **already 25 from the constructor** |
 | POL holdback | **15%** — unchanged | `ChipRounds.setHoldbackBps(1500)` |
 | NounLoans `maxPrincipal` | **≈60% of the Anvil queue price**, per collection, denominated in $CHIP | `NounLoans.setMaxPrincipal` |
 | NounLoans pool | seeded from the initial buy (§3) | `NounLoans.depositPool` |
 | Furnace Based stock | deploy argument | `Furnace.depositStock` |
 | Furnace Dark recipe | **deployed but PAUSED** | `Furnace.setPaused(1, true)` |
 
-**The round cap is the important one.** $1,000 is deliberately small: it bounds what a bug
-in an unaudited buying path can cost to one round's budget, and confidence in anything
-B20-specific is structurally lower than the rest of the repo (OPEN_ITEMS item 5). The first
-mainnet round should be smaller still.
+### 🔴 THE ROUND CAP NO LONGER EXISTS, AND THIS FILE USED TO SAY IT DID
+
+`setRoundParams` takes **three** arguments — `(duration, window, minPot)`. `maxBudget` was
+removed when the depth-aware impact trim landed (OPEN_ITEMS 26, `test/UncappedRounds.t.sol`),
+so **the $1,000 round maximum this table used to list could never have been set.** The
+four-argument call in a previous revision of §6 would have reverted on the day.
+
+**What bounds exposure instead, and why it is a better bound.** `maxImpactBps` sizes every buy
+from `poolLiquidityUsd` — measured pool depth — so what is extractable from any one stock is a
+function of the POOL, not of the round. Doubling the round no longer doubles the exposure; it
+spreads the same bounded buys over more rounds. That is precisely why the cap could come off,
+and it is the mitigation the two accepted findings (EXT-R-L-1, SEC-POT-002) were conditioned
+on. **The constructor already sets `defaultMaxImpactBps = 25`**, ceiling
+`MAX_IMPACT_CEILING_BPS = 500`, so the protection is on by default and needs no deploy step.
+
+> ⚠️ **THIS CHANGES WHAT §0'S DISCLOSURE LINE CAN HONESTLY CLAIM, AND WHAT THE SITE AND THE
+> LAUNCH THREAD MAY SAY.** Three places still describe a round cap that does not exist, and all
+> three are external-facing:
+>
+> 1. **§0's disclosure line** — *"launch caps are in effect until it completes"*. Still true,
+>    but the caps are the ones remaining in this table (round MINIMUM, POL holdback,
+>    `maxPrincipal`, paused Dark recipe) plus the per-buy impact bound. Do not let a reader
+>    infer a per-round ceiling.
+> 2. **The site's launch-caps copy**, wherever it names a dollar figure per round.
+> 3. **The launch-thread / article copy**, same.
+>
+> **The honest replacement sentence:** *"each buy is limited to a fraction of the pool's
+> measured depth, and the first rounds are funded small."* The second half is an operational
+> promise, not a contract guarantee — keep the wording that way. **Fix this copy before
+> posting anything.**
+
+**Fund the first mainnet rounds small.** With no ceiling in the contract, round size is bounded
+by what you put in the Pot. That is now an operational control rather than a configured one,
+which means it needs a person to keep honouring it.
 
 **`maxPrincipal` at ~60% of the Anvil queue price** is the parity invariant made concrete.
 The rule is that borrowing must never beat selling, or defaulting becomes the rational move
@@ -260,9 +307,12 @@ markAndPoolPrice(NVDAc, <pool>) -> two numbers inside the band
 ### After $CHIP, after price discovery
 
 **4. ChipActivation** — `(MULTISIG, CHIP, ChipBurner, [10000, 12500, 16000, 20000, 33300])`
-Then `queueCosts` x3 with the §4 table → **48h** → `executeCosts` x3.
+Then `setFlatRateCollection(CHIPLETS)` **first**, then `queueCosts` **x4** with the §4 table →
+**48h** → `executeCosts` **x4**. All four earning collections are priced here: LIL, BASED, DARK
+tiered, and CHIPLETS flat at `[5_000e18 x5]`.
 ```
 allTierBps() == [10000,12500,16000,20000,33300]
+isFlatRate(CHIPLETS) == true            # BEFORE its executeCosts, or ChipActivation redeploys
 isSupportedCollection(BASED_NOUNS) == false BEFORE executeCosts, true after
 activate(BASED_NOUNS, id, 0) before executeCosts -> reverts CollectionNotConfigured
 chip.balanceOf(chipActivation) == 0   after a test activation
@@ -279,14 +329,53 @@ setClaimSchedule(604800, 172800) ; setCreditExpiry(2592000)
 **5b. ChipRounds** — `(MULTISIG, registry, Pot, ChipActivation, ChipClaims, 5_000e18,
 ChipBurner)`
 ```
-setRoundParams(86400, 7200, 100e6, 1_000e6)   # LAUNCH CAPS
-setCollectionBaseBps(LIL, 5000) / (BASED, 10000) / (DARK, 20000)
+setRoundParams(86400, 7200, 100e6)            # THREE arguments. There is no maxBudget (§5)
+setCollectionBaseBps(LIL, 5000) / (BASED, 10000) / (DARK, 20000) / (CHIPLETS, 1000)
 setHoldbackBps(1500) ; setDefaultMaxSlippageBps(200) ; setMaxFeedAge(432000)
 setChip(CHIP)                                 # ONE argument - the burn target is immutable
 setRouters(0x2626664c2603336E57B271c5C0b26F421741e481,
            0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F)
 slipstreamRouter() == 0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F
 ```
+
+> ### 🔴 ALL FOUR COLLECTIONS NEED A `baseBps`, AND A MISSING ONE IS SILENT
+>
+> `collectionBaseBps` defaults to **0**, and a collection at zero earns **nothing** — every
+> holder in it scores zero weight in every round, for ever, with no revert and no event. It is
+> the same failure shape as the custodian wire in §7, and it has four chances to happen instead
+> of one.
+>
+> **CHIPLETS is the one that gets forgotten**, because it is the newest and because it is the
+> only collection whose multiplier is not mentioned anywhere else in this file.
+>
+> ```
+> setCollectionBaseBps(LIL_NOUNS,   5000)    # 0.5x
+> setCollectionBaseBps(BASED_NOUNS, 10000)   # 1.0x
+> setCollectionBaseBps(DARK_NOUNS,  20000)   # 2.0x
+> setCollectionBaseBps(CHIPLETS,    1000)    # 0.1x   <- the one that gets missed
+> ```
+>
+> **Run all four reads before you sign off. Every one must be non-zero and exact:**
+>
+> ```
+> cast call $CHIP_ROUNDS "collectionBaseBps(address)(uint32)" $LIL_NOUNS   --rpc-url $BASE_RPC_URL  #  5000
+> cast call $CHIP_ROUNDS "collectionBaseBps(address)(uint32)" $BASED_NOUNS --rpc-url $BASE_RPC_URL  # 10000
+> cast call $CHIP_ROUNDS "collectionBaseBps(address)(uint32)" $DARK_NOUNS  --rpc-url $BASE_RPC_URL  # 20000
+> cast call $CHIP_ROUNDS "collectionBaseBps(address)(uint32)" $CHIPLETS    --rpc-url $BASE_RPC_URL  #  1000
+> ```
+>
+> **And the read that proves it end to end**, because a non-zero setting still does not prove a
+> Chiplet scores: activate one, contribute it to an open round, and check the round's weight
+> actually moved.
+>
+> ```
+> # totalWeight BEFORE and AFTER contributeWeights(id, CHIPLETS, [tokenId])
+> cast call $CHIP_ROUNDS "getRound(uint256)" $ROUND_ID --rpc-url $BASE_RPC_URL
+> #   -> totalWeight must INCREASE. If it does not, the collection is at zero.
+> ```
+>
+> Asserted for all four collections by `test_theWholeDeploySequence` in
+> `test/fork/DeployRehearsal.t.sol`, which fails if any of them is left at zero.
 
 > ✅ **THE SLIPSTREAM ROUTER MUST BE THE FACTORY-B ONE — AND SINCE `-22` THE CONTRACT
 > ENFORCES IT.** `0x698Cb2…A92F` is bound to factory B and is the only router that can reach a

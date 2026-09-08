@@ -11,8 +11,26 @@ re-review; every finding is fixed with a test or accepted with written reasoning
 tally, the per-contract index and the two gaps are at the top of
 **[TRIAGE.md](TRIAGE.md)** — read that before this document if you are picking up the review.
 
-**The deployable tag is `launch-candidate-14`.** It is the only tag containing every fix;
-`launch-candidate-13` predates the Furnace batch. 728 tests pass there, 51 on a Base fork.
+**The deployable tag is `launch-candidate-22` (`79d14ca`).** 807 tests pass there, 60 of them
+against a live Base fork.
+
+**External review closed at `-22`.** Bankr re-scanned the five contracts the last two batches
+touched — `ChipBurner`, `ChipRounds`, `ChipActivation`, `StockRegistry`, `POLTreasury` — and
+returned **no findings and no change requested**: the Burner has no path to extract $CHIP and
+its `min(supplyDrop, balanceDrop)` bound holds, `nonReentrant` on a permissionless `burnAll` is
+not a DoS surface, the Slipstream `exactInputSingle` struct matches Aerodrome CL field for
+field, `setRouters`' factory validation secures the live buy path, and the two Aerodrome books
+(POL on factory A, stock buying on factory B) are fully decoupled. The full record, including
+**the one thing their reasoning got wrong**, is the `launch-candidate-22` section of
+[TRIAGE.md](TRIAGE.md).
+
+> **Their §4 ruling is not the whole of §4.** They recommended keeping the depth gate
+> administrative rather than continuous, which closes OPEN_ITEMS 28 as accepted-by-design. But
+> the argument rests on the buy path not reading pool depth, and it already does —
+> `settleStock` → `_maxSpendFor` → `poolLiquidityUsd`. That is **OPEN_ITEMS 29**, it is open,
+> and it is why §4 is not being treated as settled. It is not a deploy blocker: the failure
+> shape is griefing and liveness, not theft. The verdict on the five contracts stands either
+> way.
 
 > **TWO THINGS ARE NOT DONE, and neither should be discovered later.**
 >
