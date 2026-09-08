@@ -467,6 +467,27 @@ which is the entire point of the change. Nothing else catches it.
 
 **Check one — the selector is in the deployed bytecode.**
 
+> 🔴 **$CHIP IS AN EIP-1167 MINIMAL PROXY, AND THE OBVIOUS CHECK RETURNS ZERO ON IT.**
+> `0x75Af968d…11bA3` is 44 bytes of proxy that delegates to
+> `0xdb7b520bb5c3a2c5d4871198081911359f93be87`. A proxy contains **no function selectors at
+> all**, so `cast code $CHIP | grep -c 42966c68` returns **0** — and that is not a missing
+> burn, it is the wrong contract to grep. **Run every selector check against the
+> IMPLEMENTATION.**
+>
+> ```
+> # pull the implementation out of the 1167 proxy (bytes 10..29 of the runtime code):
+> CHIP_IMPL=0x$(cast code $CHIP --rpc-url $BASE_RPC_URL | cut -c23-62)
+> echo $CHIP_IMPL          # -> 0xdb7b520bb5c3a2c5d4871198081911359f93be87
+>
+> cast code $CHIP_IMPL --rpc-url $BASE_RPC_URL | grep -c 42966c68   # burn(uint256)      -> 1
+> cast code $CHIP_IMPL --rpc-url $BASE_RPC_URL | grep -c 98cd6153   # updateTokenURI     -> 1
+> cast code $CHIP_IMPL --rpc-url $BASE_RPC_URL | grep -c f2fde38b   # transferOwnership  -> 1
+> ```
+>
+> **Verified 2026-09-08 against the live token: all three present.** `ChipBurner`'s three
+> encoded signatures therefore resolve. State reads (`owner()`, `totalSupply()`,
+> `balanceOf`) still go to the PROXY address — only the bytecode greps move.
+
 ```
 cast code 0xC7c114191aa3b2225F9bb053Bc55b3d6F145Bd33 --rpc-url $BASE_RPC_URL | grep -c 42966c68
 # expect >= 1. ALREADY CHECKED 2026-09-07 and it returned 1, alongside:

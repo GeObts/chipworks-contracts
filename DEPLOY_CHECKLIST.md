@@ -49,7 +49,9 @@ forge test --match-contract DeployRehearsalTest -vv
 | Bankr launch of $CHIP done? | ❗ **No** | 0, 4, 5b, 8, 9 and every $CHIP number |
 | `$CHIP` address known? | ❗ **No** | same |
 | 24–48h of price observed? | ❗ **No** | the cost table (§4), so step 4 |
-| **Is $CHIP `Ownable` or `Ownable2Step`?** | ✅ **RESOLVED — single-step OpenZeppelin `Ownable`, confirmed by Bankr.** `transferOwnership(ChipBurner)` completes in one transaction. No `acceptOwnership` needed, no ChipBurner change, no re-tag | step 6.6 — now clear |
+| **Is $CHIP `Ownable` or `Ownable2Step`?** | ✅ Single-step. `pendingOwner()` reverts on the live token, confirming it | step 6.6 |
+| 🔴 **Does an address you control own $CHIP?** | ❗ **NO. `owner()` = `0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12`**, a contract that is neither the deploy wallet nor the Safe | **step 6.6 entirely — burns are NOT real until this moves** |
+| $CHIP address | ✅ `0x75Af968d2e58749FDA1b42C58186B76f5E511bA3` — ChipWorks/CHIP, 18 dp, 100B supply, EIP-1167 proxy → `0xdb7b520b…be87` | — |
 | Chiplets drop minted? | ❗ **No. `totalSupply()` is 0 on chain** | the first forge, and the §6.5 fuel-burn proof |
 | Chiplets seeded into the Furnace? | Cannot be — nothing minted | step 8's real use |
 
@@ -368,10 +370,29 @@ cast call $CHIP_BURNER "chipToken()(address)" --rpc-url $BASE_RPC_URL  # == CHIP
 > `updateTokenURI` or move $CHIP ownership directly — only through the Burner's two
 > pass-throughs. The Burner can never move a single $CHIP anywhere except out of existence.
 
-**ABI check first (LAUNCH_CONFIG §6.6), against the deployed token:**
+**ABI check first — 🔴 AGAINST THE IMPLEMENTATION, NOT THE PROXY.**
+
+$CHIP is an EIP-1167 minimal proxy. A proxy holds no selectors, so grepping the token address
+returns **0 for everything** — that is the wrong contract, not a missing function.
+
 ```
-cast code $CHIP --rpc-url $BASE_RPC_URL | grep -c 42966c68     # burn(uint256), expect >= 1
+CHIP_IMPL=0x$(cast code $CHIP --rpc-url $BASE_RPC_URL | cut -c23-62)
+echo $CHIP_IMPL      # -> 0xdb7b520bb5c3a2c5d4871198081911359f93be87
+
+cast code $CHIP_IMPL --rpc-url $BASE_RPC_URL | grep -c 42966c68   # burn(uint256)     -> 1
+cast code $CHIP_IMPL --rpc-url $BASE_RPC_URL | grep -c 98cd6153   # updateTokenURI    -> 1
+cast code $CHIP_IMPL --rpc-url $BASE_RPC_URL | grep -c f2fde38b   # transferOwnership -> 1
 ```
+✅ **Verified 2026-09-08 on the live token — all three present.**
+
+> 🔴 **AND CHECK WHO OWNS IT BEFORE YOU PLAN THIS STEP:**
+> ```
+> cast call $CHIP "owner()(address)" --rpc-url $BASE_RPC_URL
+> ```
+> `transferOwnership` is `onlyOwner` **on the token**. If this does not return an address you
+> can sign with, this step cannot happen and no amount of deploying changes that.
+> **As of 2026-09-08 it returns `0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12`** — a contract,
+> not the deploy wallet and not the Safe. See §0.3.
 
 **The step:**
 ```
