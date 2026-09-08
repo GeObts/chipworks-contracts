@@ -275,13 +275,38 @@ node in ASSUMPTIONS A-13 and A-18, and asserted in `test/fork/ChainlinkFeeds.t.s
 All thirteen need `tokenDecimals = 8` and a `minLiquidityUsd` you choose (see below). The four
 with pools also need their Chainlink feed, which is still outstanding (ASSUMPTIONS A-13).
 
-**minLiquidityUsd: $50,000 default, overridable per stock.** Deploy every stock with
-`minLiquidityUsd = 50_000e18` unless a specific one is given a different value. The
-reasoning: `poolLiquidityUsd` reports total pool TVL, but Uniswap v3 is concentrated, so
-depth tradeable near spot is a fraction of it. A $10k round across four stocks is a ~$2,500
-slice, and $50k is roughly 20x that — enough cushion for the concentration haircut. Today
-only GOOGL is anywhere near clearing it, which is the correct answer for a market four days
-old. Raise or lower per stock with `setMinLiquidityUsd`.
+**Executable-depth configuration (issue #5).** `poolLiquidityUsd` now reports the
+configured buy-probe notional in 18-decimal USD only if a canonical venue quote executes
+within its Chainlink bound. It returns zero on unavailable, stale, malformed, or failed
+quotes. `poolTvlUsd` and `poolBalances` are informational and include donations.
+
+Before enabling, call `setDepthConfig(token, quoter, probeAmount, maxDeviationBps,
+maxFeedAge)` from the multisig. `probeAmount` is in raw quote-token units (USDC: 6dp).
+Select the canonical QuoterV2 matching the registry factory, verify its deployment, and
+set a finite probe at least as large as the intended maximum single-stock buy. Start with
+200 bps deviation (includes pool fees; maximum allowed 500) and 120 hours feed age to
+accommodate equity-market closures. The contract requires at least 72 hours and does not
+permit freshness checks to be disabled for the depth gate.
+
+The historical $25k/$50k TVL thresholds are not executable-depth defaults. Choose and
+record a new `minLiquidityUsd` in probe USD units. For example, a 1,000 USDC probe is
+`1_000e6`, paired with a `1_000e18` threshold. This example does not approve $1,000 buys
+on a particular stock: validate its quote and cap the round budget accordingly. Missing
+probe configuration and zero depth block enabling even at a zero threshold.
+
+Base Uniswap V3 QuoterV2: `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a`
+([official deployments](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments)).
+For the configured Slipstream factory `0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A`,
+QuoterV2 is `0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0`
+([official initial deployment](https://github.com/aerodrome-finance/slipstream#initial-deployment)).
+Newer Slipstream factories use different deployments; do not mix versions.
+
+`poolLiquidityUsd`, `clearsMinLiquidity`, and `liquidityReport` now require CALL, not
+STATICCALL, because canonical quoters simulate reverting swaps. Off-chain callers still
+use `eth_call`; `CheckDepth.s.sol` already uses that path. Each entry makes one quote
+with a 1,000,000-gas quote cap plus bounded feed/pool reads. Budget report gas per entry
+and validate on the target node. Reconfiguring the probe disables the stock; changing
+venue also clears its probe configuration.
 
 **Enabling, at launch week:**
 ```
@@ -554,10 +579,11 @@ ASSUMPTIONS A-22, which is the sweep proving no B20 stock has a Slipstream pool 
 tick spacing, against USDC or WETH. `test/fork/B20RegistryConfig.t.sol` re-derives every pool
 below from the live factory on each run, so this table cannot silently go stale.
 
-Depth is `poolLiquidityUsd` — both sides, stock valued at its Chainlink mark. Measured
-2026-09-06 at the latest block.
+The following is historical headline TVL (now `poolTvlUsd`), including both raw balances
+with stock valued at its Chainlink mark. Measured 2026-09-06. It is not executable depth
+and cannot establish enablement after issue #5.
 
-| Ticker | Token | Chainlink feed | Venue | Pool | Fee | Depth USD |
+| Ticker | Token | Chainlink feed | Venue | Pool | Fee | Historical TVL USD |
 |---|---|---|---|---|---|---|
 | GOOGL | `0xb2000000000000000000002D0BA3164cc74f58B7` | `0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2` | UniV3 | `0x1f52F46BaC657564c31122b12b43A459E09273C8` | 10000 | **129,959** |
 | SPCX | `0xb2000000000000000000007b9fcbd005511aCBd5` | `0x6A634B235903C4ad6376892180d6fF8612e3Fa68` | UniV3 | `0x127a12FC0953ab2ab89558c67Ba6D597D7140431` | 10000 | **40,844** |
@@ -583,24 +609,20 @@ the same outcome; `test_anEmptyPoolIsAsBlockedAsAMissingOne` pins both.
 
 ### Which of these can actually be enabled
 
-**At a 25,000 USD threshold, two: GOOGL and SPCX.** That is not a bug in the threshold, it is
-the state of B20 secondary liquidity on Base — the whole set totals a little over 200k across
-every pool, and `poolLiquidityUsd` is headline TVL rather than tradeable depth, so what is
-buyable near spot is a fraction of even these numbers.
+The historical table cannot answer this. Configure and validate each stock's finite probe,
+then use `liquidityReport()` through `eth_call` on the deployment node. Any stock without
+a working quote remains disabled, regardless of its raw TVL.
 
-Two consequences for the launch runbook:
-
-1. **Enable per ticker, on the day, from `liquidityReport()`.** Do not assume the table above
-   still holds — these pools are small enough that one LP leaving halves them.
-2. **The per-stock max-impact check in `ChipRounds` is the real protection**, not this gate.
-   The gate decides whether a stock is eligible at all; the impact check decides whether an
-   individual buy is allowed to land. Setting `minLiquidityUsd` low to get more tickers
-   enabled does not make thin pools safe to trade — it just moves the refusal later.
+`ChipRounds` in this revision has no `_maxSpendFor()` or per-stock `maxImpactBps` check.
+It retains its independent `maxRoundBudget`, committed-quote accounting, Chainlink output
+floor, and isolated swap failures. The probe is an enablement-time check; it does not
+guarantee future depth. Keep the round cap conservative enough for a round allocated wholly
+to one stock. A dynamically measured per-stock spend ceiling is separate follow-up work.
 
 The three pool-less tickers **cannot be enabled at all**, at any threshold including zero,
 because `setEnabled(true)` requires a venue before it reaches the number
 (`test_theEnableGateBlocksThePoollessTickersByConstruction`). When their pools appear it is
-`setVenue` then `setEnabled`, and the gate re-measures.
+`setVenue`, `setDepthConfig`, then `setEnabled`, and the gate re-quotes.
 
 ---
 

@@ -746,3 +746,30 @@ pool reverts `PoolNotFoundInFactory`, because the CL factory has never heard of 
 `StockRegistry` verifies both factories, so the day a B20 Slipstream pool appears with real
 depth it is a `setVenue` call and nothing else. See A-16, which said the same thing about the
 conversion side and is still correct.
+
+## A-23 — Executable-depth gate and its limits (issue #5)
+
+The registry certifies one configured quote-to-stock buy probe using the venue's
+canonical QuoterV2, bounded by a Chainlink output-value deviation. No token balance
+contributes to enablement. `poolTvlUsd` is the renamed historical balance metric and
+remains diagnostic. The result is the validated input USD notional, not total pool
+capacity, available liquidity across all prices, or permission to extrapolate a larger buy.
+
+Canonical quoters are non-view and expensive. Each measurement uses one bounded CALL;
+their inner pool swap reverts, leaving balances and positions unchanged. Off-chain
+reports must use eth_call, not EVM STATICCALL. A 1M-gas quote cap can conservatively reject
+markets that cross many ticks. A failed quote, bad state, numeric overflow, or unavailable
+feed produces zero and fails the gate, even at a zero threshold.
+
+The new depth policy requires a fresh feed timestamp (minimum age window 72h; recommended
+120h for equity closures); priceUsd itself retains A-14's raw mark/timestamp semantics.
+The quote token is still valued at par. Quoter factory identity is a configuration check,
+not proof of canonical bytecode: the multisig must select the reviewed deployed quoter.
+
+Donations alone cannot add positions or improve executable quotes for ordinary tokens.
+Spot state can still change through swaps, flash liquidity, position changes, issuer
+policies, and market moves. This is not a TWAP or anti-MEV guarantee. An enablement-time
+probe cannot guarantee liquidity at settlement. The present ChipRounds has no
+_maxSpendFor/maxImpactBps path; its budget cap, Chainlink minimum output, balance-delta
+accounting and skip/carry-forward semantics remain the independent controls. Historical
+references suggesting a production per-stock impact check should be read with this correction.

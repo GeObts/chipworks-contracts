@@ -29,9 +29,8 @@ contract B20RegistryConfigTest is Test {
     address internal constant UNIV3_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
     address internal constant SLIPSTREAM_FACTORY = 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A;
 
-    /// @dev A launch threshold with the concentration haircut already in mind. The registry's
-    ///      figure is headline TVL across both sides; tradeable depth near spot is a fraction
-    ///      of it, and `ChipRounds`' per-stock max-impact check is the real protection.
+    /// @dev Historical threshold retained for the registration test. A $1 quote probe does
+    ///      not certify $25k capacity; enabling needs separately reviewed configuration.
     uint128 internal constant LAUNCH_MIN_USD = 25_000e18;
 
     struct Cfg {
@@ -336,6 +335,10 @@ contract B20RegistryConfigTest is Test {
                     tokenDecimals: 8
                 })
             );
+            if (c.pool != address(0)) {
+                vm.prank(multisig);
+                registry.setDepthConfig(c.token, 0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a, 1e6, 500, 120 hours);
+            }
         }
     }
 

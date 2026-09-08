@@ -437,6 +437,7 @@ contract ChipRewardsHostileTest is ChipRewardsBase {
                 tokenDecimals: STOCK_DEC
             })
         );
+        _configureExtraStockDepth(address(fot), pool);
         registry.setEnabled(address(fot), true);
         vm.stopPrank();
 

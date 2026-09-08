@@ -711,3 +711,18 @@ that holds every unclaimed credit is a small thing to be missing and not a nothi
 **To close:** ask Bankr to re-send the `ChipClaims` report, or to confirm the lows were
 withdrawn. If the artifact is genuinely gone, the honest resolution is a fresh pass over
 `ChipClaims` rather than assuming four unread lows were immaterial.
+
+## Issue #5 — Donation-resistant registry gate
+
+The proposed fix replaces the balance-derived gate with a configured finite canonical
+venue quote. See `review/ISSUE_5.md` for API scope, evidence, and validation. Raw TVL is
+now `poolTvlUsd` and cannot authorize enabling.
+
+Before deployment, choose probes, minimum USD thresholds, canonical quoters, and round
+caps per the revised DEPLOY.md and LAUNCH_CONFIG.md. Re-evaluate gas on the production
+node, including B20 precompile execution. A factory getter alone is not a bytecode audit.
+
+A dynamic per-stock spend ceiling remains open: this target revision has no
+`_maxSpendFor` or `maxImpactBps` implementation. This gate-only fix neither adds one nor
+claims one exists. Spot manipulation/flash liquidity, changes after enablement, and
+keeper gas availability remain explicit limitations. No audit status is changed here.

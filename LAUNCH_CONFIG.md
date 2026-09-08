@@ -201,6 +201,21 @@ send 0.001 ETH, distributeETH(), confirm the 80/20 landing
 ```
 
 **2. StockRegistry** — `(MULTISIG, USDC, UNI_FACTORY, SLIPSTREAM_FACTORY)`
+
+Issue #5 changes the depth gate: configure `setDepthConfig` per stock before enabling.
+Use the canonical QuoterV2 for its factory, an explicit quote-token probe amount, a
+Chainlink deviation bound (initially 200 bps including fees; maximum 500), and a mandatory
+feed age (120 hours recommended; minimum 72). Review the probe notional and
+`minLiquidityUsd` together; historical TVL thresholds are not compatible defaults.
+Missing configuration, failed quotes, zero depth, and unusable feeds all block enabling,
+including with a zero threshold. Venue changes require probe reconfiguration.
+
+Call `liquidityReport()` with `eth_call`, allowing up to approximately 1.4M gas per entry.
+It validates one finite buy probe per stock and returns its USD notional on success.
+`poolBalances()` and `poolTvlUsd()` are informational only. See DEPLOY.md for canonical
+addresses and units. Keep `maxRoundBudget` independently capped: this revision does not
+add a per-stock spend ceiling or re-quote during settlement.
+
 Register all **thirteen** B20 stocks disabled (addresses and feeds: ASSUMPTIONS A-13/A-18).
 ```
 stockCount() == 13 ; enabledTokens().length == 0

@@ -67,6 +67,7 @@ contract MultiplierIndifferenceTest is ChipRewardsBase {
                 tokenDecimals: STOCK_DEC
             })
         );
+        _configureExtraStockDepth(address(msftc), pool);
         registry.setEnabled(address(msftc), true);
         vm.stopPrank();
 
