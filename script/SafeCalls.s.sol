@@ -24,13 +24,25 @@ import {Venue} from "../src/interfaces/IStockRegistry.sol";
 ///      cannot deploy, cannot send and holds no key. Run it with plain `forge script`, no
 ///      `--broadcast` and no account.
 contract SafeCallsPhase1 is Script {
-    /// @notice Phase 1 config: register thirteen stocks, configure the Pot, set up POL.
-    /// @dev Reads: STOCK_REGISTRY, POT, POL_TREASURY, KEEPER.
+    /// @notice Phase 1 config: thirteen stocks, the Pot, POL — and THE ANVIL PRICE QUEUE.
+    /// @dev Reads: STOCK_REGISTRY, POT, POL_TREASURY, KEEPER, ANVIL, BASED_NOUNS,
+    ///      ANVIL_QUEUE_PRICE_WEI.
+    ///
+    ///      **THE ANVIL QUEUE IS THE WHOLE POINT OF RUNNING THIS TODAY.** Its price is on a
+    ///      48-hour timelock with no first-set exemption, and its price is denominated in ETH
+    ///      rather than $CHIP — so the clock can run through the token launch and the
+    ///      price-observation window instead of starting after them. Queue it now and the
+    ///      Anvil is sellable two days from now. Queue it in phase 4 and it is sellable four.
     function run() external view {
         address registry = vm.envAddress("STOCK_REGISTRY");
         address pot = vm.envAddress("POT");
         address polTreasury = vm.envAddress("POL_TREASURY");
         address keeper = vm.envAddress("KEEPER");
+        address anvil = vm.envAddress("ANVIL");
+        address based = vm.envAddress("BASED_NOUNS");
+        uint256 anvilPriceWei = vm.envUint("ANVIL_QUEUE_PRICE_WEI");
+
+        require(anvilPriceWei > 0, "ANVIL_QUEUE_PRICE_WEI unset - see the number sheet, group A");
 
         console2.log("################ PHASE 1 SAFE CALLS ################");
         console2.log("Batch all of these into ONE Safe transaction if you can.");
@@ -92,6 +104,22 @@ contract SafeCallsPhase1 is Script {
         console2.log("  NOTE: every EQUITY POL asset needs maxFeedAge = 0. The B20 feeds have");
         console2.log("        no off-hours heartbeat and a real window refuses every mint");
         console2.log("        outside market hours.");
+        console2.log("");
+
+        console2.log("################################################################");
+        console2.log("### QUEUE THE ANVIL PRICE TODAY. THIS STARTS THE 48H CLOCK.  ###");
+        console2.log("### It is ETH-denominated, so it does NOT wait on $CHIP.     ###");
+        console2.log("################################################################");
+        console2.log("  price (wei):", anvilPriceWei);
+        _p(
+            "anvil.queueQueuePrice(BASED_NOUNS, <wei>)",
+            anvil,
+            abi.encodeWithSignature("queueQueuePrice(address,uint256)", based, anvilPriceWei)
+        );
+        console2.log("  -> 48h from NOW, call executeQueuePrice(BASED_NOUNS) and the Anvil sells.");
+        console2.log("  -> Shelving is separate and NOT timelocked: shelve whenever the Nouns");
+        console2.log("     are in hand. The price clock does not wait for the shelf.");
+        console2.log("  -> CONFIG_GRACE: a queued change expires 14 days after it matures.");
     }
 
     /// @dev The thirteen B20 stocks. Pools are re-derived from the LIVE factory B at run time

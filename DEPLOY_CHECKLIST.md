@@ -21,14 +21,17 @@ forge test --match-contract DeployRehearsalTest -vv
 
 ## 0. WHAT I NEED FROM YOU BEFORE STEP 1
 
-### 0.1 Addresses — you decide ❗ STILL NEEDED
+### 0.1 Addresses — ✅ ALL CONFIRMED ON CHAIN
 
-| Name | What it is | Used by |
+| Name | Address | Verified |
 |---|---|---|
-| `MULTISIG` | Owner of every governed contract. The existing Chipworks/Goya Safe. | **all twelve** constructors |
-| `OPS_WALLET` | Goya's Bankr wallet. Receives the 20% ops share. | FeeSplitter |
-| `LOAN_TREASURY` | Where liquidated NounLoans collateral lands. May be the Safe. | NounLoans |
-| `KEEPER` | The daily-job address. Permissionless, so this is operational, not a permission. | `POLTreasury.setManager`, and the cron |
+| `MULTISIG` | `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` | Safe v1.4.1, **2-of-3** |
+| `DEPLOY_WALLET` | `0x9FD4A40f7bE01CB69b7286cEC43D3d5936980Ad4` | nonce 0, fresh. **Also a Safe signer** — rotate out post-launch if you want the stronger property |
+| `OPS_WALLET` | `0x35325dD7e972780C3aDef20E9675a4264a8a57fb` | EOA |
+| `LOAN_TREASURY` | `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` | = the Safe |
+| `KEEPER` | `0x6571E3412553Fada40C3D96e61E7Cfd20A0695B9` | EOA, **not** a Safe owner ✓ |
+
+**Funding:** deploy wallet → **0.05 ETH** · keeper → **0.02 ETH**
 
 ### 0.2 Collection addresses
 
@@ -57,22 +60,41 @@ forge test --match-contract DeployRehearsalTest -vv
 > falling" and "supply looks like it is falling". **Announce nothing about Chiplet supply
 > until `totalFuelTrueBurned() == totalFuelBurned()` after a real forge.**
 
-### 0.4 Numbers you compute on the day, from the observed price
+### 0.4 The numbers
 
-All of these now have a documented formula. Only the **base unit** is a judgement call; the
-rest fall out of it.
+**ETH — paste as wei.** Set from the observed ETH price at deploy, NOT from $CHIP.
 
-| Number | Formula | At a 50,000 base | Where it goes |
+| Value | USD | Wei | When |
 |---|---|---|---|
-| ❗ **Base unit** | round number nearest **$5** at observed price | 50,000 | drives everything below |
-| Tier ladder | base x `1.0 / 2.2 / 4.5 / 9.0 / 24.0` | 50k/110k/225k/450k/1.2M | `queueCosts` x3 tiered |
-| **Chiplets flat cost** | ✅ **10% of base unit**, five equal entries | **5,000** | `queueCosts(CHIPLETS, [5_000e18 x5])` |
-| `splitChangeFeeChip_` | 10% of tier 0 | 5,000 | ChipRounds constructor |
-| Furnace Based recipe | 0.5x base | 25,000 | Furnace constructor (placeholder) → `queueRecipeChange` |
-| Furnace Dark recipe | 1.2x base | 60,000 | same |
-| ❗ Loan pool seed | ~80% of the 0.25–0.5 ETH initial buy, in $CHIP | your call | `depositPool` |
-| ❗ `maxPrincipal` x3 | ~60% of the Anvil queue price, in $CHIP | your call | `setMaxPrincipal` |
-| ❗ Anvil queue price x3 | your call, in ETH | your call | `queueQueuePrice` |
+| **Anvil queue price**, Based | $27 | recompute at deploy | **PHASE 1, today** |
+| **Round-one seed** → sent to `$POT` | $150 | recompute at deploy | pause F |
+
+```
+cast call 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70   "latestRoundData()(uint80,int256,uint256,uint256,uint80)" --rpc-url $BASE_RPC_URL
+# wei = round(USD / ethUsd * 1e18)
+```
+
+**$CHIP — paste as wei.** `P` = observed price. `wei = (USD / P) x 1e18`.
+
+| Number | Formula | At a 50,000 base |
+|---|---|---|
+| ❗ **`CHIP_BASE_UNIT`** | nearest round number to **$5 / P**, then **x1.5–2 (bias HIGH, §1b)** | 50,000 |
+| Tier ladder | base x `1.0 / 2.2 / 4.5 / 9.0 / 24.0` | 50k/110k/225k/450k/1.2M |
+| Chiplets flat, five **equal** | 10% of base | 5,000 |
+| `SPLIT_FEE_CHIP` | 10% of base | 5,000 |
+| `FURNACE_BASED_CHIP_COST` | 0.5x base — **placeholder, paused** | 25,000 |
+| `FURNACE_DARK_CHIP_COST` | 1.2x base — **placeholder, paused** | 60,000 |
+| Loan pool seed | **$700** / P | — |
+| `maxPrincipal` **Based** | **$16** / P — 60% of the **$27 Anvil price**, not the $30 floor | — |
+| `maxPrincipal` **Dark** | **$95** / P — 60% of the $160 floor | — |
+| `maxPrincipal` **Lil** | **$7** / P — 60% of the $12 floor | — |
+| Games reserve — held, not deposited | $150 / P | — |
+
+**The initial buy: $850 of $CHIP, and $150 kept as ETH.** Not $1,000. $CHIP has no Chainlink
+feed, so no Pot route for it can ever exist and it can never become round budget. The
+round-one seed must be ETH.
+
+**Counts:** 150 Based Nouns → Anvil **100** · Furnace **40** · keep **10**.
 
 > The Chiplets flat cost and the split-change fee are **the same number at a 50,000 base and
 > not the same thing.** One is what a Chiplet costs to activate; the other is what changing a
@@ -121,6 +143,78 @@ the protection is on by default and needs no deploy step.
 
 ---
 
+## 1b. THE T+48h SCHEDULE — start every clock as early as it can start
+
+**Only two things in this deploy are timelocked with no first-set exemption**, and everything
+else is immediate. Verified in the code, not inferred:
+
+| | Blocked at first set? | Why |
+|---|---|---|
+| Activation cost table | 🔒 **YES, 48h** | `collectionConfigured = true` is written in exactly one place — inside `executeCosts`, behind `TimelockNotElapsed`. No constructor path. |
+| Anvil queue price | 🔒 **YES, 48h** | `queuePrice[c]` is written in exactly one place — inside `executeQueuePrice`. Starts at 0, and 0 means `NotForSale`. |
+| `setCustodian` | ✅ immediate | plain setter |
+| Everything else | ✅ immediate | round params, all four `baseBps`, routers, `setChip`, `setEnabled`, `setMaxPrincipal`, `depositPool`, `depositStock`, `shelve`, `setPaused`, Pot routes, `setPot`, `ChipClaims.setRounds` |
+
+**Those two cascade.** `borrow` reverts `NotChipped`, and `settleStock` reverts `NoWeight`, so
+lending and rounds follow chipping rather than having clocks of their own.
+
+### The two moves that halve the timeline
+
+**1. The Anvil is deployed in PHASE 1 and its price is queued the same day.** Its constructor
+is `(multisig, feeSplitter, premiumBps)` — no $CHIP — and its price is in ETH. So its 48-hour
+clock runs *through* the token launch and the observation window instead of starting after
+them. Deploying it in phase 4 would have started the same clock two days later for nothing.
+Shelving is separate and not timelocked: shelve whenever the Nouns are in hand.
+
+**2. `queueCosts` runs the MOMENT $CHIP launches, not two days later.** `ChipActivation.chipToken`
+is `immutable`, so the contract genuinely cannot exist before the token — **$CHIP launch + 48h
+is a hard floor and nothing beats it.** But nothing forces you to wait for price observation
+before *queueing*. Queue at T+0 and the clock runs during the observation window.
+
+**Result: chipping, lending, rounds and the Anvil all live at T+48h, not T+96h.**
+
+### 🔴 SET THE BASE UNIT DELIBERATELY HIGH — ~1.5–2x your best guess
+
+Queueing at T+0 means pricing activation from an *expected* rather than observed price. **The
+risk is asymmetric, and that is the whole reason to bias high:**
+
+- **Too high** → activation looks expensive, few people chip, you lower it in a later 48h
+  window. **Recoverable.**
+- **Too low** → people chip at a discount and **activation burns $CHIP irreversibly.** There is
+  no refund and no un-burn. **Not recoverable.**
+
+One number carries all of it — the tier ladder, the Chiplet flat and the split fee are all
+ratios of the base unit.
+
+### 🔴🔴 THE T+48h DECISION POINT — LOOK AT THE PRICE BEFORE YOU SIGN
+
+**A queued table is not a commitment. `cancelCosts(address)` exists. The value of queueing
+early is entirely in the CHOICE you make at the 48-hour mark — and that value is zero if you
+execute on autopilot.**
+
+At T+48h, before signing anything, read the observed price and decide:
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │  READ THE OBSERVED $CHIP PRICE NOW      │
+                    └────────────────┬────────────────────────┘
+                                     │
+              ┌──────────────────────┴──────────────────────┐
+              │                                             │
+    queued table is within tolerance          queued table is materially off
+              │                                             │
+      executeCosts x4                        cancelCosts x4, re-queue correct
+      -> CHIPPING LIVE at T+48h              -> CHIPPING LIVE at T+96h
+                                             (exactly where the old plan had you)
+```
+
+**You are never worse off for having queued early.** The downside branch lands on the original
+timeline; the upside branch saves two days. The only way to lose is to execute without looking.
+
+> **Write the decision down before you sign.** Observed price, the base unit you queued, the
+> ratio between them, and execute-or-cancel. If you cannot state the ratio out loud, you have
+> not done the check.
+
 ## 2. THE SEQUENCE
 
 ```
@@ -149,6 +243,9 @@ AERO_USD_FEED   0x4EC5970fC728C5f65ba413992CD5fF6FD70fcfF0
 ---
 
 ### DAY 0 — before $CHIP exists
+
+> **PHASE 1 NOW DEPLOYS FIVE CONTRACTS, NOT FOUR.** The Anvil joins it so its 48-hour price
+> timelock starts today — §1b. Run `SafeCallsPhase1` the same day and queue the price.
 
 #### ☐ Step 1 — FeeSplitter
 
@@ -509,9 +606,12 @@ call, retroactive, and needs nothing from any borrower — but nothing will tell
 
 ---
 
-#### ☐ Step 10 — Anvil
+#### ☐ Step 10 — Anvil *(DEPLOYED IN PHASE 1 — see §1b)*
 
-**Deploy:** `Anvil(MULTISIG, FEE_SPLITTER, 2500)`
+> The Anvil is no longer deployed here. It goes out with phase 1 so its 48-hour price
+> timelock starts on day zero. What remains at this point is shelving, which is **not**
+> timelocked, and `executeQueuePrice`, which matures 48h after the phase-1 queue.
+
 **Then, per collection:** `shelve(collection, ids)`, `queueQueuePrice(collection, price)` →
 **48h** → `executeQueuePrice(collection)`.
 

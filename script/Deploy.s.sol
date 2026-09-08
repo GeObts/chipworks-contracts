@@ -45,11 +45,23 @@ import {Anvil} from "../src/anvil/Anvil.sol";
 ///      **EVERY PHASE IS EXERCISED ON A FORK** by `test/fork/DeployScript.t.sol`, which runs
 ///      these exact functions and then asserts the same post-conditions the rehearsal does.
 contract DeployPhase1PreChip is Script {
-    /// @notice Day 0, before $CHIP exists. FeeSplitter, StockRegistry, Pot, POLTreasury.
+    /// @notice Day 0, before $CHIP exists. FeeSplitter, StockRegistry, Pot, POLTreasury, Anvil.
     ///
     /// @dev Reads: MULTISIG, OPS_WALLET.
-    ///      None of these four needs $CHIP, so getting them out early shortens the tail.
-    function run() external returns (address splitter, address registry, address pot, address polTreasury) {
+    ///
+    ///      **THE ANVIL IS HERE, NOT IN PHASE 4, AND THE REASON IS THE CLOCK.** Its
+    ///      constructor is `(multisig, feeSplitter, premiumBps)` — no $CHIP anywhere — and its
+    ///      queue price is denominated in ETH. So it can be deployed before the token exists,
+    ///      which means `queueQueuePrice` can be called TODAY and its 48-hour timelock runs
+    ///      during the launch and the price-observation window rather than after it.
+    ///
+    ///      Deploying it in phase 4 would have started that clock two days later for no
+    ///      reason. Nothing else in the sequence has this property: every other timelocked
+    ///      thing is denominated in $CHIP and genuinely cannot start until the token is live.
+    function run()
+        external
+        returns (address splitter, address registry, address pot, address polTreasury, address anvil)
+    {
         address multisig = vm.envAddress("MULTISIG");
         address ops = vm.envAddress("OPS_WALLET");
 
@@ -75,10 +87,16 @@ contract DeployPhase1PreChip is Script {
         POLTreasury t =
             new POLTreasury(multisig, Addrs.USDC, Addrs.SLIP_NPM, address(s), Addrs.UNIV3_FACTORY, Addrs.AERO_VOTER);
 
+        // 10. Anvil. Deployed EARLY on purpose - see the note above. Prices in ETH, needs
+        //     no $CHIP, so its 48h price timelock can start today.
+        Anvil an = new Anvil(multisig, address(s), 2_500);
+
         vm.stopBroadcast();
 
         // --- the immutables, read back off the deployed code -------------------------
         require(r.slipstreamFactory() == Addrs.SLIP_FACTORY_B, "REGISTRY ON THE WRONG SLIPSTREAM FACTORY");
+        require(an.owner() == multisig, "anvil owner is not the multisig");
+        require(!an.sellEnabled(), "anvil sell side must be off and has no setter");
         require(s.owner() == multisig && r.owner() == multisig, "owner is not the multisig");
         require(p.owner() == multisig && t.owner() == multisig, "owner is not the multisig");
 
@@ -88,10 +106,12 @@ contract DeployPhase1PreChip is Script {
         console2.log("export STOCK_REGISTRY=%s", address(r));
         console2.log("export POT=%s", address(p));
         console2.log("export POL_TREASURY=%s", address(t));
+        console2.log("export ANVIL=%s", address(an));
         console2.log("");
-        console2.log("NEXT: run SafeCalls phase 1 and execute those calls from the Safe.");
+        console2.log("NEXT: SafeCalls phase 1. QUEUE THE ANVIL PRICE TODAY - that starts");
+        console2.log("      its 48h clock now instead of two days from now.");
 
-        return (address(s), address(r), address(p), address(t));
+        return (address(s), address(r), address(p), address(t), address(an));
     }
 }
 
@@ -170,7 +190,8 @@ contract DeployPhase3Activation is Script {
 }
 
 contract DeployPhase4Core is Script {
-    /// @notice Day 4. The remaining six, in dependency order.
+    /// @notice The remaining five, in dependency order. The Anvil is not here - it went out
+    ///         in phase 1 so its price timelock could start on day zero.
     ///
     /// @dev Reads: MULTISIG, LOAN_TREASURY, CHIP, CHIP_BURNER, STOCK_REGISTRY, POT,
     ///      CHIP_ACTIVATION, FEE_SPLITTER, BASED_NOUNS, DARK_NOUNS,
@@ -222,7 +243,7 @@ contract DeployPhase4Core is Script {
 
     function run()
         external
-        returns (address claims, address rounds, address claimRouter, address furnace, address loans, address anvil)
+        returns (address claims, address rounds, address claimRouter, address furnace, address loans)
     {
         Cfg memory c = _cfg();
 
@@ -271,13 +292,10 @@ contract DeployPhase4Core is Script {
             )
         );
 
-        // 10. Anvil.
-        anvil = address(new Anvil(c.multisig, c.splitter, 2_500));
-
         vm.stopBroadcast();
 
         _assertImmutables(c, claims, rounds, claimRouter, furnace);
-        _report(claims, rounds, claimRouter, furnace, loans, anvil);
+        _report(claims, rounds, claimRouter, furnace, loans);
     }
 
     function _assertImmutables(Cfg memory c, address claims, address rounds, address claimRouter, address furnace)
@@ -291,7 +309,7 @@ contract DeployPhase4Core is Script {
         require(address(ChipRounds(rounds).registry()) == c.registry, "rounds registry mismatch");
     }
 
-    function _report(address claims, address rounds, address claimRouter, address furnace, address loans, address anvil)
+    function _report(address claims, address rounds, address claimRouter, address furnace, address loans)
         internal
         pure
     {
@@ -302,9 +320,9 @@ contract DeployPhase4Core is Script {
         console2.log("export CLAIM_ROUTER=%s", claimRouter);
         console2.log("export FURNACE=%s", furnace);
         console2.log("export NOUN_LOANS=%s", loans);
-        console2.log("export ANVIL=%s", anvil);
         console2.log("");
-        console2.log("ALL TWELVE DEPLOYED. Nothing is wired yet and nothing can take money.");
+        console2.log("ALL TWELVE DEPLOYED (the Anvil went out in phase 1). Nothing is wired");
+        console2.log("yet and nothing can take money.");
         console2.log("NEXT: SafeCalls phase 4, and DO NOT MISS setCustodian OR the four baseBps.");
     }
 }

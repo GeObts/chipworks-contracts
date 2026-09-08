@@ -80,7 +80,8 @@ contract DeployScriptForkTest is Test {
     /// @notice All four phases, in order, exactly as launch day runs them.
     function test_theDeployScriptProducesTheDocumentedStack() public {
         // ---------------- phase 1: before $CHIP -------------------------------
-        (address splitter, address registry, address pot, address polTreasury) = new DeployPhase1PreChip().run();
+        (address splitter, address registry, address pot, address polTreasury, address anvil) =
+            new DeployPhase1PreChip().run();
 
         vm.setEnv("FEE_SPLITTER", vm.toString(splitter));
         vm.setEnv("STOCK_REGISTRY", vm.toString(registry));
@@ -114,7 +115,7 @@ contract DeployScriptForkTest is Test {
         assertEq(ChipActivation(activation).owner(), multisig, "P3: owned by the Safe");
 
         // ---------------- phase 4: the remaining six --------------------------
-        (address claims, address rounds, address claimRouter, address furnace, address loans, address anvil) =
+        (address claims, address rounds, address claimRouter, address furnace, address loans) =
             new DeployPhase4Core().run();
 
         assertEq(ChipRounds(rounds).chipBurnTarget(), burner, "P4: rounds burn target");
@@ -127,8 +128,12 @@ contract DeployScriptForkTest is Test {
         assertEq(address(ChipRounds(rounds).pot()), pot, "P4: rounds pot");
         assertEq(ChipRounds(rounds).splitChangeFeeChip(), BASE_UNIT / 10, "P4: split-change fee");
         assertEq(NounLoans(loans).treasury(), loanTreasury, "P4: loan treasury");
-        assertEq(Anvil(payable(anvil)).owner(), multisig, "P4: anvil owned by the Safe");
-        assertFalse(Anvil(payable(anvil)).sellEnabled(), "P4: sell side off, no setter");
+        // The Anvil came out of PHASE 1, not phase 4, so its 48h price timelock can be
+        // started on day zero - it needs no $CHIP and prices in ETH.
+        assertEq(Anvil(payable(anvil)).owner(), multisig, "P1: anvil owned by the Safe");
+        assertFalse(Anvil(payable(anvil)).sellEnabled(), "P1: sell side off, no setter");
+        assertEq(Anvil(payable(anvil)).snipePremiumBps(), 2_500, "P1: snipe premium");
+        assertEq(Anvil(payable(anvil)).queuePrice(address(basedNouns)), 0, "P1: unpriced until execute");
 
         // Every one of the twelve is owned by the Safe and by nobody else.
         assertEq(ChipClaims(claims).owner(), multisig, "P4: claims owner");
@@ -144,7 +149,9 @@ contract DeployScriptForkTest is Test {
     ///      two-step transfer sat waiting for someone else to call `acceptOwnership()`, so the
     ///      audit checks `pendingOwner()` too. This proves that check actually bites.
     function test_theOwnershipAuditPassesClean_andCatchesADanglingTransfer() public {
-        (address splitter, address registry, address pot, address polTreasury) = new DeployPhase1PreChip().run();
+        (address splitter, address registry, address pot, address polTreasury, address anvil) =
+            new DeployPhase1PreChip().run();
+        vm.setEnv("ANVIL", vm.toString(anvil));
         vm.setEnv("FEE_SPLITTER", vm.toString(splitter));
         vm.setEnv("STOCK_REGISTRY", vm.toString(registry));
         vm.setEnv("POT", vm.toString(pot));
@@ -156,14 +163,13 @@ contract DeployScriptForkTest is Test {
         address activation = new DeployPhase3Activation().run();
         vm.setEnv("CHIP_ACTIVATION", vm.toString(activation));
 
-        (address claims, address rounds, address claimRouter, address furnace, address loans, address anvil) =
+        (address claims, address rounds, address claimRouter, address furnace, address loans) =
             new DeployPhase4Core().run();
         vm.setEnv("CHIP_CLAIMS", vm.toString(claims));
         vm.setEnv("CHIP_ROUNDS", vm.toString(rounds));
         vm.setEnv("CLAIM_ROUTER", vm.toString(claimRouter));
         vm.setEnv("FURNACE", vm.toString(furnace));
         vm.setEnv("NOUN_LOANS", vm.toString(loans));
-        vm.setEnv("ANVIL", vm.toString(anvil));
         vm.setEnv("DEPLOY_WALLET", vm.toString(address(this)));
 
         // the two Safe calls the audit reads: section 6.6, and replacing the placeholder pot
@@ -196,7 +202,7 @@ contract DeployScriptForkTest is Test {
     ///      because the alternative arrangement (deploy as owner, hand over later) is the one
     ///      people reach for by default and it would leave an EOA in control of live contracts.
     function test_theDeployWalletHasNoAuthorityOverAnythingItDeployed() public {
-        (address splitter, address registry, address pot,) = new DeployPhase1PreChip().run();
+        (address splitter, address registry, address pot,,) = new DeployPhase1PreChip().run();
 
         // `address(this)` is the deployer inside this test, standing in for the deploy wallet.
         vm.expectRevert();
