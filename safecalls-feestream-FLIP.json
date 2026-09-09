@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "chainId": "8453",
+  "createdAt": 1788998070945,
+  "meta": {
+    "name": "safecalls-feestream-FLIP",
+    "description": "Point the Bankr fee stream at the FeeSplitter, forward the Safe's existing WETH, split 80/20 and convert to USDC round budget.",
+    "txBuilderVersion": "1.16.5",
+    "createdFromSafeAddress": "0xe1096B727499a3f70FaD8bc0267F5e69d01373C7",
+    "createdFromOwnerAddress": ""
+  },
+  "transactions": [
+    {
+      "to": "0x9982538F41f2ae29ddb9d3D9307010052984FDbB",
+      "value": "0",
+      "data": "0xd44f6738bcdd8383e38069f626846b94e93ee4d2c00cadfcce4b9457b0b8b04289030345000000000000000000000000b9b76e1835afe05e5a73065fe01a19b14869f8a3",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x4200000000000000000000000000000000000006",
+      "value": "0",
+      "data": "0xa9059cbb000000000000000000000000b9b76e1835afe05e5a73065fe01a19b14869f8a300000000000000000000000000000000000000000000000027a7240927a8104b",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xb9b76e1835afE05e5A73065FE01A19B14869F8A3",
+      "value": "0",
+      "data": "0x86d740370000000000000000000000004200000000000000000000000000000000000006",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x3918a9B479Ce9B58238584c645079AB3bB49855B",
+      "value": "0",
+      "data": "0x91bbdcc7",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}
