@@ -6,3 +6,9 @@ docs/
 feeds.tmp.json
 safecalls-phase1-DRAFT.txt
 safecalls-phase1.json
+safecalls-phase3*.json
+costs-raw.txt
+safecalls-phase4*.json
+wiring-raw.txt
+safecalls-seed*.json
+safecalls-maxprincipal*.json

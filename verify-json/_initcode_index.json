@@ -1,0 +1,50 @@
+{
+  "FeeSplitter": {
+    "address": "0xb9b76e1835afe05e5a73065fe01a19b14869f8a3",
+    "initcode_len": 14206
+  },
+  "StockRegistry": {
+    "address": "0x5e4b6cbac2d9b581428ee7f22e7bd4bf03675458",
+    "initcode_len": 19594
+  },
+  "Pot": {
+    "address": "0x3918a9b479ce9b58238584c645079ab3bb49855b",
+    "initcode_len": 24282
+  },
+  "POLTreasury": {
+    "address": "0x83ff88220d3c9f63cb23ffac6c3d726ed36f7173",
+    "initcode_len": 49114
+  },
+  "Anvil": {
+    "address": "0x93ac0b6c249c1497429bc4863c697475df0acd4c",
+    "initcode_len": 21482
+  },
+  "ChipBurner": {
+    "address": "0x7bc1c03e843c37845d89b54667382b4577ead5c0",
+    "initcode_len": 6684
+  },
+  "ChipActivation": {
+    "address": "0xb6392c6a1dcc030dfc2eb2cc42444612349fe162",
+    "initcode_len": 28960
+  },
+  "ChipClaims": {
+    "address": "0x9bd35c70a80f132d087719305e37a888204d4c80",
+    "initcode_len": 30876
+  },
+  "ChipRounds": {
+    "address": "0xa8192d4ee3526ca8158cbe83b2fc05bdc205bed3",
+    "initcode_len": 47820
+  },
+  "ClaimRouter": {
+    "address": "0x5b7bee0d82e1e722014dc06dec2b6fd8a6ade833",
+    "initcode_len": 7708
+  },
+  "Furnace": {
+    "address": "0x411a505b81546bea83305298c14ef5f8c9b10ba5",
+    "initcode_len": 24582
+  },
+  "NounLoans": {
+    "address": "0x123bc476594a80b0d99ca6510e87e249b1c5ec5f",
+    "initcode_len": 37034
+  }
+}

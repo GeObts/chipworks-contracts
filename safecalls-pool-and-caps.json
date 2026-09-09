@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "chainId": "8453",
+  "createdAt": 1788917082973,
+  "meta": {
+    "name": "Chipworks pool deepen + 33% LTV caps",
+    "description": "Approve and deposit a further 300,000,000 CHIP (pool 467M -> 767M), then raise maxPrincipal to ~33% LTV: Based 6.7M, Dark 35M, Lil 2.7M. All instant, no timelocks.",
+    "txBuilderVersion": "1.16.5",
+    "createdFromSafeAddress": "0xe1096B727499a3f70FaD8bc0267F5e69d01373C7",
+    "createdFromOwnerAddress": ""
+  },
+  "transactions": [
+    {
+      "to": "0x75Af968d2e58749FDA1b42C58186B76f5E511bA3",
+      "value": "0",
+      "data": "0x095ea7b3000000000000000000000000123bc476594a80b0d99ca6510e87e249b1c5ec5f000000000000000000000000000000000000000000f8277896582678ac000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x23440944000000000000000000000000000000000000000000f8277896582678ac000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x43bbbe12000000000000000000000000bf57d0535e10e7033447174404b9bed3d9ef4c88000000000000000000000000000000000000000000058ac7ba4ff69e83800000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x43bbbe12000000000000000000000000d45e54b1a5e77d6e9469a4174d34f27d5d16270c0000000000000000000000000000000000000000001cf389cd46047d03000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x43bbbe12000000000000000000000000e3c5ef27b80481518a2363406e354a9361415556000000000000000000000000000000000000000000023bbf4b14c2e7ff800000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}
