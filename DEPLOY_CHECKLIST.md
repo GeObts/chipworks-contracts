@@ -117,9 +117,16 @@ Three places still imply one:
 2. **The site's launch-caps copy**, wherever it names a dollar figure per round.
 3. **The launch thread / article copy**, same.
 
-**Honest replacement:** *"each buy is limited to a fraction of the pool's measured depth, and
-the first rounds are funded small."* The second half is an operational promise, not a contract
-guarantee — keep the wording that way.
+**Honest replacement:** *"each buy is limited to a fraction of the pool's measured depth."*
+
+> 🔴 **The "and the first rounds are funded small" half is WITHDRAWN (2026-09-09).** Do not
+> put it in the site copy or the launch thread. `openRound` draws the **entire** Pot
+> (`pullBudget(pot.available())`), and the first round can open the instant the Pot clears
+> `minPot` because `nextRoundOpensAt()` returns `block.timestamp` while `lastRoundOpenedAt`
+> is 0 — so once the fee stream points at the FeeSplitter, round size is whatever has
+> accumulated. Promising small and opening large is worse than never promising.
+> `maxImpactBps` (25 bps of measured depth, per buy) is the real bound and it is a contract
+> guarantee. Full reasoning: LAUNCH_CONFIG §5.
 
 ---
 

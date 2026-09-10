@@ -222,13 +222,44 @@ on. **The constructor already sets `defaultMaxImpactBps = 25`**, ceiling
 > 3. **The launch-thread / article copy**, same.
 >
 > **The honest replacement sentence:** *"each buy is limited to a fraction of the pool's
-> measured depth, and the first rounds are funded small."* The second half is an operational
-> promise, not a contract guarantee — keep the wording that way. **Fix this copy before
-> posting anything.**
+> measured depth."* **Fix this copy before posting anything.**
+>
+> ⚠️ **DO NOT SAY "the first rounds are funded small".** That half of the sentence was
+> withdrawn on 2026-09-09 — see the box below. Saying it and then opening a four-figure
+> first round is worse than never having said it.
 
-**Fund the first mainnet rounds small.** With no ceiling in the contract, round size is bounded
-by what you put in the Pot. That is now an operational control rather than a configured one,
-which means it needs a person to keep honouring it.
+### 🔴 THE "FUND THE FIRST ROUNDS SMALL" PROMISE IS WITHDRAWN — DECIDED 2026-09-09
+
+**This file used to promise small first rounds. It no longer does, deliberately, and the
+external copy must not carry it.**
+
+**Why it was withdrawn rather than honoured.** The promise was never enforceable and became
+impractical the moment the fee stream was connected:
+
+1. **`openRound` takes the ENTIRE Pot.** `uint256 got = pot.pullBudget(pot.available())` —
+   *"The whole pot, whatever it is."* There is no partial draw and no per-round ceiling, so
+   round size is exactly the Pot balance at the instant it opens.
+2. **`nextRoundOpensAt()` returns `block.timestamp` while `lastRoundOpenedAt == 0`**, so the
+   very first round opens the moment the Pot clears `minPot`. There is no grace period in
+   which to trim it.
+3. **Once `transfer_fee_recipient` points at the FeeSplitter, the Pot fills on its own** at
+   roughly the LP fee run-rate. Keeping it small would mean *withholding* the flip, i.e.
+   leaving fees stranded at the multisig to satisfy a sentence.
+
+**What actually bounds exposure, and it is the better bound.** `maxImpactBps` — 25 bps from
+the constructor, ceiling 500 — sizes every buy from `poolLiquidityUsd`, measured pool depth.
+A slice larger than that is trimmed, the remainder carries back to the Pot, and the swap is
+all-or-nothing against a Chainlink-derived `amountOutMinimum`. So a large round does not
+create large per-stock exposure; it spreads bounded buys over more stocks and returns what it
+cannot place. **That is a contract guarantee, unlike the operational promise it replaces.**
+
+**What the launch copy may say:** *"each buy is limited to a fraction of the pool's measured
+depth."* Nothing about round size. If you want a sentence about the first round, make it a
+statement of fact after the fact, not a forward promise.
+
+> **The control still exists if you want it.** Round size is the Pot balance at open time, so
+> a small first round is achieved by seeding the Pot small and opening before the fee stream
+> fills it. That is a choice available on the day — it is simply no longer promised to anyone.
 
 **`maxPrincipal` at ~60% of the Anvil queue price** is the parity invariant made concrete.
 The rule is that borrowing must never beat selling, or defaulting becomes the rational move
