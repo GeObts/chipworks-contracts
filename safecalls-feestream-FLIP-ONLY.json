@@ -4,7 +4,7 @@
   "createdAt": 1789004384522,
   "meta": {
     "name": "safecalls-feestream-FLIP-ONLY",
-    "description": "tx1 ONLY: point the Bankr fee stream at the FeeSplitter. Does NOT move any WETH - the accrued fees settle to the Safe as part of this same call.",
+    "description": "updateBeneficiary - point the fee stream at the FeeSplitter",
     "txBuilderVersion": "1.16.5",
     "createdFromSafeAddress": "0xe1096B727499a3f70FaD8bc0267F5e69d01373C7",
     "createdFromOwnerAddress": ""
