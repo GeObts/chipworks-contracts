@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "chainId": "8453",
+  "createdAt": 1789004384522,
+  "meta": {
+    "name": "safecalls-feestream-FLIP-ONLY",
+    "description": "tx1 ONLY: point the Bankr fee stream at the FeeSplitter. Does NOT move any WETH - the accrued fees settle to the Safe as part of this same call.",
+    "txBuilderVersion": "1.16.5",
+    "createdFromSafeAddress": "0xe1096B727499a3f70FaD8bc0267F5e69d01373C7",
+    "createdFromOwnerAddress": ""
+  },
+  "transactions": [
+    {
+      "to": "0x9982538F41f2ae29ddb9d3D9307010052984FDbB",
+      "value": "0",
+      "data": "0xd44f6738bcdd8383e38069f626846b94e93ee4d2c00cadfcce4b9457b0b8b04289030345000000000000000000000000b9b76e1835afe05e5a73065fe01a19b14869f8a3",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}
