@@ -7,14 +7,28 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title ChipBurner
-/// @notice Owns the $CHIP token so that burning it is a REAL burn, and owns nothing else that
-///         anyone can take.
+/// @notice Collects the protocol's $CHIP burn stream and destroys it for real, and owns
+///         nothing else that anyone can take.
 ///
-/// @dev WHY THIS CONTRACT EXISTS. Bankr's Doppler $CHIP has no public `burn` — only an
-///      owner-gated one. Until now every "burn" in this protocol was a transfer to `0xdead`:
-///      unreachable, but still counted in `totalSupply`, so every aggregator overstated
-///      circulating supply and the gap grew with every activation. Making this contract the
-///      token's owner turns that into a true burn — `totalSupply` falls, on chain, everywhere.
+/// @dev WHY THIS CONTRACT EXISTS. Until now every "burn" in this protocol was a transfer to
+///      `0xdead`: unreachable, but still counted in `totalSupply`, so every aggregator
+///      overstated circulating supply and the gap grew with every activation. Routing the
+///      burn stream here and calling the token's own `burn` turns that into a true burn —
+///      `totalSupply` falls, on chain, everywhere.
+///
+///      CORRECTED 2026-09-10 — THIS CONTRACT DOES NOT OWN $CHIP, AND DOES NOT NEED TO.
+///      An earlier draft of these notes said Doppler $CHIP had "no public `burn` — only an
+///      owner-gated one", and that this contract had to become the token's owner. Both are
+///      wrong about the DEPLOYED token. `burn(uint256)` is a standard public burn of the
+///      CALLER'S OWN balance, so {burnAll} works simply by holding the tokens it destroys.
+///      Verified on Base mainnet: `$CHIP.owner()` is the Doppler factory
+///      (`0x660eAaEd…8D12`), not this contract, and `burn(1e18)` simulates successfully from
+///      ordinary holders that own no privilege at all. See `test/fork/LiveBurnerBurn.t.sol`
+///      and the same finding recorded in `chipworks-keeper/src/tasks/burn.ts`.
+///
+///      Do not "fix" this by transferring $CHIP ownership here. That would hand this
+///      contract every other `onlyOwner` power on the token for no benefit — see the trap
+///      described below, which is why the ownership route was rejected.
 ///
 ///      THE TRAP THIS AVOIDS, WHICH IS THE WHOLE DESIGN. `transferOwnership` moves **every**
 ///      `onlyOwner` power, not just `burn`: `updateTokenURI`, `updateMintRate`,
@@ -180,11 +194,18 @@ contract ChipBurner is Ownable2Step, ReentrancyGuard {
     }
 }
 
-/// @notice The owner-gated surface of Bankr's Doppler $CHIP that this wrapper uses.
-/// @dev VERIFY THESE SIGNATURES AGAINST THE DEPLOYED TOKEN BEFORE HANDING IT OVER. They are
+/// @notice The surface of Bankr's Doppler $CHIP that this wrapper uses.
+/// @dev `burn(uint256)` IS NOT OWNER-GATED — it destroys the caller's own balance and any
+///      holder may call it. This interface was previously described as "the owner-gated
+///      surface", which is wrong about the deployed token and led to the conclusion that
+///      burns were blocked because {ChipBurner} is not the token's owner. It is not, it does
+///      not need to be, and {burnAll} works today. `updateTokenURI` and `transferOwnership`
+///      ARE owner-gated; they are declared here only for completeness and are never called.
+///
+///      VERIFY THESE SIGNATURES AGAINST THE DEPLOYED TOKEN BEFORE HANDING IT OVER. They are
 ///      encoded by string here, so a mismatch is a one-line fix — but it is also a mismatch
 ///      that would not be discovered until the first burn, which is far too late. LAUNCH_CONFIG
-///      carries the check.
+///      carries the check, and `test/fork/LiveBurnerBurn.t.sol` exercises the real pair.
 interface IChipOwnable {
     function burn(uint256 amount) external;
     function updateTokenURI(string calldata uri) external;

@@ -92,7 +92,7 @@ import {IActivationCustodian} from "../interfaces/IActivationCustodian.sol";
 ///      transaction: the weight curve decides what everybody earns, and it should not be
 ///      able to change without notice. Registering a collection for the first time uses the
 ///      same path — it costs 48h once, and keeps one code path instead of two.
-contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
+contract ChipActivationV2 is IActivationSource, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Tier indices 0..4.
@@ -124,6 +124,48 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     ///      did before the Burner existed, and it still works — but then burns are dead-held
     ///      rather than destroyed. LAUNCH_CONFIG requires the Burner.
     address public immutable chipBurnTarget;
+
+    /* ------------------------------------------------------------------ */
+    /*            V2: BURN-SPLIT, FEE COLLECTION, BOOTSTRAP                 */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Share of every MANDATORY $CHIP fee that is truly burned, in bps.
+    /// @dev The remainder goes to {feeCollector} as protocol income. Default 5000 = 50/50.
+    ///      Capped at BPS so it can never exceed 100%, and the collector is required to be
+    ///      non-zero whenever burnBps < BPS, so a misconfiguration cannot silently send the
+    ///      un-burned half to address(0) and destroy it without counting it as a burn.
+    ///
+    ///      THE OVEN IS NOT AFFECTED. That is a direct, voluntary `burn()` on the Chiplet
+    ///      collection from the holder's own wallet; it never routes through this contract.
+    ///      "Voluntary burns are real burns; mandatory fees are split" is the honest framing.
+    /// @notice Basis-point denominator for {burnBps}.
+    uint32 public constant BPS = 10_000;
+
+    uint32 public burnBps;
+
+    /// @notice Where the un-burned share of mandatory fees goes.
+    address public feeCollector;
+
+    /// @notice One-way per collection. Once true, costs may only change through the 48h path.
+    /// @dev This is what lets a fresh deployment price a collection at deploy time without a
+    ///      notice period, while keeping the "prices cannot change without 48h warning"
+    ///      promise honest for everything after. There is no price to warn about until one
+    ///      exists, and the flag can never be cleared, so it cannot be reused as a bypass.
+    mapping(address collection => bool) public costsInitialized;
+
+    /// @notice Running total of mandatory $CHIP routed to {feeCollector} (NOT burned).
+    /// @dev Kept separate from {totalChipBurned} on purpose: totalChipBurned must continue to
+    ///      mean "destroyed", or every burn figure this protocol publishes becomes a lie.
+    uint256 public totalChipCollected;
+
+    event BurnSplitUpdated(uint32 burnBps, address feeCollector);
+    event ChipCollected(uint256 burned, uint256 collected);
+    event InitialCostsSet(address indexed collection, uint256[TIER_COUNT] cost);
+    event Executed(address indexed target, uint256 value, bytes data);
+
+    error BadSplit();
+    error AlreadyInitialized(address collection);
+    error ExecuteFailed();
 
     /// @notice The tier weight a flat-rate collection always reports: 1.00x.
     ///
@@ -259,15 +301,21 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     ///      freshly deployed ChipActivation accepts no activations at all until the multisig
     ///      configures at least one. That is the intended failure mode: forgetting a
     ///      collection makes it earn nothing rather than earn for free.
-    constructor(address multisig, address chipToken_, address chipBurnTarget_, uint32[TIER_COUNT] memory tierBps_)
-        Ownable(multisig)
-    {
+    constructor(
+        address multisig,
+        address chipToken_,
+        address chipBurnTarget_,
+        uint32[TIER_COUNT] memory tierBps_,
+        uint32 burnBps_,
+        address feeCollector_
+    ) Ownable(multisig) {
         if (multisig == address(0) || chipToken_ == address(0) || chipBurnTarget_ == address(0)) revert ZeroAddress();
         chipToken = IERC20(chipToken_);
         chipBurnTarget = chipBurnTarget_;
         _validateTiers(tierBps_);
         tierBps = tierBps_;
         emit TiersExecuted(tierBps_);
+        _setBurnSplit(burnBps_, feeCollector_);
     }
 
     /* ------------------------------------------------------------------ */
@@ -437,13 +485,58 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
     ///      arrived. A $CHIP that taxes transfers, or lies about them, would otherwise buy an
     ///      activation under-paid. Failing closed is the right direction: the whole call
     ///      reverts and nothing is recorded.
+    /// @dev V2: the mandatory fee is SPLIT. `burnBps` goes to {chipBurnTarget} and is truly
+    ///      destroyed; the remainder goes to {feeCollector} as income.
+    ///
+    ///      BOTH LEGS ARE MEASURED BY BALANCE DELTA, exactly as the single-leg version was.
+    ///      A $CHIP that taxed transfers or lied about them would otherwise buy an activation
+    ///      under-paid. Neither leg is trusted from a return value.
+    ///
+    ///      `totalChipBurned` counts ONLY the burned leg. That counter is what the site and
+    ///      every holder reads as "destroyed", and it must keep meaning exactly that.
+    ///      Rounding dust favours the BURN, never the collector.
     function _burnChip(uint256 amount) internal {
         if (amount == 0) return;
-        uint256 before = chipToken.balanceOf(chipBurnTarget);
-        chipToken.safeTransferFrom(msg.sender, chipBurnTarget, amount);
-        uint256 delivered = chipToken.balanceOf(chipBurnTarget) - before;
-        if (delivered < amount) revert ChipBurnShortfall(delivered, amount);
-        totalChipBurned += amount;
+
+        uint256 toCollect = (amount * (BPS - burnBps)) / BPS;
+        uint256 toBurn = amount - toCollect; // dust favours the burn
+
+        if (toBurn != 0) {
+            uint256 before = chipToken.balanceOf(chipBurnTarget);
+            chipToken.safeTransferFrom(msg.sender, chipBurnTarget, toBurn);
+            uint256 delivered = chipToken.balanceOf(chipBurnTarget) - before;
+            if (delivered < toBurn) revert ChipBurnShortfall(delivered, toBurn);
+            totalChipBurned += toBurn;
+        }
+
+        if (toCollect != 0) {
+            address collector = feeCollector;
+            uint256 beforeC = chipToken.balanceOf(collector);
+            chipToken.safeTransferFrom(msg.sender, collector, toCollect);
+            uint256 deliveredC = chipToken.balanceOf(collector) - beforeC;
+            if (deliveredC < toCollect) revert ChipBurnShortfall(deliveredC, toCollect);
+            totalChipCollected += toCollect;
+        }
+
+        emit ChipCollected(toBurn, toCollect);
+    }
+
+    function _setBurnSplit(uint32 newBurnBps, address newCollector) internal {
+        if (newBurnBps > BPS) revert BadSplit();
+        // A collector is mandatory whenever any share is collected: sending the un-burned
+        // leg to address(0) would destroy it WITHOUT counting it as a burn, which is the one
+        // outcome that makes the published burn figure wrong in the dangerous direction.
+        if (newBurnBps < BPS && newCollector == address(0)) revert ZeroAddress();
+        burnBps = newBurnBps;
+        feeCollector = newCollector;
+        emit BurnSplitUpdated(newBurnBps, newCollector);
+    }
+
+    /// @notice Change the burn/collect split. Multisig only, immediate.
+    /// @dev Deliberately NOT timelocked: it changes where the protocol's own fee goes, never
+    ///      what a user pays. The price a holder sees is governed by the 48h cost path.
+    function setBurnSplit(uint32 newBurnBps, address newCollector) external onlyOwner {
+        _setBurnSplit(newBurnBps, newCollector);
     }
 
     /* ------------------------------------------------------------------ */
@@ -669,6 +762,30 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
         emit FlatRateCollectionSet(collection);
     }
 
+    /// @notice Price a collection for the FIRST time, with no notice period. Multisig only.
+    ///
+    /// @dev THE ONLY WAY PAST THE 48h TIMELOCK, AND IT WORKS EXACTLY ONCE PER COLLECTION.
+    ///      A notice period exists so holders are never repriced without warning. Before a
+    ///      collection has any price, there is nothing to warn about and nobody has committed
+    ///      at a price — so a bootstrap here costs no one anything, while a 48h wait costs a
+    ///      launch two days.
+    ///
+    ///      `costsInitialized` is set before the write and is never cleared anywhere in this
+    ///      contract, so this cannot be replayed to dodge the notice period later. Every
+    ///      subsequent change must go through {queueCosts} -> 48h -> {executeCosts}.
+    function setInitialCosts(address collection, uint256[TIER_COUNT] calldata cost) external onlyOwner {
+        if (collection == address(0)) revert ZeroAddress();
+        if (costsInitialized[collection]) revert AlreadyInitialized(collection);
+        if (isFlatRate[collection]) _validateFlatCosts(cost);
+        else _validateCosts(cost);
+
+        costsInitialized[collection] = true;
+        _tierCost[collection] = cost;
+        collectionConfigured[collection] = true;
+        emit InitialCostsSet(collection, cost);
+        emit CostsExecuted(collection, cost);
+    }
+
     function queueCosts(address collection, uint256[TIER_COUNT] calldata cost) external onlyOwner {
         if (collection == address(0)) revert ZeroAddress();
         if (isFlatRate[collection]) _validateFlatCosts(cost);
@@ -689,6 +806,7 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
 
         _tierCost[collection] = p.cost;
         collectionConfigured[collection] = true;
+        costsInitialized[collection] = true; // V2: the bootstrap door closes either way
         delete _pendingCosts[collection];
 
         emit CostsExecuted(collection, p.cost);
@@ -788,4 +906,41 @@ contract ChipActivation is IActivationSource, Ownable2Step, ReentrancyGuard {
         IERC721(collection).transferFrom(address(this), to, tokenId);
         emit RecoveredNFT(collection, tokenId, to);
     }
+
+    /* ------------------------------------------------------------------ */
+    /*                      V2: THE ESCAPE HATCH                            */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Call any contract as this contract. Multisig only.
+    ///
+    /// @dev THIS EXISTS BECAUSE OF A REAL LOSS. On 2026-09-10 a Doppler fee beneficiary was
+    ///      set to a splitter that could receive money but could not INITIATE a call. The
+    ///      protocol required the beneficiary itself to call `collectFees`; the splitter had
+    ///      no such function and was not upgradeable, so the entitlement — and every future
+    ///      fee on that pool — became permanently unclaimable. Nothing was hacked. The
+    ///      contract simply could not act.
+    ///
+    ///      A contract that can hold a role must be able to exercise it. This is that.
+    ///
+    ///      WHY IT IS SAFE HERE, AND THE LIMIT OF THAT CLAIM. This contract takes NO custody:
+    ///      every fee moves user -> target inside one call via `safeTransferFrom`, and
+    ///      `test_theContractNeverHoldsChip` asserts the balance is zero after every
+    ///      operation. So there is no user balance for this hatch to reach. It is owner-gated
+    ///      to the multisig, and the multisig can already set every economic parameter here.
+    ///      It does NOT weaken the cost timelock: prices live behind {queueCosts} and a call
+    ///      from this contract cannot write this contract's own storage.
+    function execute(address target, uint256 value, bytes calldata data)
+        external
+        onlyOwner
+        nonReentrant
+        returns (bytes memory result)
+    {
+        if (target == address(0)) revert ZeroAddress();
+        bool ok;
+        (ok, result) = target.call{value: value}(data);
+        if (!ok) revert ExecuteFailed();
+        emit Executed(target, value, data);
+    }
+
+    receive() external payable {}
 }
