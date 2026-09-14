@@ -39,6 +39,7 @@ contract ChipLotteryForkTest is Test {
     address constant JACKPOT = 0x3bAe643002069dBCbcd62B1A4eb4C4A397d042a2;
     address constant TICKET_NFT = 0x48FfE35AbB9f4780a4f1775C2Ce1c46185b366e4;
     address constant HOOK = 0xBDF938149ac6a781F94FAa0ed45E6A0e984c6544;
+    address constant V3_QUOTER = 0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a;
 
     /// @dev BasedMining's EOA. Must be an EOA to claim referral fees; see the contract.
     address constant REFERRER = 0x70D3a9aA7e10070d3F528e91c9bCf5158c922C66;
@@ -68,19 +69,22 @@ contract ChipLotteryForkTest is Test {
     uint256 constant MAX_CHIP_1 = 1_000_000 ether;
 
     /**
-     * @dev WETH to buy for one ticket, WITH HEADROOM, and the headroom is the point.
+     * @dev WETH to buy for one ticket, WITH HEADROOM - QUOTED FROM THE CHAIN.
      *
      *      An off-chain quote is taken at one block and spent at another. Quoted to
      *      the wei, the v3 leg needed a few wei MORE than had been bought and the whole
      *      buy reverted `STF` - a shortfall of about a millionth of a cent killing a
      *      $1 purchase. That is not a test artifact; it is what every real buy would
-     *      have done the moment the WETH/USDC price ticked between quote and mine.
+     *      have done the moment the WETH/USDC price ticked between quote and mine. So
+     *      the caller always over-buys slightly and the surplus is refunded.
      *
-     *      So the caller always over-buys slightly and the surplus is refunded. 0.5%
-     *      of 0.0004 WETH is roughly a fifth of a cent, and it goes back to the buyer
-     *      rather than to us - see {test_wethDustIsRefundedAndIsSmall}, which prints it.
+     *      IT IS QUOTED, NOT WRITTEN DOWN, and that is the second lesson. It WAS a
+     *      constant - 0.0004015071 ether, right on the day it was measured. ETH moved,
+     *      the leg began needing less, the refund grew past the bound this file asserts
+     *      and the suite went red over nothing. A hardcoded figure derived from chain
+     *      state is a slow-motion false alarm, exactly like the bonusball maximum was.
      */
-    uint256 constant WETH_FOR_1 = 0.0004015071 ether; // 0.0003995096 + 0.5%
+    uint256 wethFor1;
 
     function setUp() public {
         string memory rpc = vm.envOr("BASE_RPC_URL", string(""));
@@ -100,6 +104,8 @@ contract ChipLotteryForkTest is Test {
         );
 
         (normalBallMax, bonusBallMax) = _ballMaxima();
+        wethFor1 = _quoteWethFor(1_000_000); // $1.00 in micro-USDC
+        emit log_named_decimal_uint("wethFor1 (quoted +0.5%)", wethFor1, 18);
         emit log_named_uint("normalBallMax", normalBallMax);
         emit log_named_uint("bonusBallMax", bonusBallMax);
 
@@ -156,7 +162,7 @@ contract ChipLotteryForkTest is Test {
         uint256 chipBefore = IERC20(CHIP).balanceOf(buyer);
 
         vm.prank(buyer);
-        uint256 spent = lottery.buyWithChip(_picks(1), buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        uint256 spent = lottery.buyWithChip(_picks(1), buyer, wethFor1, MAX_CHIP_1, block.timestamp + 300);
 
         assertEq(IERC721Bal(TICKET_NFT).balanceOf(buyer), 1, "buyer should hold one ticket");
         assertEq(chipBefore - IERC20(CHIP).balanceOf(buyer), spent, "reported spend must equal the real spend");
@@ -170,7 +176,7 @@ contract ChipLotteryForkTest is Test {
     function test_tenTicketsInOneCall() public {
         vm.prank(buyer);
         uint256 spent =
-            lottery.buyWithChip(_picks(10), buyer, WETH_FOR_1 * 10, MAX_CHIP_1 * 10, block.timestamp + 300);
+            lottery.buyWithChip(_picks(10), buyer, wethFor1 * 10, MAX_CHIP_1 * 10, block.timestamp + 300);
 
         assertEq(IERC721Bal(TICKET_NFT).balanceOf(buyer), 10, "ten tickets");
         _assertEmpty();
@@ -196,7 +202,7 @@ contract ChipLotteryForkTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert();
-        lottery.buyWithChip(_picks(1), buyer, WETH_FOR_1, 1_000 ether, block.timestamp + 300);
+        lottery.buyWithChip(_picks(1), buyer, wethFor1, 1_000 ether, block.timestamp + 300);
 
         assertEq(IERC20(CHIP).balanceOf(buyer), before, "a failed buy must cost the buyer nothing");
         assertEq(IERC721Bal(TICKET_NFT).balanceOf(buyer), 0, "no ticket");
@@ -213,7 +219,7 @@ contract ChipLotteryForkTest is Test {
 
         vm.prank(REFERRER);
         vm.expectRevert(abi.encodeWithSelector(ChipLottery.SelfReferral.selector, REFERRER));
-        lottery.buyWithChip(_picks(1), REFERRER, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        lottery.buyWithChip(_picks(1), REFERRER, wethFor1, MAX_CHIP_1, block.timestamp + 300);
 
         assertEq(IERC20(CHIP).balanceOf(REFERRER), before, "nothing moved");
         _assertEmpty();
@@ -225,7 +231,7 @@ contract ChipLotteryForkTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(ChipLottery.DeadlinePassed.selector, block.timestamp, block.timestamp - 1)
         );
-        lottery.buyWithChip(_picks(1), buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp - 1);
+        lottery.buyWithChip(_picks(1), buyer, wethFor1, MAX_CHIP_1, block.timestamp - 1);
         assertEq(IERC20(CHIP).balanceOf(buyer), before);
         _assertEmpty();
     }
@@ -233,19 +239,19 @@ contract ChipLotteryForkTest is Test {
     function test_zeroTicketsReverts() public {
         vm.prank(buyer);
         vm.expectRevert(ChipLottery.NoTickets.selector);
-        lottery.buyWithChip(_picks(0), buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        lottery.buyWithChip(_picks(0), buyer, wethFor1, MAX_CHIP_1, block.timestamp + 300);
     }
 
     function test_elevenTicketsRevertsRatherThanSilentlyTakingTheSlowPath() public {
         vm.prank(buyer);
         vm.expectRevert(abi.encodeWithSelector(ChipLottery.TooManyTickets.selector, 11, 10));
-        lottery.buyWithChip(_picks(11), buyer, WETH_FOR_1 * 11, MAX_CHIP_1 * 11, block.timestamp + 300);
+        lottery.buyWithChip(_picks(11), buyer, wethFor1 * 11, MAX_CHIP_1 * 11, block.timestamp + 300);
     }
 
     function test_zeroRecipientReverts() public {
         vm.prank(buyer);
         vm.expectRevert(ChipLottery.ZeroAddress.selector);
-        lottery.buyWithChip(_picks(1), address(0), WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        lottery.buyWithChip(_picks(1), address(0), wethFor1, MAX_CHIP_1, block.timestamp + 300);
     }
 
     // ---- 4. the callback is not a door -------------------------------------
@@ -286,7 +292,7 @@ contract ChipLotteryForkTest is Test {
     function test_repeatedBuysNeverAccumulateABalance() public {
         for (uint256 i; i < 3; ++i) {
             vm.prank(buyer);
-            lottery.buyWithChip(_picks(1), buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+            lottery.buyWithChip(_picks(1), buyer, wethFor1, MAX_CHIP_1, block.timestamp + 300);
             _assertEmpty();
         }
         assertEq(IERC721Bal(TICKET_NFT).balanceOf(buyer), 3);
@@ -355,7 +361,7 @@ contract ChipLotteryForkTest is Test {
         vm.prank(address(attacker));
         IERC20(CHIP).approve(address(lottery), type(uint256).max);
 
-        attacker.go(WETH_FOR_1, MAX_CHIP_1);
+        attacker.go(wethFor1, MAX_CHIP_1);
 
         assertEq(IERC721Bal(TICKET_NFT).balanceOf(address(attacker)), 1, "exactly one ticket");
         if (attacker.attempts() != 0) {
@@ -378,14 +384,14 @@ contract ChipLotteryForkTest is Test {
         IMegapot.Pick[] memory p = _picks(1);
 
         vm.prank(buyer);
-        uint256 spent = lottery.buyWithChip(p, buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        uint256 spent = lottery.buyWithChip(p, buyer, wethFor1, MAX_CHIP_1, block.timestamp + 300);
 
         uint256 dust = IERC20(WETH).balanceOf(buyer) - wethBefore;
         emit log_named_decimal_uint("CHIP spent", spent, 18);
         emit log_named_decimal_uint("WETH refunded to buyer", dust, 18);
 
         assertGt(dust, 0, "headroom must come back, not stay here");
-        assertLt(dust, WETH_FOR_1 / 50, "dust should be a small fraction of the leg");
+        assertLt(dust, wethFor1 / 50, "dust should be a small fraction of the leg");
         _assertEmpty();
     }
 
@@ -408,9 +414,9 @@ contract ChipLotteryForkTest is Test {
         uint256 wethBefore = IERC20(WETH).balanceOf(buyer);
         IMegapot.Pick[] memory p = _picks(1);
 
-        // maxChipIn is the only bound; the leg must still buy precisely WETH_FOR_1.
+        // maxChipIn is the only bound; the leg must still buy precisely wethFor1.
         vm.prank(buyer);
-        lottery.buyWithChip(p, buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        lottery.buyWithChip(p, buyer, wethFor1, MAX_CHIP_1, block.timestamp + 300);
 
         // What the ticket did not consume is refunded as WETH, so:
         //   WETH bought  ==  WETH spent on USDC  +  WETH refunded
@@ -418,7 +424,7 @@ contract ChipLotteryForkTest is Test {
         // amount rather than a dust quantity.
         uint256 refunded = IERC20(WETH).balanceOf(buyer) - wethBefore;
         assertGt(refunded, 0, "exact-input would have bought dust, leaving nothing to refund");
-        assertLt(refunded, WETH_FOR_1, "cannot refund more than was bought");
+        assertLt(refunded, wethFor1, "cannot refund more than was bought");
         _assertEmpty();
     }
 
@@ -433,11 +439,11 @@ contract ChipLotteryForkTest is Test {
     function test_costScalesWithTicketCountAsExactOutputRequires() public {
         IMegapot.Pick[] memory one = _picks(1);
         vm.prank(buyer);
-        uint256 costOne = lottery.buyWithChip(one, buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        uint256 costOne = lottery.buyWithChip(one, buyer, wethFor1, MAX_CHIP_1, block.timestamp + 300);
 
         IMegapot.Pick[] memory ten = _picks(10);
         vm.prank(buyer);
-        uint256 costTen = lottery.buyWithChip(ten, buyer, WETH_FOR_1 * 10, MAX_CHIP_1 * 10, block.timestamp + 300);
+        uint256 costTen = lottery.buyWithChip(ten, buyer, wethFor1 * 10, MAX_CHIP_1 * 10, block.timestamp + 300);
 
         emit log_named_decimal_uint("1 ticket ", costOne, 18);
         emit log_named_decimal_uint("10 tickets", costTen, 18);
@@ -461,7 +467,7 @@ contract ChipLotteryForkTest is Test {
         IMegapot.Pick[] memory p = _picks(1);
 
         vm.prank(buyer);
-        uint256 spent = lottery.buyWithChip(p, other, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+        uint256 spent = lottery.buyWithChip(p, other, wethFor1, MAX_CHIP_1, block.timestamp + 300);
 
         assertEq(IERC721Bal(TICKET_NFT).balanceOf(other), 1, "recipient gets the ticket");
         assertEq(IERC20(CHIP).balanceOf(other), otherChipBefore, "recipient gets NO CHIP");
@@ -487,6 +493,26 @@ contract ChipLotteryForkTest is Test {
             PoolKey({currency0: USDC, currency1: CHIP, fee: 8_388_608, tickSpacing: 200, hooks: HOOK});
         vm.expectRevert(ChipLottery.KeyIsNotChipWeth.selector);
         new ChipLottery(SAFE, CHIP, WETH, USDC, POOL_MANAGER, V3_ROUTER, JACKPOT, REFERRER, wrong, 500);
+    }
+
+    /**
+     * @dev What the v3 leg needs for `usdcOut`, plus 0.5% headroom.
+     *
+     *      The quoter is non-view - it swaps and reverts - which is fine on a fork and
+     *      is the only way to get v3's true exact-output input amount without
+     *      reimplementing its maths.
+     */
+    function _quoteWethFor(uint256 usdcOut) internal returns (uint256) {
+        (bool ok, bytes memory ret) = V3_QUOTER.call(
+            abi.encodeWithSignature(
+                "quoteExactOutputSingle((address,address,uint256,uint24,uint160))",
+                WETH, USDC, usdcOut, uint24(500), uint160(0)
+            )
+        );
+        require(ok && ret.length >= 32, "v3 exact-output quote failed");
+        uint256 amountIn = abi.decode(ret, (uint256));
+        require(amountIn > 0, "quoter returned zero");
+        return (amountIn * 1005) / 1000;
     }
 }
 
