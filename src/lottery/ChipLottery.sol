@@ -391,8 +391,9 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
           getting it backwards does NOT revert - it would read `wethOut` as a $CHIP
           INPUT amount, spend 0.0004 $CHIP and buy a few hundred thousand wei of WETH.
           Proved both directions against the live pool in
-          test/fork/V4SignConvention.t.sol, and {test_v4SwapIsExactOutput} asserts the
-          property here rather than inferring it from the end-to-end result.
+          test/fork/V4SignConvention.t.sol, and
+          {test_v4LegDeliversExactlyTheWethRequested} asserts the property here rather
+          than inferring it from the end-to-end result.
         */
         int256 delta = poolManager.swap(
             _key(),
