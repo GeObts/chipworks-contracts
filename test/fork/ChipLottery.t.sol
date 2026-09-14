@@ -177,18 +177,17 @@ contract ChipLotteryForkTest is Test {
         emit log_named_decimal_uint("CHIP spent on 10 tickets", spent, 18);
     }
 
-    /// @dev msg.sender pays, someone else gets the ticket AND the change.
-    function test_ticketAndChangeGoToRecipientNotPayer() public {
-        uint256 otherChipBefore = IERC20(CHIP).balanceOf(other);
+    /*
+      REMOVED: test_ticketAndChangeGoToRecipientNotPayer.
 
-        vm.prank(buyer);
-        lottery.buyWithChip(_picks(1), other, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+      It asserted "change follows the ticket" - which is the behaviour an audit
+      correctly called a bug, written down as a requirement. A test that encodes the
+      defect is worse than no test: it turns the next person's correct fix into a
+      red build and argues them out of it.
 
-        assertEq(IERC721Bal(TICKET_NFT).balanceOf(other), 1, "recipient holds the ticket");
-        assertEq(IERC721Bal(TICKET_NFT).balanceOf(buyer), 0, "payer holds none");
-        assertGt(IERC20(CHIP).balanceOf(other) - otherChipBefore, 0, "change follows the ticket");
-        _assertEmpty();
-    }
+      Replaced by {test_changeGoesToThePayerAndOnlyTheTicketToTheRecipient}, which
+      asserts the opposite and is the behaviour the contract now has.
+    */
 
     // ---- 2. the buyer's own bound ------------------------------------------
 
@@ -389,8 +388,107 @@ contract ChipLotteryForkTest is Test {
         assertLt(dust, WETH_FOR_1 / 50, "dust should be a small fraction of the leg");
         _assertEmpty();
     }
-}
 
+    // ---- 10. the properties the end-to-end tests only IMPLIED ---------------
+
+    /**
+     * @dev EXACT OUTPUT, ASSERTED DIRECTLY.
+     *
+     *      An audit read `int256(wethOut)` as exact-INPUT and called the contract
+     *      broken. It is not - v4 reads POSITIVE as exact-output - but the objection
+     *      landed because nothing here SAID so. The old suite only proved a ticket
+     *      came out the far end, which would also have been true of several wrong
+     *      swaps that happened to buy enough.
+     *
+     *      This pins the property itself: the v4 leg must deliver EXACTLY the WETH it
+     *      was asked for. Under exact-input it would deliver whatever 0.0004 $CHIP is
+     *      worth - about 425,000 wei - and this fails loudly.
+     */
+    function test_v4LegDeliversExactlyTheWethRequested() public {
+        uint256 wethBefore = IERC20(WETH).balanceOf(buyer);
+        IMegapot.Pick[] memory p = _picks(1);
+
+        // maxChipIn is the only bound; the leg must still buy precisely WETH_FOR_1.
+        vm.prank(buyer);
+        lottery.buyWithChip(p, buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+
+        // What the ticket did not consume is refunded as WETH, so:
+        //   WETH bought  ==  WETH spent on USDC  +  WETH refunded
+        // and the refund alone proves the leg bought at least the full requested
+        // amount rather than a dust quantity.
+        uint256 refunded = IERC20(WETH).balanceOf(buyer) - wethBefore;
+        assertGt(refunded, 0, "exact-input would have bought dust, leaving nothing to refund");
+        assertLt(refunded, WETH_FOR_1, "cannot refund more than was bought");
+        _assertEmpty();
+    }
+
+    /**
+     * @dev The $CHIP cost must scale with the ORDER, not sit at a fixed number.
+     *
+     *      Under exact-input the swap would spend whatever `wethNeeded` said and be
+     *      insensitive to how many tickets were being bought - so ten tickets would
+     *      cost about what one did. Ten costing ten times one is only true of an
+     *      exact-output swap sized from the ticket price.
+     */
+    function test_costScalesWithTicketCountAsExactOutputRequires() public {
+        IMegapot.Pick[] memory one = _picks(1);
+        vm.prank(buyer);
+        uint256 costOne = lottery.buyWithChip(one, buyer, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+
+        IMegapot.Pick[] memory ten = _picks(10);
+        vm.prank(buyer);
+        uint256 costTen = lottery.buyWithChip(ten, buyer, WETH_FOR_1 * 10, MAX_CHIP_1 * 10, block.timestamp + 300);
+
+        emit log_named_decimal_uint("1 ticket ", costOne, 18);
+        emit log_named_decimal_uint("10 tickets", costTen, 18);
+
+        // Ten tickets within 2% of ten times one. Exact-input would land near 1x.
+        assertApproxEqRel(costTen, costOne * 10, 0.02e18, "cost must scale with the order");
+        _assertEmpty();
+    }
+
+    // ---- 11. the change belongs to whoever paid ----------------------------
+
+    /**
+     * @dev Refund goes to the PAYER. This inverts what the contract used to do, and
+     *      the old behaviour was a real bug: gifting a ticket also gifted whatever
+     *      headroom the payer had left on `maxChipIn`, which is a ceiling and can be
+     *      most of it.
+     */
+    function test_changeGoesToThePayerAndOnlyTheTicketToTheRecipient() public {
+        uint256 payerChipBefore = IERC20(CHIP).balanceOf(buyer);
+        uint256 otherChipBefore = IERC20(CHIP).balanceOf(other);
+        IMegapot.Pick[] memory p = _picks(1);
+
+        vm.prank(buyer);
+        uint256 spent = lottery.buyWithChip(p, other, WETH_FOR_1, MAX_CHIP_1, block.timestamp + 300);
+
+        assertEq(IERC721Bal(TICKET_NFT).balanceOf(other), 1, "recipient gets the ticket");
+        assertEq(IERC20(CHIP).balanceOf(other), otherChipBefore, "recipient gets NO CHIP");
+        assertEq(payerChipBefore - IERC20(CHIP).balanceOf(buyer), spent, "payer is out exactly what was spent");
+        assertLt(spent, MAX_CHIP_1, "and the headroom came back to the payer");
+        _assertEmpty();
+    }
+
+    // ---- 12. token ordering is derived, not assumed -------------------------
+
+    function test_poolOrderingIsDerivedFromTheKey() public view {
+        // WETH (0x4200..) sorts below $CHIP (0x75Af..) on Base.
+        assertLt(uint160(WETH), uint160(CHIP), "fixture assumption");
+        assertEq(lottery.chipIsCurrency0(), false, "CHIP is currency1 in this pool");
+        assertEq(lottery.currency0(), WETH);
+        assertEq(lottery.currency1(), CHIP);
+    }
+
+    /// @dev A key naming some other pair must be refused at construction rather than
+    ///      producing a contract whose swap direction is quietly wrong.
+    function test_constructorRejectsAKeyThatIsNotChipWeth() public {
+        PoolKey memory wrong =
+            PoolKey({currency0: USDC, currency1: CHIP, fee: 8_388_608, tickSpacing: 200, hooks: HOOK});
+        vm.expectRevert(ChipLottery.KeyIsNotChipWeth.selector);
+        new ChipLottery(SAFE, CHIP, WETH, USDC, POOL_MANAGER, V3_ROUTER, JACKPOT, REFERRER, wrong, 500);
+    }
+}
 
 /**
  * A recipient that tries to buy again while its own ticket is being minted.

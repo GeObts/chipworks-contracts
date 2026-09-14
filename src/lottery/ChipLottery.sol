@@ -46,6 +46,19 @@ interface IMegapot {
  * test. A contract with an empty balance cannot be drained of user funds, which
  * removes most of the attack surface rather than defending it.
  *
+ * -- WHAT IT ASSUMES ABOUT ITS THREE TOKENS -------------------------------
+ *
+ * $CHIP, WETH and USDC are assumed to be PLAIN ERC-20s: a transfer of n moves
+ * exactly n, balances do not rebase, and no fee is skimmed in transit. All three
+ * satisfy that today.
+ *
+ * The contract does not merely assume it, though - it measures. The swap's
+ * reported cost is checked against the balance delta, and the buyer's spend is
+ * computed from balances rather than from what any pool said. A token that began
+ * taking a cut on transfer would trip {SwapAccountingMismatch} and revert, rather
+ * than quietly charging one number while another moved. It would stop working; it
+ * would not start lying.
+ *
  * -- THE PRICE IS THE MARKET'S, NOT OURS -----------------------------------
  *
  * No wrapper fee, no spread, no rounding in our favour. The swap is EXACT
@@ -85,9 +98,32 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
     /// @notice The v3 fee tier for the WETH -> USDC leg. 500 = 0.05%.
     uint24 public immutable v3Fee;
 
-    /// @notice $CHIP/WETH. Stored as the key, not a poolId, because the PoolManager
-    ///         takes the key.
-    PoolKey public poolKey;
+    /*
+      THE POOL KEY, FIELD BY FIELD.
+
+      A struct cannot be `immutable` in Solidity, so holding the key whole meant
+      holding it in STORAGE: five slots read on every swap, and mutable state in a
+      contract whose whole claim is that it has none. Split into immutables it costs
+      nothing to read and there is no writable storage left on this contract at all.
+
+      {_key} puts it back together when the PoolManager needs it.
+    */
+    address public immutable currency0;
+    address public immutable currency1;
+    uint24 public immutable poolFee;
+    int24 public immutable tickSpacing;
+    address public immutable hooks;
+
+    /**
+     * Which side of the pool $CHIP sits on, decided at construction.
+     *
+     * v4 orders a key by address, so which of $CHIP and WETH is `currency0` is an
+     * accident of their addresses. For the live pool WETH (0x4200..) sorts below
+     * $CHIP (0x75Af..) - but hardcoding that made the swap direction and the delta
+     * decode silently wrong for any other pair, including a future $CHIP redeploy.
+     * Derived once here and used everywhere instead.
+     */
+    bool public immutable chipIsCurrency0;
 
     /// @notice Megapot needs the batch facilitator above ten, and that mints a minute or
     ///         two later. A wrapper that silently took the slow path would report a
@@ -97,9 +133,18 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
     /// @notice Tag Megapot records on each ticket, so the source is attributable.
     bytes32 public constant SOURCE = bytes32("chipworks");
 
-    /// @dev TickMath.MAX_SQRT_PRICE - 1. Not a slippage bound: `maxChipIn` is the
-    ///      bound, and it is the buyer's own number.
+    /*
+      The price limits, which are direction-dependent.
+
+      A swap that moves the price DOWN (zeroForOne) must be limited from below, and
+      one that moves it UP from above. Neither is a slippage bound - `maxChipIn` is
+      the bound, and it is the buyer's own number. These only stop the swap running
+      off the end of the curve.
+    */
+    /// @dev TickMath.MAX_SQRT_PRICE - 1.
     uint160 internal constant MAX_SQRT_PRICE_LIMIT = 1461446703485210103287273052203988822378723970341;
+    /// @dev TickMath.MIN_SQRT_PRICE + 1.
+    uint160 internal constant MIN_SQRT_PRICE_LIMIT = 4295128740;
 
     /* ------------------------------------------------------------------ */
     /*                              ERRORS                                  */
@@ -113,6 +158,8 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
     error ChipCostAboveMax(uint256 needed, uint256 max);
     error NotPoolManager(address caller);
     error NothingSwapped();
+    error KeyIsNotChipWeth();
+    error SwapAccountingMismatch(uint256 reported, uint256 measured);
 
     event TicketsBought(
         address indexed buyer, address indexed recipient, uint256 count, uint256 chipSpent, uint256 usdcPaid
@@ -144,8 +191,43 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
         v3Router = IUniswapV3ExactOutput(v3Router_);
         jackpot = IMegapot(jackpot_);
         referrer = referrer_;
-        poolKey = poolKey_;
         v3Fee = v3Fee_;
+
+        currency0 = poolKey_.currency0;
+        currency1 = poolKey_.currency1;
+        poolFee = poolKey_.fee;
+        tickSpacing = poolKey_.tickSpacing;
+        hooks = poolKey_.hooks;
+
+        /*
+          The key must be exactly {$CHIP, WETH} in some order. Checked rather than
+          assumed, because everything downstream - the swap direction, which half of
+          the delta is which - is derived from this one boolean, and a key naming some
+          other pair would make all of it quietly wrong rather than loudly broken.
+        */
+        if (poolKey_.currency0 == chip_ && poolKey_.currency1 == weth_) {
+            chipIsCurrency0 = true;
+        } else if (poolKey_.currency0 == weth_ && poolKey_.currency1 == chip_) {
+            chipIsCurrency0 = false;
+        } else {
+            revert KeyIsNotChipWeth();
+        }
+    }
+
+    /// @dev The pool key, rebuilt from the immutables.
+    function _key() internal view returns (PoolKey memory) {
+        return PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: poolFee,
+            tickSpacing: tickSpacing,
+            hooks: hooks
+        });
+    }
+
+    /// @notice The pool this contract swaps through.
+    function poolKey() external view returns (PoolKey memory) {
+        return _key();
     }
 
     /* ------------------------------------------------------------------ */
@@ -187,8 +269,19 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
         // 1. Take the ceiling. Whatever is not spent goes back before this returns.
         chip.safeTransferFrom(msg.sender, address(this), maxChipIn);
 
-        // 2. $CHIP -> WETH, exact output. Reverts if it would cost more than maxChipIn.
-        _swapChipForWeth(wethNeeded, maxChipIn);
+        /*
+          2. $CHIP -> WETH, exact output. Reverts if it would cost more than maxChipIn.
+
+          The pool's reported cost is CHECKED AGAINST THE BALANCE, not trusted. They
+          should always agree; if they ever did not - a token that takes a cut on
+          transfer, a pool accounting for something this contract cannot see - the
+          buyer would be charged one number while a different one moved. Better to
+          stop than to report a spend that did not happen.
+        */
+        uint256 chipBefore = chip.balanceOf(address(this));
+        uint256 reported = _swapChipForWeth(wethNeeded, maxChipIn);
+        uint256 measured = chipBefore - chip.balanceOf(address(this));
+        if (reported != measured) revert SwapAccountingMismatch(reported, measured);
 
         // 3. WETH -> USDC, exact output. Spends at most the WETH we just bought.
         uint256 wethHeld = weth.balanceOf(address(this));
@@ -213,8 +306,8 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
         _buy(picks, recipient);
         usdc.forceApprove(address(jackpot), 0);
 
-        // 5. Nothing stays here. Ever.
-        chipSpent = _refundAll(recipient, maxChipIn);
+        // 5. Nothing stays here. Ever. The change goes to whoever PAID.
+        chipSpent = _refundAll(msg.sender, maxChipIn);
 
         emit TicketsBought(msg.sender, recipient, picks.length, chipSpent, usdcNeeded);
     }
@@ -230,30 +323,32 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
     }
 
     /**
-     * @dev Return every token this call did not consume, to the RECIPIENT.
+     * @dev Return every token this call did not consume, TO THE PAYER.
      *
-     *      To the recipient and not to msg.sender deliberately. The two are the same
-     *      address in every normal buy; where they differ, msg.sender is paying on
-     *      somebody's behalf and the change belongs with the ticket, not with the
-     *      payer.
+     *      This used to refund the recipient, on the reasoning that change belongs
+     *      with the ticket. That was wrong, and an audit was right to call it: the
+     *      payer's $CHIP is the payer's. Buying somebody a lottery ticket should cost
+     *      you a ticket, not a ticket plus whatever headroom you left on the approval
+     *      - and `maxChipIn` is a CEILING, so the leftover can be most of it.
+     *
+     *      Only the ticket goes to `recipient`. Every unspent token comes back here.
      *
      *      WETH dust is real and expected: `amountInMaximum` is a bound and the v3 leg
      *      usually spends less than it. It is returned as WETH rather than swapped
      *      back, which would cost more gas than the dust is worth.
      *
-     *      The $CHIP actually spent is MEASURED here - what went in, less what came
-     *      back - rather than taken from what the pool reported. The two should agree;
-     *      if they ever did not, the number the buyer sees would be the true one.
+     *      The $CHIP spent is MEASURED - what went in, less what came back - rather
+     *      than taken from what the pool reported.
      */
-    function _refundAll(address recipient, uint256 maxChipIn) internal returns (uint256 chipSpent) {
+    function _refundAll(address payer, uint256 maxChipIn) internal returns (uint256 chipSpent) {
         uint256 chipLeft = chip.balanceOf(address(this));
-        if (chipLeft != 0) chip.safeTransfer(recipient, chipLeft);
+        if (chipLeft != 0) chip.safeTransfer(payer, chipLeft);
 
         uint256 wethLeft = weth.balanceOf(address(this));
-        if (wethLeft != 0) weth.safeTransfer(recipient, wethLeft);
+        if (wethLeft != 0) weth.safeTransfer(payer, wethLeft);
 
         uint256 usdcLeft = usdc.balanceOf(address(this));
-        if (usdcLeft != 0) usdc.safeTransfer(recipient, usdcLeft);
+        if (usdcLeft != 0) usdc.safeTransfer(payer, usdcLeft);
 
         chipSpent = maxChipIn - chipLeft;
     }
@@ -274,32 +369,58 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
         (uint256 wethOut, uint256 maxChipIn) = abi.decode(data, (uint256, uint256));
 
         /*
-          currency0 is WETH and currency1 is $CHIP - v4 orders a key by address and
-          0x4200... sorts below 0x75Af.... Selling $CHIP for WETH is therefore
-          currency1 -> currency0, i.e. NOT zeroForOne.
+          DIRECTION, DERIVED - NOT ASSUMED.
 
-          amountSpecified is POSITIVE for exact output: "give me exactly this much
-          WETH and charge me what it costs".
+          Selling $CHIP for WETH means swapping whichever currency $CHIP is FOR the
+          other one. If $CHIP is currency0 that is zeroForOne; if it is currency1 it is
+          not. The price limit follows the direction: down-swaps are limited from
+          below, up-swaps from above.
+        */
+        bool zeroForOne = chipIsCurrency0;
+
+        /*
+          POSITIVE `amountSpecified` IS EXACT OUTPUT.
+
+          v4-core: "The desired input amount if negative (exactIn), or the desired
+          output amount if positive (exactOut)." So a positive WETH figure here means
+          "give me exactly this much WETH and charge me what it costs", which is what
+          buying a fixed-price ticket needs.
+
+          This is the opposite of the intuition that negative means "taking out", and
+          getting it backwards does NOT revert - it would read `wethOut` as a $CHIP
+          INPUT amount, spend 0.0004 $CHIP and buy a few hundred thousand wei of WETH.
+          Proved both directions against the live pool in
+          test/fork/V4SignConvention.t.sol, and {test_v4SwapIsExactOutput} asserts the
+          property here rather than inferring it from the end-to-end result.
         */
         int256 delta = poolManager.swap(
-            poolKey,
+            _key(),
             SwapParams({
-                zeroForOne: false,
+                zeroForOne: zeroForOne,
                 amountSpecified: int256(wethOut),
-                sqrtPriceLimitX96: MAX_SQRT_PRICE_LIMIT
+                sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE_LIMIT : MAX_SQRT_PRICE_LIMIT
             }),
             ""
         );
 
-        // Packed (int128 amount0, int128 amount1). amount1 is $CHIP and is negative:
-        // what this contract owes the pool. amount0 is the WETH it is owed.
-        int128 amount1 = int128(delta);
+        // Packed (int128 amount0, int128 amount1), caller's perspective:
+        // negative is owed TO the pool, positive is owed BY it.
         int128 amount0 = int128(delta >> 128);
+        int128 amount1 = int128(delta);
 
-        if (amount1 >= 0 || amount0 <= 0) revert NothingSwapped();
+        // $CHIP is the side being paid, WETH the side being received - whichever
+        // currency index each of them happens to occupy.
+        int128 chipDelta = chipIsCurrency0 ? amount0 : amount1;
+        int128 wethDelta = chipIsCurrency0 ? amount1 : amount0;
 
-        uint256 chipOwed = uint256(uint128(-amount1));
-        uint256 wethGot = uint256(uint128(amount0));
+        if (chipDelta >= 0 || wethDelta <= 0) revert NothingSwapped();
+
+        uint256 chipOwed = uint256(uint128(-chipDelta));
+        uint256 wethGot = uint256(uint128(wethDelta));
+
+        // Exact output means exactly this, and it is worth stating: the pool must
+        // have given the WETH that was asked for, not merely some WETH.
+        if (wethGot != wethOut) revert NothingSwapped();
 
         if (chipOwed > maxChipIn) revert ChipCostAboveMax(chipOwed, maxChipIn);
 
