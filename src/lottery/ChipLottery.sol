@@ -240,10 +240,11 @@ contract ChipLottery is Ownable, ReentrancyGuard, IUnlockCallback {
      * @param picks       One tuple per ticket: five balls and a bonusball.
      * @param recipient   Who receives the ticket NFTs. Must not be the referrer.
      * @param wethNeeded  WETH the USDC leg is expected to need, quoted off chain. A
-     *                    bound, not a promise: anything the leg does not spend goes
-     *                    to `recipient` in this call.
+     *                    bound, not a promise: anything the leg does not spend is
+     *                    returned to `msg.sender` in this call.
      * @param maxChipIn   The most $CHIP the buyer will part with. The real cost is
-     *                    whatever the pool charges; the rest is returned.
+     *                    whatever the pool charges; the rest goes back to
+     *                    `msg.sender`. Only the TICKET goes to `recipient`.
      * @param deadline    Unix seconds after which this call reverts.
      */
     function buyWithChip(
