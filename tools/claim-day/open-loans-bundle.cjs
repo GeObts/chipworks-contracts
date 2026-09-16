@@ -90,12 +90,31 @@ const hex = (n) => '0x' + BigInt(n).toString(16);
   const ok = txs.every((_, i) => calls[i].status === '0x1') && dec(1, 'maxPrincipal') === 0n && dec(2, 'maxPrincipal') === 0n && dec(3, 'borrowingPaused') === false && dec(4, 'feeSplitter').toLowerCase() === SAFE.toLowerCase();
   console.log(`\nALL FOUR SIMULATE AND LEAVE THE RIGHT STATE: ${ok}`);
 
-  const out = path.join(__dirname, 'open-nounloans.safe.json');
-  fs.writeFileSync(out, JSON.stringify({
-    version: '1.0', chainId: '8453', createdAt: Date.now(),
-    meta: { name: 'Open NounLoans (Based only)', description: `Based cap ${capChip.toLocaleString('en-US')} CHIP = 60% of a $${BASED_FLOOR_USD} floor at $CHIP $${chipUsd.toExponential(4)}; Lil zeroed; fees to the Safe; unpause` },
+  /*
+    THE META BLOCK IS NOT DECORATION.
+
+    Transaction Builder refuses a file whose meta lacks `txBuilderVersion` and
+    `createdFromSafeAddress` - it validates the whole object against its schema and
+    an import just fails, with nothing saying which field was missing. Every
+    safecalls-*.json in this repo that imported cleanly carries these three, so
+    they are copied exactly rather than trimmed to what looks necessary.
+  */
+  const bundle = {
+    version: '1.0',
+    chainId: '8453',
+    createdAt: Date.now(),
+    meta: {
+      name: 'open-nounloans',
+      description: `Based cap ${capChip.toLocaleString('en-US')} CHIP = ${LTV * 100}% of a $${BASED_FLOOR_USD} floor at $CHIP $${chipUsd.toExponential(4)}; Lil and Dark zeroed; fees to the Safe; unpause`,
+      txBuilderVersion: '1.16.5',
+      createdFromSafeAddress: SAFE,
+      createdFromOwnerAddress: '',
+    },
     transactions: txs.map((t) => ({ to: t.to, value: '0', data: t.data, contractMethod: null, contractInputsValues: null })),
-  }, null, 2));
+  };
+  // Written beside the other bundles, at the repo root, where the rest live.
+  const out = path.join(__dirname, '../../safecalls-open-nounloans.json');
+  fs.writeFileSync(out, JSON.stringify(bundle, null, 2));
   console.log(`Safe Transaction Builder file: ${out}`);
   console.log('\nraw calldata, in order:');
   txs.forEach((t, i) => console.log(`  ${i + 1}. ${t.label}\n     to ${t.to}\n     data ${t.data}`));

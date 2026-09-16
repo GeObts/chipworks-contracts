@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "chainId": "8453",
+  "createdAt": 1789582865572,
+  "meta": {
+    "name": "open-nounloans",
+    "description": "Based cap 8,792,951 CHIP = 60% of a $38 floor at $CHIP $2.5930e-6; Lil and Dark zeroed; fees to the Safe; unpause",
+    "txBuilderVersion": "1.16.5",
+    "createdFromSafeAddress": "0xe1096B727499a3f70FaD8bc0267F5e69d01373C7",
+    "createdFromOwnerAddress": ""
+  },
+  "transactions": [
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x43bbbe12000000000000000000000000bf57d0535e10e7033447174404b9bed3d9ef4c880000000000000000000000000000000000000000000745fad42eb8f89b7c0000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x43bbbe12000000000000000000000000e3c5ef27b80481518a2363406e354a93614155560000000000000000000000000000000000000000000000000000000000000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x43bbbe12000000000000000000000000d45e54b1a5e77d6e9469a4174d34f27d5d16270c0000000000000000000000000000000000000000000000000000000000000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0xb17fb9d6000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c7",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x123Bc476594A80B0d99Ca6510e87E249b1C5EC5f",
+      "value": "0",
+      "data": "0x1820a5f40000000000000000000000000000000000000000000000000000000000000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}
