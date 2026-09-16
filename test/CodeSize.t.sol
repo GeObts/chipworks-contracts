@@ -15,6 +15,8 @@ import {Furnace} from "../src/furnace/Furnace.sol";
 import {ChipActivation} from "../src/activation/ChipActivation.sol";
 import {NounLoans} from "../src/loans/NounLoans.sol";
 import {Anvil} from "../src/anvil/Anvil.sol";
+import {Box} from "../src/box/Box.sol";
+import {PrizeVault} from "../src/box/PrizeVault.sol";
 
 /// @title CodeSizeTest
 /// @notice Fails the build if any deployable contract grows past the budget.
@@ -114,6 +116,26 @@ contract CodeSizeTest is Test {
 
         // Outside the money path, but just as undeployable if it grows past the limit.
         _check("Furnace", address(_furnace()));
+
+        // ChipWorks Box is a separate product family. Still undeployable if it exceeds EIP-170.
+        address boxUsdc = _erc20();
+        address prizeVault = address(new PrizeVault(multisig, boxUsdc, 2_500));
+        _check("PrizeVault", prizeVault);
+        _check(
+            "Box",
+            address(
+                new Box(
+                    multisig,
+                    boxUsdc,
+                    _erc20(),
+                    0xe1096B727499a3f70FaD8bc0267F5e69d01373C7,
+                    prizeVault,
+                    _factory(),
+                    0,
+                    0
+                )
+            )
+        );
     }
 
     /// @dev Two valid recipes; amounts are irrelevant to runtime size.
