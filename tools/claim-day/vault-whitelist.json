@@ -1,0 +1,594 @@
+[
+  {
+    "id": "0x9103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d312434191836",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 1570264910.392586,
+    "utilPct": 90.08946236284459,
+    "supplyApy": 4.413433401069199,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0x663BECd10daE6C4A3Dcd89F1d76c1174199639B9",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x54cf9be57fdfa6457a660991907434ff9d295c465a603a50126ff647d50b7354",
+    "symbol": "USDe",
+    "isStock": false,
+    "lltvPct": 91.5,
+    "suppliedUsdc": 365195475.390162,
+    "utilPct": 90.07595234144942,
+    "supplyApy": 3.715916084211347,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+      "oracle": "0xF4b17C79492d68775e22e8Dd0a2Bb22854A39A47",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "915000000000000000"
+    }
+  },
+  {
+    "id": "0x8793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bda",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 92128513.072949,
+    "utilPct": 90.03884153914713,
+    "supplyApy": 4.362422545790713,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xFEa2D58cEfCb9fcb597723c6bAE66fFE4193aFE4",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xd4a903dc6d949519060c7707f9604fdc9772c046e05c2e3a8fce0bd7196e4109",
+    "symbol": "cbXRP",
+    "isStock": false,
+    "lltvPct": 62.5,
+    "suppliedUsdc": 52299469.829927,
+    "utilPct": 90.14848654324267,
+    "supplyApy": 5.773402269984947,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcb585250f852C6c6bf90434AB21A00f02833a4af",
+      "oracle": "0x031b2EFC8d70042Ac8d9f5c793c4149eC4b60fdE",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "625000000000000000"
+    }
+  },
+  {
+    "id": "0xfdfecf85a4dd90a7637ae2aaf28b35061166f0e62bfc714c565eed9f7e959783",
+    "symbol": "cbXRP",
+    "isStock": false,
+    "lltvPct": 77,
+    "suppliedUsdc": 631191.120757,
+    "utilPct": 79.50259957699743,
+    "supplyApy": 4.061087409811704,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcb585250f852C6c6bf90434AB21A00f02833a4af",
+      "oracle": "0x031b2EFC8d70042Ac8d9f5c793c4149eC4b60fdE",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "770000000000000000"
+    }
+  },
+  {
+    "id": "0x093d3fd53c2fc0f98c322cef878e4c4c28210071a8870738e1c3babd9f054fd1",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 899.778219,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xE51AA4dc6Cc74933B6B2Ce84Edf5fcda748aF0bb",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x0fd6fd91bbd4a1548290eb3f63b601dc17f834f8d710a828f1605f7a9f7dca3a",
+    "symbol": "USDe",
+    "isStock": false,
+    "lltvPct": 98,
+    "suppliedUsdc": 402.719243,
+    "utilPct": 25.506522666958826,
+    "supplyApy": 17.975863867070085,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+      "oracle": "0xc6B5C3cEB76e52FaE00BD0065f5190851D57b0C1",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "980000000000000000"
+    }
+  },
+  {
+    "id": "0x6304a8dca5c213d85a2c7e8bcf95a4c86cdd094f2f3b43d1828a93517cc06b8e",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 49.999994,
+    "utilPct": 54.501936540232386,
+    "supplyApy": 1.4634816955244827,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0x8B80bE7219E3dB5cb88fc34249D0fD4e6C87b776",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x6a0df2ea57d5eb19a8265ed43678a2fd9b66e3e0019a573ed82aa7ba748772f7",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 94.5,
+    "suppliedUsdc": 20.000098,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xF1930F371aED07CeEBFA127a39811072f4Aa8BD4",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "945000000000000000"
+    }
+  },
+  {
+    "id": "0x2ce8b29989e1bd924128fa5976ae6f135b11f3448fe287c5c88de946e97650a2",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 10.649315,
+    "utilPct": 0.18227463456569742,
+    "supplyApy": 0.0026398096241635155,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0x4846d4370fe1Ab623bC79eF3f8005679f809f615",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x9b1946de21f8908e6410ea3fb51cbac45043af51877db37ebe7320bd86e47bce",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 10.00101,
+    "utilPct": 0.0011798808320359643,
+    "supplyApy": 2.9501865731487825e-7,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0x3342AA698ba53fd9Ba78947Da3Ca28B2df682927",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xfdde1b6d1a2d091a7671f40e05282e0168726d9b991d30d67242f70d15bb2d69",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 8.324071,
+    "utilPct": 62.72623095117762,
+    "supplyApy": 0.048488454803209964,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0x0A8C46EcFa05B08F279498F98B0613AcD77FCF94",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x5c4b3fceb3705d3afccd3e0f41b76a9ec8b0e56a50c39cb7f8ed7bec4b7fdf34",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 77,
+    "suppliedUsdc": 6.876295,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xDD6Af1478Db5806279da77490D0252E308a7BbeA",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "770000000000000000"
+    }
+  },
+  {
+    "id": "0x2990655b2a05c2a067f10b94e28470cd86284f384c52ca71b9dec49f8fe8ef18",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 38.5,
+    "suppliedUsdc": 6.021024,
+    "utilPct": 0.16482246209282675,
+    "supplyApy": 0.0016549352513087505,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0x663BECd10daE6C4A3Dcd89F1d76c1174199639B9",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "385000000000000000"
+    }
+  },
+  {
+    "id": "0x76be79fa5b54fd096017161a7dab338e1d5a9d02d3fc50a14c62f7742d121b22",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 1.650283,
+    "utilPct": 72.25712196029409,
+    "supplyApy": 0.7228534089415822,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0x9Da62bD5Aa25C543044086E98a7b5795B2bA0109",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x7bce9c4060f3f14857af24391b72a887b59eb2e85599fa24cf44f92a215513e0",
+    "symbol": "USDe",
+    "isStock": false,
+    "lltvPct": 96.5,
+    "suppliedUsdc": 1.002939,
+    "utilPct": 90.92666652707692,
+    "supplyApy": 8.062057938954915,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+      "oracle": "0xF4b17C79492d68775e22e8Dd0a2Bb22854A39A47",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "965000000000000000"
+    }
+  },
+  {
+    "id": "0x9f52c2f3980901e7bf59502ea6de3315ab6ed8425bb6fb7c0da852f39d3aa04f",
+    "symbol": "cbXRP",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 1,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcb585250f852C6c6bf90434AB21A00f02833a4af",
+      "oracle": "0xef199045e4E2fDA4B3DE6C30748Ef0dBE9Aa724c",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x100a6574b7e85e2ad5768ed630d98120d9c8f52607a2eaf608a31da2cbee535e",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 38.5,
+    "suppliedUsdc": 0.593072,
+    "utilPct": 0.5009509806566488,
+    "supplyApy": 0.06844143923875534,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xFEa2D58cEfCb9fcb597723c6bAE66fFE4193aFE4",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "385000000000000000"
+    }
+  },
+  {
+    "id": "0xc807df67c8ed45d88676a1b38eec25ab75316a40bc7a57e83a17224cb85e832e",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 98,
+    "suppliedUsdc": 0.1,
+    "utilPct": 99.99900000000001,
+    "supplyApy": 19394.486181370474,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xd4818ABeCf207061371E51053447ed41f704EC64",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "980000000000000000"
+    }
+  },
+  {
+    "id": "0x68486e0c4730154382a13bca2cfe88b27e54f35818c1ad3d7839de632fa759a6",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 62.5,
+    "suppliedUsdc": 0.02,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xDD6Af1478Db5806279da77490D0252E308a7BbeA",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "625000000000000000"
+    }
+  },
+  {
+    "id": "0xf1f744a5694089274be272d2b62f58d1384a29da7c0b247c7c07c2806b85c22b",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 94.5,
+    "suppliedUsdc": 0.012506,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0xFEa2D58cEfCb9fcb597723c6bAE66fFE4193aFE4",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "945000000000000000"
+    }
+  },
+  {
+    "id": "0x6cc7e3bd72000f090f489fc62c17240e3523742cd2fda469cd240bca34c874e9",
+    "symbol": "WETH",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0x4200000000000000000000000000000000000006",
+      "oracle": "0x9384E63DECa255F7eE2Ae506Ae3d9ED48d59ac1f",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xf10437266b9dd52751bd6255e15cccd0cdf5c75b58c1a3e2621130c905cd8ed9",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 77,
+    "suppliedUsdc": 0.001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0x663BECd10daE6C4A3Dcd89F1d76c1174199639B9",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "770000000000000000"
+    }
+  },
+  {
+    "id": "0x9d2adc99c48bcb3f8801880b281dbd206d53ba8fc8af2dc34808a241b9642bbc",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.000001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0xC516Ec5cb08Ec6918eD55C06e9EFcc4749368FC7",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xd6fffb5fd03c45195959198f4acfdd48554a4a3e3caca0786a411adea793f89b",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.000001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0xef07e011370A626045433E3c9A90277d622cF51C",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x09af9914bb621bb53430f7ba236bc3757a190fc56e6a937dd523d5dee1869ba9",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.000001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0xaf4958F265d045073b3E52a1100038483df1d3cE",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xb4bb6b8462d870edb327eada8d60555eefeb88ffdc96414f652f86e6e43ea24f",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.000001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0xaaF50d567D1dFC1810b42095bC3783e0D390C753",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0x1d17dbd58ddff6f45242c1dc935ce1fa93509474e4c8000bdb1308899c275dd4",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.000001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0x3b0169F36aaBAA0A436E3989f57c248f1442cf82",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xec02615d75fedca7f74536446673338e7371bc39da9ba37bed15ac5dae3dc03a",
+    "symbol": "cbBTC",
+    "isStock": false,
+    "lltvPct": 86,
+    "suppliedUsdc": 0.000001,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "oracle": "0xE9e101Ff700DB43371E0Af3FB066Ff2b1ec51b14",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xae1a30486234bf7e7ac166c7c03d9bc5f2cd8a39be2c48e73c665ac7148c3c28",
+    "symbol": "AAPLc",
+    "isStock": true,
+    "lltvPct": 62.5,
+    "suppliedUsdc": 22472.891488,
+    "utilPct": 90.83641184268775,
+    "supplyApy": 5.925505016410805,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb200000000000000000000C2e324d24d7eEcd1fb",
+      "oracle": "0xEcC5c9bf18CB2CfC94C2f7EFf8BDd5837A60AB0e",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "625000000000000000"
+    }
+  },
+  {
+    "id": "0xa3913d896b7e9c0e0a84f1be27d376cf2065616101cb7c44674af8a154e684cc",
+    "symbol": "GOOGLc",
+    "isStock": true,
+    "lltvPct": 77,
+    "suppliedUsdc": 18311.683093,
+    "utilPct": 90.84372664989523,
+    "supplyApy": 5.925524154185453,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb2000000000000000000002D0BA3164cc74f58B7",
+      "oracle": "0x24DC11055aa5b2C5692E4B77d7285c4f0fd9Cf99",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "770000000000000000"
+    }
+  },
+  {
+    "id": "0xb4b42dd66cef25614b94510a910d54b2c148e7621d22b4271566724beda63d13",
+    "symbol": "NVDAc",
+    "isStock": true,
+    "lltvPct": 62.5,
+    "suppliedUsdc": 7860.717364,
+    "utilPct": 90.83605933602169,
+    "supplyApy": 5.925504169032913,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb20000000000000000000078ee7ce2fE4908108C",
+      "oracle": "0x4F698C04d01d9CebCDd9494c189aBdD6C5453f84",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "625000000000000000"
+    }
+  },
+  {
+    "id": "0x44b343b5087c0bd34207cb5c199f12030777bf6b8c0a128438246f1212f37ca5",
+    "symbol": "METAc",
+    "isStock": true,
+    "lltvPct": 62.5,
+    "suppliedUsdc": 5380.523902,
+    "utilPct": 90.83889894408279,
+    "supplyApy": 5.925512374589394,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb2000000000000000000008bC8786B856E61707C",
+      "oracle": "0x4752B27dFc1931eb9a5DFEFC7FBC9d0af9020dC7",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "625000000000000000"
+    }
+  },
+  {
+    "id": "0x91360eea2686ef7ce4966b4e82cf6ff712af02baf0f7211459780d9f5af1612a",
+    "symbol": "NVDAc",
+    "isStock": true,
+    "lltvPct": 77,
+    "suppliedUsdc": 98.000096,
+    "utilPct": 1.0205030819561647,
+    "supplyApy": 0.003470796829739369,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb20000000000000000000078ee7ce2fE4908108C",
+      "oracle": "0xE0AE3137a30393410B595E1C1d572a1449A969ea",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "770000000000000000"
+    }
+  },
+  {
+    "id": "0xce983b9ee6344e16ebbcc66812f23caafc63ae83fcc14fa29b66c7e69e9cecf6",
+    "symbol": "SPCXc",
+    "isStock": true,
+    "lltvPct": 62.5,
+    "suppliedUsdc": 12.280626,
+    "utilPct": 87.58050281801596,
+    "supplyApy": 3.571439525658953,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb2000000000000000000007b9fcbd005511aCBd5",
+      "oracle": "0x9079857a2b5FFfC3d87052b11b866a185B4A6483",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "625000000000000000"
+    }
+  },
+  {
+    "id": "0xa8835b567d1808f1fc9970d635b374d0f376b9f74e4b5840b2c74c5597cac88a",
+    "symbol": "METAc",
+    "isStock": true,
+    "lltvPct": 86,
+    "suppliedUsdc": 3,
+    "utilPct": 0,
+    "supplyApy": 0,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb2000000000000000000008bC8786B856E61707C",
+      "oracle": "0x4490497FB4f49061FB99F3E4De0bC4D182377cAA",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "860000000000000000"
+    }
+  },
+  {
+    "id": "0xfef5641f70e19a87e369304daa9ba823754f3db1e6481d757fcae0442cffe479",
+    "symbol": "NVDAc",
+    "isStock": true,
+    "lltvPct": 77,
+    "suppliedUsdc": 0.5,
+    "utilPct": 30,
+    "supplyApy": 0.39913286559293715,
+    "marketParams": {
+      "loanToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "collateralToken": "0xb20000000000000000000078ee7ce2fE4908108C",
+      "oracle": "0x1E2b20B4703F97710c2600eA73179c6CD1E00b02",
+      "irm": "0x46415998764C29aB2a25CbeA6254146D50D22687",
+      "lltv": "770000000000000000"
+    }
+  }
+]
