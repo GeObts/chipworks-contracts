@@ -121,7 +121,21 @@ contract CodeSizeTest is Test {
         address boxUsdc = _erc20();
         address prizeVault = address(new PrizeVault(multisig, boxUsdc, 2_500));
         _check("PrizeVault", prizeVault);
-        _check("Box", address(new Box(multisig, boxUsdc, _erc20(), multisig, prizeVault, _factory(), 0, 0)));
+        _check(
+            "Box",
+            address(
+                new Box(
+                    multisig,
+                    boxUsdc,
+                    _erc20(),
+                    0xe1096B727499a3f70FaD8bc0267F5e69d01373C7,
+                    prizeVault,
+                    _factory(),
+                    0,
+                    0
+                )
+            )
+        );
     }
 
     /// @dev Two valid recipes; amounts are irrelevant to runtime size.

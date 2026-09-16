@@ -22,7 +22,8 @@ contract BoxTestBase is Test {
     MockAggregatorV3 internal tslaFeed;
 
     address internal multisig = makeAddr("multisig");
-    address internal treasury = makeAddr("treasury");
+    /// @dev Goyabean's Safe — same address as {Box.DEFAULT_FEE_RECIPIENT}.
+    address internal treasury = 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7;
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
 

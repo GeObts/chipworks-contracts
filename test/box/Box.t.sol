@@ -307,6 +307,19 @@ contract BoxTest is BoxTestBase {
     /*                         TREASURY TIMELOCK                            */
     /* ------------------------------------------------------------------ */
 
+    function test_defaultFeeRecipientIsGoyabeanSafe() public view {
+        assertEq(boxes.DEFAULT_FEE_RECIPIENT(), 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7);
+        assertEq(boxes.treasury(), boxes.DEFAULT_FEE_RECIPIENT());
+        assertEq(boxes.feeRecipient(), boxes.treasury());
+    }
+
+    function test_constructorCanOverrideFeeRecipient() public {
+        Box other =
+            new Box(multisig, address(usdc), address(chip), alice, address(vault), address(entropy), CHIP1, CHIP5);
+        assertEq(other.feeRecipient(), alice);
+        assertTrue(other.feeRecipient() != other.DEFAULT_FEE_RECIPIENT());
+    }
+
     function test_treasuryChangeIsTimelocked() public {
         address nextSafe = makeAddr("nextSafe");
         vm.prank(multisig);
@@ -319,6 +332,7 @@ contract BoxTest is BoxTestBase {
         vm.prank(multisig);
         boxes.executeTreasury();
         assertEq(boxes.treasury(), nextSafe);
+        assertEq(boxes.feeRecipient(), nextSafe);
     }
 
     function test_tenAndTwentyFiveSkusStartDisabled() public view {

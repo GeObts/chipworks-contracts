@@ -30,6 +30,8 @@ interface IBox {
     function usdc() external view returns (address);
     function chip() external view returns (address);
     function treasury() external view returns (address);
+    /// @notice Alias of {treasury}. The 5% fee recipient.
+    function feeRecipient() external view returns (address);
     function vault() external view returns (address);
     function entropy() external view returns (address);
 

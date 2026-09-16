@@ -25,9 +25,9 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      Noun shelf, and a bug on the shelf cannot mint a Box.
 ///
 ///      FEE SPLIT IS STRUCTURAL. 5% (`FEE_BPS`) of every payment is forwarded to
-///      {treasury} (a Safe, once the address is known) and 95% to {vault} in the same
-///      token, in the same transaction. The Box holds no USDC or $CHIP between calls.
-///      {treasury} is constructor-set and retargeted only through a 48h timelock.
+///      {feeRecipient} / {treasury} and 95% to {vault} in the same token, in the same
+///      transaction. The Box holds no USDC or $CHIP between calls. Launch default is
+///      Goyabean's Safe ({DEFAULT_FEE_RECIPIENT}); retarget is 48h-timelocked.
 ///
 ///      RTP IS THE TABLE. {oddsTable} is the only source of prize weights. The UI MUST
 ///      render that table and {previewDraw}, not a parallel copy. Constructor table is
@@ -40,9 +40,9 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      revert: a failing {IPrizeVault.settle} is recorded as a shortfall and the box
 ///      is still burned. Basescan sees {BoxOpeningRequested} then {BoxOpened}.
 ///
-///      $CHIP AND THE SAFE. Both addresses are constructor arguments with TODOs until
-///      launch config is known. `chip == address(0)` or a SKU `chipPrice == 0` disables
-///      the CHIP path without affecting USDC.
+///      $CHIP is a constructor argument until the live token is known. `chip == address(0)`
+///      or a SKU `chipPrice == 0` disables the CHIP path without affecting USDC. The 5%
+///      recipient defaults to {DEFAULT_FEE_RECIPIENT} in scripts and tests.
 contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Strings for uint256;
@@ -64,6 +64,11 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     uint8 public constant SKU_FIVE_USD = 1;
     uint8 public constant SKU_TEN_USD = 2;
     uint8 public constant SKU_TWENTY_FIVE_USD = 3;
+
+    /// @notice Default 5% fee recipient: Goyabean's Safe on Base.
+    /// @dev Constructor still takes `treasury_` so a deploy can override. Scripts and tests
+    ///      pass this unless `BOX_TREASURY` is set. Changing a live recipient is {queueTreasury}.
+    address public constant DEFAULT_FEE_RECIPIENT = 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7;
 
     address public immutable override usdc;
     address public immutable override chip;
@@ -175,8 +180,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     /// @param usdc_          USDC on Base. 6 decimals.
     /// @param chip_          $CHIP token. TODO: pass the live address at deploy; `address(0)`
     ///                       disables {buyWithChip} until a new deployment.
-    /// @param treasury_      5% recipient. TODO: Chipworks Safe once known; a placeholder is
-    ///                       fine in tests. Retarget is 48h-timelocked.
+    /// @param treasury_      5% recipient ({feeRecipient}). Launch default is
+    ///                       {DEFAULT_FEE_RECIPIENT} (Goyabean's Safe). Retarget is 48h-timelocked.
     /// @param vault_         PrizeVault. 95% of payment and all B20 payouts.
     /// @param entropy_       Pyth Entropy v2. Base: 0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb.
     /// @param chipPrice1     $CHIP charged for the $1 SKU. 0 disables CHIP on that SKU.
@@ -296,6 +301,10 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     /* ------------------------------------------------------------------ */
     /*                               VIEWS                                  */
     /* ------------------------------------------------------------------ */
+
+    function feeRecipient() public view override returns (address) {
+        return treasury;
+    }
 
     function sku(uint8 id) public view override returns (Sku memory) {
         return _skus[id];

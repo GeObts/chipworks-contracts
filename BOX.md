@@ -25,10 +25,10 @@ Gifted-stock style vaults (the `0xaBB8…214B` pattern class: sealed NFT, invent
 
 Deploy order: `PrizeVault` → `Box(vault)` → `PrizeVault.setBox(box)` once. Same shape as `ChipClaims.setRounds`.
 
-Constructor TODOs, filled at deploy, not in bytecode:
+Constructor args filled at deploy, not in bytecode:
 
 - `$CHIP` token — pass the live address, or `address(0)` to disable `{buyWithChip}` until a new deployment.
-- Treasury / Safe — 5% recipient. A placeholder is fine in tests; retarget is 48h-timelocked with a 14-day grace window (same as Anvil).
+- 5% fee recipient (`treasury` / `feeRecipient`) — **default is Goyabean's Safe** `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). Constructor still takes the address so a deploy can override; a live change is 48h-timelocked with a 14-day grace window.
 
 USDC on Base is `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 dp). Pyth Entropy v2 on Base is `0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb`.
 
@@ -67,11 +67,11 @@ Call `previewDraw(randomNumber, skuId)` rather than reimplementing it. `test_eve
 Every buy, same transaction, same token (USDC or `$CHIP`):
 
 ```text
-user ──100%──► Box ──5%──► treasury (Safe)
+user ──100%──► Box ──5%──► feeRecipient / treasury (Goyabean's Safe by default)
                    └──95%──► PrizeVault
 ```
 
-`FEE_BPS = 500`. Rounding dust (`price - fee`) stays with the vault, not the treasury. Box holds no ERC-20 between calls.
+Default recipient: `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). `FEE_BPS = 500`. Rounding dust (`price - fee`) stays with the vault, not the treasury. Box holds no ERC-20 between calls. Override at construct with a different `treasury_`, or later via `{queueTreasury}` / `{executeTreasury}`.
 
 `$CHIP` in the vault is **working capital** to acquire B20 off-cycle. It is not priced into `{inventoryUsd}` and is not a prize asset. A CHIP-funded vault with no B20/USDC will pay a shortfall (see below) rather than pretend.
 
@@ -119,6 +119,7 @@ Surplus withdraw of USDC / registered B20: 48h queue, then leftover `{inventoryU
 - `buyWithUsdc(skuId, to)` / `buyWithChip(skuId, to)` (and the batch variants)
 - `quoteOpenFee()` then `open{value}(tokenId)`
 - `oddsTable()`, `rtpBps()`, `sku(id)`, `previewDraw`, `boxInfo`, `sealedSupply`
+- `feeRecipient()` / `treasury()` — 5% recipient; default Goyabean's Safe
 - `PrizeVault.inventoryUsd()`, `prizeCapUsd()`, `quoteTokenAmount(token, prizeUsd)`
 
 Metadata: `setBaseURI` + `tokenURI = baseURI + tokenId`. Index `Transfer` events for a wallet's boxes; the collection is not enumerable.
@@ -129,10 +130,16 @@ Metadata: `setBaseURI` + `tokenURI = baseURI + tokenId`. Index `Transfer` events
 
 ```bash
 forge test --match-path 'test/box/*' -vv
-forge test --match-contract BoxTest --match-contract BoxVaultTest
-forge test --match-contract CodeSizeTest --match-test test_everyDeployableContractIsWithinBudget
 ```
 
-No RPC required. The suite covers odds math (including the 10,000-roll histogram), 5/95 fee split on both USDC and CHIP, Entropy fee pass-through and callback mock, gift/lock, vault cap, empty/thin/blacklisted stock, USDC fallback, CHIP-buy shortfall, and surplus-withdraw accounting.
+No RPC required. The suite covers odds math (including the 10,000-roll histogram), 5/95 fee split on both USDC and CHIP (recipient = Goyabean's Safe), Entropy fee pass-through and callback mock, gift/lock, vault cap, empty/thin/blacklisted stock, USDC fallback, CHIP-buy shortfall, and surplus-withdraw accounting.
+
+Dry-run the isolated Box deploy script (does **not** touch Anvil / rounds; does not broadcast unless you pass `--broadcast`):
+
+```bash
+MULTISIG=0x... forge script script/box/DeployBox.s.sol:DeployBox --rpc-url $BASE_RPC_URL -vvv
+```
+
+`BOX_TREASURY` overrides the 5% recipient; otherwise it is `Box.DEFAULT_FEE_RECIPIENT`. After a real broadcast the Safe must call `PrizeVault.setBox(box)` once.
 
 Do not mainnet-deploy from this PR.
