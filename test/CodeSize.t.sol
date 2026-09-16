@@ -119,7 +119,7 @@ contract CodeSizeTest is Test {
 
         // ChipWorks Box is a separate product family. Still undeployable if it exceeds EIP-170.
         address boxUsdc = _erc20();
-        address prizeVault = address(new PrizeVault(multisig, boxUsdc, 2_500));
+        address prizeVault = address(new PrizeVault(multisig, boxUsdc, address(0), 2_500));
         _check("PrizeVault", prizeVault);
         _check(
             "Box",

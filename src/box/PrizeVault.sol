@@ -10,6 +10,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
+import {IBox} from "../interfaces/IBox.sol";
 import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 
 /// @title PrizeVault
@@ -28,8 +29,11 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///
 ///      NO BLIND OWNER DRAIN. Gifted-stock style "owner withdraws the inventory" is
 ///      refused. Prize assets (USDC and registered B20) leave through {settle} or through
-///      a 48-hour surplus withdraw that still leaves enough inventory to cover outstanding
-///      Box EV. Stray tokens that are not prize assets can be rescued immediately.
+///      a 48-hour surplus withdraw that still leaves enough **USDC** to cover outstanding
+///      Box EV × 110%. Stock MTM is ignored for that floor — feeds are owner-settable
+///      (H-02). Stray tokens that are not prize assets can be rescued immediately, except
+///      $CHIP working capital (H-01). Surplus fail-closes if the Box liability query
+///      reverts or Box is unwired (H-03).
 ///
 ///      FEEDS ARE BEST-EFFORT IN THE CALLBACK. B20 USD feeds hold last close over the
 ///      weekend (ASSUMPTIONS A-13). A reverting or non-positive feed skips that stock
@@ -47,6 +51,9 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     /// @notice Quote token prizes can fall back to. USDC on Base, 6 decimals.
     address public immutable override usdc;
+
+    /// @notice $CHIP working capital. `address(0)` disables CHIP protection until Box is wired.
+    address public immutable override chip;
 
     /// @notice Cached USDC decimals. Expected 6; stored so we never assume a literal.
     uint8 public immutable usdcDecimals;
@@ -122,6 +129,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     error DecimalsMismatch(address token, uint8 provided, uint8 actual);
     error ProtectedAsset(address token);
     error InsufficientSurplus(uint256 inventoryUsd, uint256 requiredUsd);
+    error BoxUnset();
     error NothingQueued();
     error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
     error TimelockExpired(uint64 nowTs, uint64 expiredAt);
@@ -129,11 +137,13 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     /// @param multisig      Owner. Two-step.
     /// @param usdc_         USDC on Base. 6 decimals.
+    /// @param chip_         $CHIP token. `address(0)` if CHIP buys are disabled at deploy.
     /// @param maxPrizeBps_  Single-prize cap vs inventory. Launch at 2_500 (25%).
-    constructor(address multisig, address usdc_, uint32 maxPrizeBps_) Ownable(multisig) {
+    constructor(address multisig, address usdc_, address chip_, uint32 maxPrizeBps_) Ownable(multisig) {
         if (multisig == address(0) || usdc_ == address(0)) revert ZeroAddress();
         if (maxPrizeBps_ == 0 || maxPrizeBps_ > MAX_PRIZE_BPS_CEILING) revert BadConfig();
         usdc = usdc_;
+        chip = chip_;
         usdcDecimals = IERC20Metadata(usdc_).decimals();
         maxPrizeBps = maxPrizeBps_;
     }
@@ -383,9 +393,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /* ------------------------------------------------------------------ */
 
     /// @notice Queue a withdraw of prize assets. 48h notice. Execution still checks that
-    ///         remaining inventory covers outstanding Box EV with a 10% buffer.
+    ///         remaining **USDC** covers outstanding Box EV with a 10% buffer (H-02).
     /// @dev This is the lever that Gifted-style vaults usually make instant and unbounded.
-    ///      It is neither. `{Box.outstandingLiabilityUsd}` is the floor.
+    ///      It is neither. `{Box.outstandingLiabilityUsd}` is the floor. A failed liability
+    ///      query reverts the withdraw (H-03); stock feeds cannot pad the floor (H-02).
     function queueSurplusWithdraw(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0) || token == address(0) || amount == 0) revert BadConfig();
         if (token != usdc && !_stocks[token].registered) revert NotRegistered(token);
@@ -403,7 +414,9 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
         uint256 required = _requiredInventoryUsd();
         IERC20(p.token).safeTransfer(p.to, p.amount);
-        uint256 left = inventoryUsd();
+        // H-02: leftover floor is USDC only. Owner-settable stock feeds cannot inflate
+        // inventoryUsd to justify draining the quote token.
+        uint256 left = _usdcToUsd(IERC20(usdc).balanceOf(address(this)));
         if (left < required) revert InsufficientSurplus(left, required);
         emit SurplusWithdrawn(p.token, p.to, p.amount);
     }
@@ -414,10 +427,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         emit SurplusCancelled();
     }
 
-    /// @notice Rescue a token that is NOT USDC and NOT a registered prize stock.
+    /// @notice Rescue a token that is NOT USDC, NOT $CHIP working capital, and NOT a registered prize stock.
     function rescue(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0) || token == address(0)) revert ZeroAddress();
-        if (token == usdc || _stocks[token].registered) revert ProtectedAsset(token);
+        if (_isProtectedAsset(token)) revert ProtectedAsset(token);
         IERC20(token).safeTransfer(to, amount);
         emit Rescued(token, to, amount);
     }
@@ -432,11 +445,24 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     function _requiredInventoryUsd() internal view returns (uint256) {
         address box_ = box;
-        if (box_ == address(0)) return 0;
-        (bool ok, bytes memory ret) = box_.staticcall(abi.encodeWithSignature("outstandingLiabilityUsd()"));
-        if (!ok || ret.length < 32) return 0;
-        uint256 liability = abi.decode(ret, (uint256));
+        if (box_ == address(0)) revert BoxUnset();
+        // H-03: fail closed. A reverting or empty liability call must not zero the floor.
+        uint256 liability = IBox(box_).outstandingLiabilityUsd();
         return liability * SURPLUS_BUFFER_BPS / BPS;
+    }
+
+    /// @dev H-01: $CHIP in the vault is working capital, not a stray token. Protected even
+    ///      if the constructor was deployed with `chip == 0` and Box was later wired with CHIP.
+    function _isProtectedAsset(address token) internal view returns (bool) {
+        if (token == usdc) return true;
+        if (chip != address(0) && token == chip) return true;
+        if (_stocks[token].registered) return true;
+        address box_ = box;
+        if (box_ != address(0)) {
+            address boxChip = IBox(box_).chip();
+            if (boxChip != address(0) && token == boxChip) return true;
+        }
+        return false;
     }
 
     function _canPayStock(address token, uint256 prizeUsd) internal returns (bool ok, uint256 amount) {

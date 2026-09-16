@@ -35,10 +35,17 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      empty stock, cap and price move. Changing the table is timelocked.
 ///
 ///      RANDOMNESS IS PYTH ENTROPY V2. {open} is payable. It reads {getFeeV2} for the
-///      configured callback gas limit, forwards that fee, and refunds any excess ETH.
+///      configured callback gas limit, forwards that exact fee, and refunds any excess
+///      ETH (M-08). {open}/{retryOpen} revert unless {IPrizeVault.box} == this (H-04).
 ///      The Entropy contract later calls {_entropyCallback}. That callback must not
-///      revert: a failing {IPrizeVault.settle} is recorded as a shortfall and the box
-///      is still burned. Basescan sees {BoxOpeningRequested} then {BoxOpened}.
+///      revert: a failing {IPrizeVault.settle} is recorded as {SettleFailed} and the
+///      NFT is left intact (no silent burn). Basescan sees {BoxOpeningRequested} then
+///      {BoxOpened} only after a successful settle call (shortfall-with-payout still
+///      completes).
+///
+///      MINT TERMS ARE SNAPSHOTTED (H-05). Each box stores face USDC, odds version and
+///      EV at mint. {executeSku}/{executeOdds} cannot rewrite a sealed ticket. Retiring
+///      a SKU ({exists: false}) while {sealedSupply} > 0 reverts (H-03).
 ///
 ///      $CHIP is a constructor argument until the live token is known. `chip == address(0)`
 ///      or a SKU `chipPrice == 0` disables the CHIP path without affecting USDC. The 5%
@@ -86,8 +93,18 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     mapping(uint256 => BoxView) internal _info;
     mapping(uint64 => uint256) internal _tokenIdOfSequence;
 
-    PrizeTier[MAX_TIERS] internal _tiers;
-    uint8 internal _tierCount;
+    /// @notice USD EV of every sealed + opening box, snapshotted at mint (6 decimals).
+    uint256 public override outstandingLiabilityUsd;
+
+    /// @notice Current odds-table version. Mint snapshots this onto each box (H-05).
+    uint64 public oddsVersion;
+
+    struct OddsSnapshot {
+        uint8 count;
+        PrizeTier[MAX_TIERS] tiers;
+    }
+
+    mapping(uint64 => OddsSnapshot) internal _oddsSnapshots;
 
     struct PendingAddress {
         bool queued;
@@ -143,6 +160,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         bool emptyStockFallback
     );
     event OrphanCallback(uint64 indexed sequence, address indexed provider);
+    /// @notice Callback ran, vault.settle reverted. NFT is still owned; retry after {REVEAL_TIMEOUT}.
+    event SettleFailed(address indexed opener, uint256 indexed tokenId, uint64 indexed sequence, uint256 prizeUsd);
     event PausedSet(bool paused);
     event SkuPaused(uint8 indexed skuId, bool paused);
     event TreasuryQueued(address indexed treasury, uint64 executableAt);
@@ -171,6 +190,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     error Underpaid(uint256 sent, uint256 required);
     error RefundFailed();
     error OnlyEntropy();
+    error VaultNotWired();
+    error SealedSupplyOutstanding(uint8 skuId);
     error BatchTooLarge(uint256 n);
     error NothingQueued();
     error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
@@ -214,7 +235,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         emit TreasurySet(address(0), treasury_);
         emit SkuExecuted(SKU_ONE_USD, 1_000_000, chipPrice1);
         emit SkuExecuted(SKU_FIVE_USD, 5_000_000, chipPrice5);
-        emit OddsExecuted(_tierCount, rtpBps());
+        emit OddsExecuted(_oddsSnapshots[0].count, rtpBps());
     }
 
     /* ------------------------------------------------------------------ */
@@ -311,38 +332,27 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     }
 
     function oddsTierCount() public view override returns (uint256) {
-        return _tierCount;
+        return _oddsSnapshots[oddsVersion].count;
     }
 
     function oddsTable() public view override returns (PrizeTier[] memory tiers) {
-        uint256 n = _tierCount;
+        OddsSnapshot storage snap = _oddsSnapshots[oddsVersion];
+        uint256 n = snap.count;
         tiers = new PrizeTier[](n);
         for (uint256 i; i < n; ++i) {
-            tiers[i] = _tiers[i];
+            tiers[i] = snap.tiers[i];
         }
     }
 
     /// @notice Player RTP of the published table, in bps. Launch table is 9100 (91.00%).
-    function rtpBps() public view override returns (uint256 acc) {
-        uint256 n = _tierCount;
-        for (uint256 i; i < n; ++i) {
-            acc += uint256(_tiers[i].weight) * _tiers[i].prizeBps;
-        }
-        acc /= WEIGHT_DENOM;
+    function rtpBps() public view override returns (uint256) {
+        return _rtpBpsAt(oddsVersion);
     }
 
     function expectedValueUsd(uint8 skuId) public view override returns (uint256) {
         Sku memory s = _skus[skuId];
         if (!s.exists) revert UnknownSku(skuId);
         return uint256(s.usdcPrice) * rtpBps() / WEIGHT_DENOM;
-    }
-
-    function outstandingLiabilityUsd() public view override returns (uint256 usd) {
-        for (uint8 i; i < MAX_SKUS; ++i) {
-            uint256 n = sealedSupply[i];
-            if (n == 0) continue;
-            usd += n * expectedValueUsd(i);
-        }
     }
 
     function quoteOpenFee() public view override returns (uint128) {
@@ -449,6 +459,9 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         PendingSku memory p = _pendingSku;
         if (!p.queued) revert NothingQueued();
         _requireInWindow(p.executableAt);
+        // H-03: retiring a SKU while tickets remain would make live EV revert and, before
+        // mint snapshots, zero the surplus floor / pay a $0 prize.
+        if (!p.sku.exists && sealedSupply[p.id] != 0) revert SealedSupplyOutstanding(p.id);
         _skus[p.id] = p.sku;
         emit SkuExecuted(p.id, p.sku.usdcPrice, p.sku.chipPrice);
         delete _pendingSku;
@@ -485,12 +498,15 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         PendingOdds storage q = _pendingOdds;
         if (!q.queued) revert NothingQueued();
         _requireInWindow(q.executableAt);
-        _tierCount = q.count;
+        uint64 v = oddsVersion + 1;
+        OddsSnapshot storage snap = _oddsSnapshots[v];
+        snap.count = q.count;
         for (uint256 i; i < q.count; ++i) {
-            _tiers[i] = q.tiers[i];
+            snap.tiers[i] = q.tiers[i];
         }
+        oddsVersion = v;
         delete _pendingOdds;
-        emit OddsExecuted(_tierCount, rtpBps());
+        emit OddsExecuted(snap.count, rtpBps());
     }
 
     function cancelOdds() external onlyOwner {
@@ -520,9 +536,22 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         IERC20(token).safeTransfer(treasury, fee);
         IERC20(token).safeTransfer(vault, toVault);
 
+        uint96 faceUsd = _skus[skuId].usdcPrice;
+        uint64 ver = oddsVersion;
+        uint256 ev = uint256(faceUsd) * _rtpBpsAt(ver) / WEIGHT_DENOM;
+        outstandingLiabilityUsd += ev;
+
         tokenId = nextId++;
-        _info[tokenId] =
-            BoxView({skuId: skuId, state: STATE_SEALED, opener: address(0), sequence: 0, openingStartedAt: 0});
+        _info[tokenId] = BoxView({
+            skuId: skuId,
+            state: STATE_SEALED,
+            opener: address(0),
+            sequence: 0,
+            openingStartedAt: 0,
+            faceUsd: faceUsd,
+            oddsVersion: ver,
+            mintEvUsd: ev
+        });
         unchecked {
             ++sealedSupply[skuId];
         }
@@ -531,6 +560,9 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     }
 
     function _requestEntropy(uint256 tokenId, BoxView storage b) internal {
+        // H-04: do not request Entropy (and later silently burn) if this Box cannot settle.
+        if (IPrizeVault(vault).box() != address(this)) revert VaultNotWired();
+
         uint32 gasLimit = callbackGasLimit;
         uint128 fee = IEntropyV2(entropy).getFeeV2(gasLimit);
         if (msg.value < fee) revert Underpaid(msg.value, fee);
@@ -565,18 +597,24 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
 
         address opener = b.opener;
         uint8 skuId = b.skuId;
-        uint96 price = _skus[skuId].usdcPrice;
-        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = _draw(randomNumber, price);
+        // H-05: mint snapshot, not live SKU price or live odds table.
+        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = _drawAt(randomNumber, b.faceUsd, b.oddsVersion);
 
         IPrizeVault.Payout memory payout;
+        bool settled;
         try IPrizeVault(vault).settle(opener, prizeUsd, randomNumber) returns (IPrizeVault.Payout memory paid) {
             payout = paid;
-        } catch {
-            payout.requestedUsd = prizeUsd;
-            payout.shortfall = true;
+            settled = true;
+        } catch {}
+
+        if (!settled) {
+            // H-04: callback must not revert, but it also must not silently burn the NFT.
+            emit SettleFailed(opener, tokenId, sequence, prizeUsd);
+            return;
         }
 
         delete _tokenIdOfSequence[sequence];
+        outstandingLiabilityUsd -= b.mintEvUsd;
         delete _info[tokenId];
         if (sealedSupply[skuId] != 0) {
             unchecked {
@@ -622,31 +660,50 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         view
         returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd)
     {
+        return _drawAt(randomNumber, usdcPrice, oddsVersion);
+    }
+
+    function _drawAt(bytes32 randomNumber, uint256 usdcPrice, uint64 version)
+        internal
+        view
+        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd)
+    {
+        OddsSnapshot storage snap = _oddsSnapshots[version];
         uint256 roll = uint256(randomNumber) % WEIGHT_DENOM;
         uint256 acc;
-        uint256 n = _tierCount;
+        uint256 n = snap.count;
         for (uint256 i; i < n; ++i) {
-            PrizeTier memory t = _tiers[i];
+            PrizeTier memory t = snap.tiers[i];
             acc += t.weight;
             if (roll < acc) {
                 prizeUsd = usdcPrice * t.prizeBps / WEIGHT_DENOM;
                 return (uint8(i), t.weight, t.prizeBps, prizeUsd);
             }
         }
-        PrizeTier memory last = _tiers[n - 1];
+        PrizeTier memory last = snap.tiers[n - 1];
         prizeUsd = usdcPrice * last.prizeBps / WEIGHT_DENOM;
         return (uint8(n - 1), last.weight, last.prizeBps, prizeUsd);
     }
 
+    function _rtpBpsAt(uint64 version) internal view returns (uint256 acc) {
+        OddsSnapshot storage snap = _oddsSnapshots[version];
+        uint256 n = snap.count;
+        for (uint256 i; i < n; ++i) {
+            acc += uint256(snap.tiers[i].weight) * snap.tiers[i].prizeBps;
+        }
+        acc /= WEIGHT_DENOM;
+    }
+
     function _loadLaunchOdds() internal {
         // weight, prizeBps. EV = sum(w * prizeBps) / 10_000 = 9_100 bps = 91.00% RTP.
-        _tiers[0] = PrizeTier({weight: 4_500, prizeBps: 2_000}); // 45% → 0.20×
-        _tiers[1] = PrizeTier({weight: 3_000, prizeBps: 5_000}); // 30% → 0.50×
-        _tiers[2] = PrizeTier({weight: 1_500, prizeBps: 10_000}); // 15% → 1.00×
-        _tiers[3] = PrizeTier({weight: 700, prizeBps: 20_000}); //  7% → 2.00×
-        _tiers[4] = PrizeTier({weight: 250, prizeBps: 80_000}); // 2.5% → 8.00×
-        _tiers[5] = PrizeTier({weight: 50, prizeBps: 360_000}); // 0.5% → 36.00×
-        _tierCount = 6;
+        OddsSnapshot storage s = _oddsSnapshots[0];
+        s.tiers[0] = PrizeTier({weight: 4_500, prizeBps: 2_000}); // 45% → 0.20×
+        s.tiers[1] = PrizeTier({weight: 3_000, prizeBps: 5_000}); // 30% → 0.50×
+        s.tiers[2] = PrizeTier({weight: 1_500, prizeBps: 10_000}); // 15% → 1.00×
+        s.tiers[3] = PrizeTier({weight: 700, prizeBps: 20_000}); //  7% → 2.00×
+        s.tiers[4] = PrizeTier({weight: 250, prizeBps: 80_000}); // 2.5% → 8.00×
+        s.tiers[5] = PrizeTier({weight: 50, prizeBps: 360_000}); // 0.5% → 36.00×
+        s.count = 6;
     }
 
     function _update(address to, uint256 tokenId, address auth) internal override returns (address from) {

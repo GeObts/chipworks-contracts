@@ -47,7 +47,7 @@ contract BoxTestBase is Test {
         tslaFeed = new MockAggregatorV3(8, int256(TSLA_PRICE), "TSLA");
         entropy = new MockEntropyV2();
 
-        vault = new PrizeVault(multisig, address(usdc), 2_500);
+        vault = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
         boxes =
             new Box(multisig, address(usdc), address(chip), treasury, address(vault), address(entropy), CHIP1, CHIP5);
 

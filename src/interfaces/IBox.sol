@@ -25,6 +25,12 @@ interface IBox {
         address opener;
         uint64 sequence;
         uint64 openingStartedAt;
+        /// @notice Face USDC price snapshotted at mint. Open/payout ignore later {executeSku}.
+        uint96 faceUsd;
+        /// @notice Odds-table version snapshotted at mint. Open/payout ignore later {executeOdds}.
+        uint64 oddsVersion;
+        /// @notice EV (USDC, 6 dp) snapshotted at mint. Surplus liability uses this, not live RTP.
+        uint256 mintEvUsd;
     }
 
     function usdc() external view returns (address);

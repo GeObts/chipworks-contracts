@@ -17,7 +17,9 @@ import {PrizeVault} from "../../src/box/PrizeVault.sol";
 ///        BOX_ENTROPY       default Pyth Entropy v2 on Base
 ///        BOX_TREASURY      5% recipient; **defaults to Goyabean's Safe**
 ///                          (`Box.DEFAULT_FEE_RECIPIENT`)
-///        CHIP              $CHIP token; default `address(0)` disables CHIP buys
+///        CHIP              $CHIP token; default `address(0)` disables CHIP buys.
+///                          Keep CHIP=0 until the vault rescue path is live (H-01).
+///                          PrizeVault and Box both receive this address.
 ///        BOX_CHIP_PRICE_1 / BOX_CHIP_PRICE_5   18-decimal CHIP prices; 0 = CHIP path off
 ///        BOX_MAX_PRIZE_BPS default 2500 (25% of vault inventory)
 ///
@@ -41,7 +43,7 @@ contract DeployBox is Script {
         require(treasury != address(0), "BOX_TREASURY unset");
 
         vm.startBroadcast();
-        PrizeVault v = new PrizeVault(multisig, usdc, maxPrizeBps);
+        PrizeVault v = new PrizeVault(multisig, usdc, chip, maxPrizeBps);
         Box b = new Box(multisig, usdc, chip, treasury, address(v), entropy, chipPrice1, chipPrice5);
         vm.stopBroadcast();
 
