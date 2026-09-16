@@ -1,0 +1,475 @@
+CHIPWORKS x MORPHO AUDIT PACKAGE - PASTE-2-borrow-helper-tests.txt
+source commit a0d533d (chipworks-contracts). Files in this paste: 3.
+Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
+marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
+
+  1. borrow-helper/ChipBorrowHelper.t.sol  (271 lines, sha256 9b89c2ea5c2b032c3d5c842ebaaaff54ae12fe2f23a109b042b6424a547bd93a)
+  2. borrow-helper/borrow-helper-sim.cjs  (162 lines, sha256 b4369ce5db2d14a2065f3a0c18c97965298a7d1ac8a23d48c9c962a3afba56e2)
+  3. borrow-helper/borrow-helper-sim.out.txt  (23 lines, sha256 8b12b738e999a97eea758926a1e4d91a3c3893fef463a3b15f1e9597201df789)
+
+===== BEGIN FILE borrow-helper/ChipBorrowHelper.t.sol | 271 lines | sha256 9b89c2ea5c2b032c3d5c842ebaaaff54ae12fe2f23a109b042b6424a547bd93a =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ChipBorrowHelper, MarketParams, IMorphoBlue} from "../../src/morpho/ChipBorrowHelper.sol";
+
+interface IMorphoAuth {
+    function setAuthorization(address authorized, bool newIsAuthorized) external;
+}
+
+/**
+ * THE BORROW HELPER, AGAINST THE LIVE MORPHO SINGLETON.
+ *
+ * The stock markets cannot be exercised here: B20 stocks are node precompiles that
+ * do not execute in a forge fork (test/fork/B20Probe.t.sol). The helper is
+ * collateral-agnostic, so every rule is proven on the live cbBTC/USDC market, and
+ * the B20 leg - including whether a stock's transfer policy lets the helper hold it
+ * for one call - is proven separately under eth_simulateV1 by
+ * tools/claim-day/borrow-helper-sim.cjs.
+ */
+contract ChipBorrowHelperForkTest is Test {
+    address constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
+    address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    address constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+    address constant SAFE = 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7;
+    address constant IRM = 0x46415998764C29aB2a25CbeA6254146D50D22687;
+
+    ChipBorrowHelper helper;
+    MarketParams p;
+    bytes32 id;
+
+    address user = makeAddr("user");
+    address stranger = makeAddr("stranger");
+
+    uint256 constant COLLATERAL = 1e8; // 1 cbBTC
+
+    function setUp() public {
+        vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+        p = MarketParams({
+            loanToken: USDC,
+            collateralToken: CBBTC,
+            oracle: 0x663BECd10daE6C4A3Dcd89F1d76c1174199639B9,
+            irm: IRM,
+            lltv: 0.86e18
+        });
+        helper = new ChipBorrowHelper(MORPHO, SAFE, SAFE);
+        id = helper.marketId(p);
+        vm.prank(SAFE);
+        helper.setListed(p, true);
+
+        _fundCollateral(user, COLLATERAL);
+    }
+
+    function _fundCollateral(address who, uint256 amount) internal {
+        // Morpho holds every cbBTC borrower's collateral: the deepest honest source there is.
+        vm.prank(MORPHO);
+        IERC20(CBBTC).transfer(who, amount);
+    }
+
+    function _authorizeAndApprove(address who) internal {
+        vm.startPrank(who);
+        IMorphoAuth(MORPHO).setAuthorization(address(helper), true);
+        IERC20(CBBTC).approve(address(helper), type(uint256).max);
+        IERC20(USDC).approve(address(helper), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function _assertHelperEmpty() internal view {
+        assertEq(IERC20(USDC).balanceOf(address(helper)), 0, "helper kept USDC");
+        assertEq(IERC20(CBBTC).balanceOf(address(helper)), 0, "helper kept collateral");
+        (uint256 s, uint128 b, uint128 c) = IMorphoBlue(MORPHO).position(id, address(helper));
+        assertEq(s + b + c, 0, "helper has a Morpho position of its own");
+    }
+
+    // ---- the headline path -----------------------------------------------
+
+    function test_borrow_positionIsTheUsers_safeGetsOnePercent() public {
+        _authorizeAndApprove(user);
+        uint256 amount = helper.borrowLimit(p, COLLATERAL) / 2;
+        uint256 safeBefore = IERC20(USDC).balanceOf(SAFE);
+
+        vm.prank(user);
+        uint256 received = helper.supplyCollateralAndBorrow(p, COLLATERAL, amount);
+
+        uint256 fee = amount / 100;
+        assertEq(received, amount - fee, "user gets 99%");
+        assertEq(IERC20(USDC).balanceOf(user), amount - fee, "USDC reached the user");
+        assertEq(IERC20(USDC).balanceOf(SAFE) - safeBefore, fee, "1% reached the Safe");
+
+        (, uint128 borrowShares, uint128 collateral) = IMorphoBlue(MORPHO).position(id, user);
+        assertEq(collateral, COLLATERAL, "collateral sits in the USER's Morpho position");
+        assertGt(borrowShares, 0, "debt sits in the USER's Morpho position");
+        _assertHelperEmpty();
+
+        emit log_named_decimal_uint("borrowed (USDC)", amount, 6);
+        emit log_named_decimal_uint("to user (USDC)", received, 6);
+        emit log_named_decimal_uint("to Safe (USDC)", fee, 6);
+    }
+
+    function test_repayAll_andWithdrawAll_closesThePositionExactly_noFee() public {
+        _authorizeAndApprove(user);
+        uint256 amount = helper.borrowLimit(p, COLLATERAL) / 2;
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, amount);
+
+        skip(30 days);
+        deal(USDC, user, amount * 2); // the 99% they got is short of principal + interest
+        uint256 safeBefore = IERC20(USDC).balanceOf(SAFE);
+        uint256 usdcBefore = IERC20(USDC).balanceOf(user);
+
+        vm.prank(user);
+        (uint256 repaid, uint256 withdrawn) = helper.repayAndWithdraw(p, type(uint256).max, type(uint256).max);
+
+        (uint256 s, uint128 b, uint128 c) = IMorphoBlue(MORPHO).position(id, user);
+        assertEq(s + b + c, 0, "position fully closed, not a share of dust left");
+        assertEq(withdrawn, COLLATERAL, "all collateral back");
+        assertEq(IERC20(CBBTC).balanceOf(user), COLLATERAL, "collateral reached the user");
+        assertGt(repaid, amount, "30 days of interest was paid");
+        assertEq(usdcBefore - IERC20(USDC).balanceOf(user), repaid, "pulled exactly what was owed");
+        assertEq(IERC20(USDC).balanceOf(SAFE), safeBefore, "no fee on the way out");
+        assertEq(IERC20(USDC).allowance(address(helper), MORPHO), 0, "no allowance left behind");
+        _assertHelperEmpty();
+        emit log_named_decimal_uint("repaid after 30 days (USDC)", repaid, 6);
+    }
+
+    function test_partialRepay_thenBorrowAgainstPostedCollateral() public {
+        _authorizeAndApprove(user);
+        uint256 limit = helper.borrowLimit(p, COLLATERAL);
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit / 4);
+
+        vm.prank(user);
+        helper.repayAndWithdraw(p, limit / 8, 0);
+
+        // Top up the loan with no new collateral.
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, 0, limit / 4);
+        (, uint128 b, uint128 c) = IMorphoBlue(MORPHO).position(id, user);
+        assertGt(b, 0);
+        assertEq(c, COLLATERAL);
+        _assertHelperEmpty();
+    }
+
+    // ---- the refusals -----------------------------------------------------
+
+    function test_refusesWithoutMorphoAuthorization() public {
+        vm.startPrank(user);
+        IERC20(CBBTC).approve(address(helper), type(uint256).max);
+        vm.expectRevert(ChipBorrowHelper.NotAuthorized.selector);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, 1_000e6);
+        vm.stopPrank();
+    }
+
+    function test_refusesAnUnlistedMarket_butStillLetsYouLeaveIt() public {
+        _authorizeAndApprove(user);
+        uint256 amount = helper.borrowLimit(p, COLLATERAL) / 2;
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, amount);
+
+        vm.prank(SAFE);
+        helper.setListed(p, false);
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(ChipBorrowHelper.MarketNotListed.selector, id));
+        helper.supplyCollateralAndBorrow(p, 0, 1e6);
+
+        deal(USDC, user, amount * 2);
+        vm.prank(user);
+        helper.repayAndWithdraw(p, type(uint256).max, type(uint256).max);
+        (uint256 s, uint128 b, uint128 c) = IMorphoBlue(MORPHO).position(id, user);
+        assertEq(s + b + c, 0, "a delisted market must never trap a borrower");
+    }
+
+    function test_refusesToBorrowPastNinetyPercentOfLltv() public {
+        _authorizeAndApprove(user);
+        uint256 limit = helper.borrowLimit(p, COLLATERAL);
+
+        vm.prank(user);
+        vm.expectRevert(); // TooCloseToLiquidation(debt, limit)
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit + 2);
+
+        // Just under the line is fine. (-2 absorbs Morpho's round-up on borrow shares.)
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit - 2);
+    }
+
+    /// @dev The 90% line applies to taking collateral out too, not only to borrowing.
+    function test_refusesToWithdrawCollateralPastNinetyPercentOfLltv() public {
+        _authorizeAndApprove(user);
+        uint256 limit = helper.borrowLimit(p, COLLATERAL);
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit / 2); // 50% of the line
+
+        // Taking out 60% of the collateral would put the debt at 125% of the line.
+        vm.prank(user);
+        vm.expectRevert(); // TooCloseToLiquidation
+        helper.repayAndWithdraw(p, 0, COLLATERAL * 6 / 10);
+
+        // 40% out puts it at ~83% of the line: allowed.
+        vm.prank(user);
+        (, uint256 w) = helper.repayAndWithdraw(p, 0, COLLATERAL * 4 / 10);
+        assertEq(w, COLLATERAL * 4 / 10);
+        assertEq(IERC20(CBBTC).balanceOf(user), COLLATERAL * 4 / 10);
+        _assertHelperEmpty();
+    }
+
+    /// @dev With no debt, withdrawing never reads the oracle: a dead feed cannot trap collateral.
+    function test_debtFreeWithdraw_needsNoOracle() public {
+        _authorizeAndApprove(user);
+        uint256 limit = helper.borrowLimit(p, COLLATERAL);
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit / 2);
+        deal(USDC, user, limit);
+        vm.prank(user);
+        helper.repayAndWithdraw(p, type(uint256).max, 0);
+
+        vm.mockCallRevert(p.oracle, abi.encodeWithSignature("price()"), "feed down");
+        vm.prank(user);
+        (, uint256 w) = helper.repayAndWithdraw(p, 0, type(uint256).max);
+        assertEq(w, COLLATERAL, "debt-free collateral came out with the oracle reverting");
+    }
+
+    function test_onlyTheOwnerListsMarkets() public {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        helper.setListed(p, true);
+    }
+
+    /**
+     * THE ONE THAT MATTERS. The user has authorised the helper on Morpho, which is an
+     * all-market grant. A stranger calling the helper must not be able to reach that
+     * position in any way: every call acts for msg.sender and nobody else.
+     */
+    function test_aStrangerCannotTouchAnAuthorisedUsersPosition() public {
+        _authorizeAndApprove(user);
+        uint256 amount = helper.borrowLimit(p, COLLATERAL) / 2;
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, amount);
+        (, uint128 b0, uint128 c0) = IMorphoBlue(MORPHO).position(id, user);
+
+        // Borrow: acts on the stranger's own (unauthorised, empty) position.
+        vm.prank(stranger);
+        vm.expectRevert(ChipBorrowHelper.NotAuthorized.selector);
+        helper.supplyCollateralAndBorrow(p, 0, 1_000e6);
+
+        // Even authorised, the stranger's own position has nothing to borrow against.
+        vm.startPrank(stranger);
+        IMorphoAuth(MORPHO).setAuthorization(address(helper), true);
+        vm.expectRevert();
+        helper.supplyCollateralAndBorrow(p, 0, 1_000e6);
+
+        // Withdraw-all: withdraws the stranger's zero, not the user's cbBTC.
+        (, uint256 w) = helper.repayAndWithdraw(p, 0, type(uint256).max);
+        vm.stopPrank();
+        assertEq(w, 0);
+
+        (, uint128 b1, uint128 c1) = IMorphoBlue(MORPHO).position(id, user);
+        assertEq(c1, c0, "user's collateral untouched");
+        assertGe(b1, b0, "user's debt untouched");
+        assertEq(IERC20(CBBTC).balanceOf(stranger), 0);
+        _assertHelperEmpty();
+    }
+
+    function test_feeAndRecipientAreFixed() public view {
+        assertEq(helper.FEE_BPS(), 100);
+        assertEq(helper.FEE_RECIPIENT(), SAFE);
+        assertEq(helper.owner(), SAFE);
+    }
+}
+===== END FILE borrow-helper/ChipBorrowHelper.t.sol =====
+
+===== BEGIN FILE borrow-helper/borrow-helper-sim.cjs | 162 lines | sha256 b4369ce5db2d14a2065f3a0c18c97965298a7d1ac8a23d48c9c962a3afba56e2 =====
+// ChipBorrowHelper against the REAL stock markets, via eth_simulateV1 on the live Base node.
+//
+// The forge suite (test/fork/ChipBorrowHelper.t.sol) proves every rule on cbBTC, because B20
+// stocks are node precompiles that cannot execute in a forge fork. This proves the part only a
+// real node can: that a real holder of each whitelisted stock can post it through the helper
+// (i.e. the B20 transfer policy lets the helper hold it for one call), borrow against the
+// market's live oracle, pay the Safe 1%, and after a week repay and get every unit back.
+//
+// Nothing is signed or sent. Run `forge build` first: bytecode is read from out/.
+//
+//   node borrow-helper-sim.cjs
+const { createRequire } = require('module');
+const req = createRequire('C:/Users/1136962520/chipworks/package.json');
+const { encodeFunctionData, decodeFunctionResult, decodeErrorResult, encodeDeployData, parseAbi, getAddress, getContractAddress, formatUnits, keccak256, encodeAbiParameters } = req('viem');
+const fs = require('fs');
+const path = require('path');
+const env = fs.readFileSync(path.join(__dirname, '../../.env'), 'utf8');
+const RPC = env.match(/^BASE_RPC_URL=(.*)$/m)[1].trim();
+const art = JSON.parse(fs.readFileSync(path.join(__dirname, '../../out/ChipBorrowHelper.sol/ChipBorrowHelper.json'), 'utf8'));
+const H = art.abi;
+const S = JSON.parse(fs.readFileSync(path.join(__dirname, 'sweep.out.json'), 'utf8').replace(/^\uFEFF/, ''));
+const W = JSON.parse(fs.readFileSync(path.join(__dirname, 'vault-whitelist.json'), 'utf8'));
+
+const MORPHO = '0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb';
+const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const SAFE = '0xe1096B727499a3f70FaD8bc0267F5e69d01373C7';
+const CLAIMS = '0x9bD35c70a80F132d087719305E37A888204d4c80';
+const DEPLOYER = '0x00000000000000000000000000000000C41b0001';
+const STOCK_IDS = { // the four whitelisted stock markets (the vault's), by id
+  AAPLc: '0xae1a30486234bf7e7ac166c7c03d9bc5f2cd8a39be2c48e73c665ac7148c3c28',
+  GOOGLc: '0xa3913d896b7e9c0e0a84f1be27d376cf2065616101cb7c44674af8a154e684cc',
+  NVDAc: '0xb4b42dd66cef25614b94510a910d54b2c148e7621d22b4271566724beda63d13',
+  METAc: '0x44b343b5087c0bd34207cb5c199f12030777bf6b8c0a128438246f1212f37ca5',
+};
+const ERC20 = parseAbi(['function balanceOf(address) view returns (uint256)', 'function approve(address,uint256) returns (bool)', 'function transfer(address,uint256) returns (bool)']);
+const MB = parseAbi([
+  'function setAuthorization(address,bool)',
+  'function position(bytes32,address) view returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral)',
+  'function market(bytes32) view returns (uint128,uint128,uint128,uint128,uint128,uint128)',
+]);
+const ORACLE = parseAbi(['function price() view returns (uint256)']);
+const MAX = 2n ** 256n - 1n;
+const GAS = '0x1c9c380';
+const hex = (n) => '0x' + BigInt(n).toString(16);
+
+const rpc = async (method, params) => {
+  const r = await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+  const j = await r.json();
+  if (j.error) throw new Error(JSON.stringify(j.error));
+  return j.result;
+};
+const read = async (to, abi, functionName, args = []) =>
+  decodeFunctionResult({ abi, functionName, data: await rpc('eth_call', [{ to, data: encodeFunctionData({ abi, functionName, args }) }, 'latest']) });
+const errName = (data) => {
+  if (!data || data === '0x') return 'revert (no data)';
+  try { const e = decodeErrorResult({ abi: H, data }); return `${e.errorName}(${(e.args || []).map(String).join(',')})`; } catch { return `raw ${data.slice(0, 74)}`; }
+};
+
+(async () => {
+  const block = BigInt(await rpc('eth_blockNumber', []));
+  const now = BigInt((await rpc('eth_getBlockByNumber', [hex(block), false])).timestamp);
+  const helper = getContractAddress({ from: DEPLOYER, nonce: 0n });
+  const deployData = encodeDeployData({ abi: H, bytecode: art.bytecode.object, args: [MORPHO, SAFE, SAFE] });
+  const owners = [...new Set(S.positions.map((p) => getAddress(p.owner)))];
+  const problems = [];
+
+  const plans = [];
+  for (const [sym, id] of Object.entries(STOCK_IDS)) {
+    const w = W.find((x) => x.id === id);
+    const mp = { ...w.marketParams, lltv: BigInt(w.marketParams.lltv) };
+    const stock = getAddress(mp.collateralToken);
+    // Largest EOA holder among everyone the claims ledger has paid; ChipClaims itself as a fallback.
+    let best = null;
+    for (const o of owners) {
+      const bal = await read(stock, ERC20, 'balanceOf', [o]).catch(() => 0n);
+      if (bal > 0n && (!best || bal > best.bal) && (await rpc('eth_getCode', [o, 'latest'])) === '0x') best = { who: o, bal };
+    }
+    if (!best) best = { who: CLAIMS, bal: await read(stock, ERC20, 'balanceOf', [CLAIMS]) };
+    if (best.bal === 0n) { problems.push(`${sym}: no holder found`); continue; }
+    const price = await read(mp.oracle, ORACLE, 'price');
+    const m = await read(MORPHO, MB, 'market', [id]);
+    const free = m[0] - m[2];
+    const limit = (((best.bal * price) / 10n ** 36n) * mp.lltv / 10n ** 18n) * 9n / 10n;
+    let borrow = limit / 2n < free / 2n ? limit / 2n : free / 2n;
+    plans.push({ sym, id, mp, stock, holder: best.who, bal: best.bal, limit, free, borrow });
+  }
+
+  // Block 1 (now): deploy, list, then per stock: authorize, approve, borrow.
+  // Block 2 (+7 days): per stock: fund interest, approve USDC, repay all + withdraw all.
+  const b1 = [{ from: DEPLOYER, data: deployData, gas: GAS }];
+  for (const pl of plans) b1.push({ from: SAFE, to: helper, data: encodeFunctionData({ abi: H, functionName: 'setListed', args: [pl.mp, true] }), gas: GAS });
+  const idx = {};
+  for (const pl of plans) {
+    idx[pl.sym] = { safeBefore: b1.length };
+    b1.push({ from: SAFE, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [SAFE] }) });
+    b1.push({ from: pl.holder, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [pl.holder] }) });
+    b1.push({ from: pl.holder, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'setAuthorization', args: [helper, true] }), gas: GAS });
+    b1.push({ from: pl.holder, to: pl.stock, data: encodeFunctionData({ abi: ERC20, functionName: 'approve', args: [helper, pl.bal] }), gas: GAS });
+    idx[pl.sym].borrow = b1.length;
+    b1.push({ from: pl.holder, to: helper, data: encodeFunctionData({ abi: H, functionName: 'supplyCollateralAndBorrow', args: [pl.mp, pl.bal, pl.borrow] }), gas: GAS });
+    idx[pl.sym].after = b1.length;
+    b1.push({ from: SAFE, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [SAFE] }) });
+    b1.push({ from: pl.holder, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [pl.holder] }) });
+    b1.push({ from: pl.holder, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'position', args: [pl.id, pl.holder] }) });
+    b1.push({ from: pl.holder, to: pl.stock, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [pl.holder] }) });
+    b1.push({ from: pl.holder, to: pl.stock, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [helper] }) });
+  }
+  const b2 = [];
+  for (const pl of plans) {
+    idx[pl.sym].b2 = b2.length;
+    b2.push({ from: MORPHO, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'transfer', args: [pl.holder, pl.borrow + 10n ** 6n] }), gas: GAS });
+    b2.push({ from: pl.holder, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'approve', args: [helper, MAX] }), gas: GAS });
+    b2.push({ from: pl.holder, to: helper, data: encodeFunctionData({ abi: H, functionName: 'repayAndWithdraw', args: [pl.mp, MAX, MAX] }), gas: GAS });
+    b2.push({ from: pl.holder, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'position', args: [pl.id, pl.holder] }) });
+    b2.push({ from: pl.holder, to: pl.stock, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [pl.holder] }) });
+    b2.push({ from: pl.holder, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [helper] }) });
+    b2.push({ from: pl.holder, to: pl.stock, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [helper] }) });
+  }
+
+  const res = await rpc('eth_simulateV1', [{ blockStateCalls: [{ calls: b1 }, { blockOverrides: { time: hex(now + 7n * 86400n) }, calls: b2 }], validation: false }, hex(block)]);
+  const [r1, r2] = res.map((b) => b.calls);
+  const ok = (c) => c.status === '0x1';
+  const u = (c, abi = ERC20, fn = 'balanceOf') => decodeFunctionResult({ abi, functionName: fn, data: c.returnData });
+
+  console.log(`block ${block}, helper would deploy at ${helper}`);
+  if (!ok(r1[0])) { console.log('DEPLOY FAILED', errName(r1[0].returnData)); process.exit(1); }
+  for (let i = 1; i <= plans.length; i++) if (!ok(r1[i])) problems.push(`setListed ${plans[i - 1].sym} failed: ${errName(r1[i].returnData)}`);
+
+  for (const pl of plans) {
+    const x = idx[pl.sym];
+    const dec = pl.sym === 'USDC' ? 6 : 18;
+    console.log(`\n${pl.sym}  holder ${pl.holder}`);
+    console.log(`  collateral ${pl.bal} raw   market free liquidity ${formatUnits(pl.free, 6)}   helper limit ${formatUnits(pl.limit, 6)}   borrowing ${formatUnits(pl.borrow, 6)} USDC`);
+    for (const k of [2, 3]) if (!ok(r1[x.safeBefore + k])) problems.push(`${pl.sym}: ${k === 2 ? 'setAuthorization' : 'stock approve'} failed ${errName(r1[x.safeBefore + k].returnData)}`);
+    const bc = r1[x.borrow];
+    if (!ok(bc)) { problems.push(`${pl.sym}: BORROW REVERTED ${errName(bc.returnData || bc.error?.data)}`); console.log(`  borrow REVERTED: ${errName(bc.returnData || bc.error?.data)}`); continue; }
+    const received = decodeFunctionResult({ abi: H, functionName: 'supplyCollateralAndBorrow', data: bc.returnData });
+    const safeGot = u(r1[x.after]) - u(r1[x.safeBefore]);
+    const userGot = u(r1[x.after + 1]) - u(r1[x.safeBefore + 1]);
+    const pos = u(r1[x.after + 2], MB, 'position');
+    const fee = pl.borrow / 100n;
+    console.log(`  borrow ok, gas ${BigInt(bc.gasUsed)}: user +${formatUnits(userGot, 6)}  Safe +${formatUnits(safeGot, 6)}  position collateral ${pos[2]} borrowShares ${pos[1]}`);
+    if (safeGot !== fee) problems.push(`${pl.sym}: Safe got ${safeGot}, expected ${fee}`);
+    if (userGot !== pl.borrow - fee || received !== userGot) problems.push(`${pl.sym}: user got ${userGot}, expected ${pl.borrow - fee}`);
+    if (pos[2] !== pl.bal) problems.push(`${pl.sym}: position collateral ${pos[2]} != ${pl.bal}`);
+    if (u(r1[x.after + 3]) !== 0n) problems.push(`${pl.sym}: holder still has stock after posting all of it`);
+    if (u(r1[x.after + 4]) !== 0n) problems.push(`${pl.sym}: helper kept stock`);
+
+    const y = x.b2;
+    if (!ok(r2[y])) problems.push(`${pl.sym}: interest top-up transfer failed (sim harness, not the helper)`);
+    const rc = r2[y + 2];
+    if (!ok(rc)) { problems.push(`${pl.sym}: REPAY/WITHDRAW REVERTED ${errName(rc.returnData || rc.error?.data)}`); continue; }
+    const [repaid, withdrawn] = decodeFunctionResult({ abi: H, functionName: 'repayAndWithdraw', data: rc.returnData });
+    const pos2 = u(r2[y + 3], MB, 'position');
+    console.log(`  +7d repay-all ok, gas ${BigInt(rc.gasUsed)}: repaid ${formatUnits(repaid, 6)} USDC, collateral back ${withdrawn} raw, position now [${pos2.join(', ')}]`);
+    if (pos2[0] + pos2[1] + pos2[2] !== 0n) problems.push(`${pl.sym}: position not closed: ${pos2}`);
+    if (withdrawn !== pl.bal || u(r2[y + 4]) !== pl.bal) problems.push(`${pl.sym}: holder did not get all stock back`);
+    if (repaid < pl.borrow) problems.push(`${pl.sym}: repaid less than borrowed after a week`);
+    if (u(r2[y + 5]) !== 0n || u(r2[y + 6]) !== 0n) problems.push(`${pl.sym}: helper left holding a balance`);
+  }
+  console.log('\nproblems:', problems);
+})().catch((e) => { console.error(String(e.shortMessage || e.message).replace(/https:\/\/\S+/g, '<url>')); process.exit(1); });
+===== END FILE borrow-helper/borrow-helper-sim.cjs =====
+
+===== BEGIN FILE borrow-helper/borrow-helper-sim.out.txt | 23 lines | sha256 8b12b738e999a97eea758926a1e4d91a3c3893fef463a3b15f1e9597201df789 =====
+block 51401171, helper would deploy at 0x6eAF2D3e4c304dDd86832421cFcee23133D528F5
+
+AAPLc  holder 0xDea1f188c9B2b49527ADEbE9002f35955b2e8C1F
+  collateral 5663760 raw   market free liquidity 1998.358   helper limit 10.575   borrowing 5.2875 USDC
+  borrow ok, gas 239106: user +5.234625  Safe +0.052875  position collateral 5663760 borrowShares 5277651227912
+  +7d repay-all ok, gas 187868: repaid 5.294552 USDC, collateral back 5663760 raw, position now [0, 0, 0]
+
+GOOGLc  holder 0x2301988a3500284322a63f6719f4c4F4c2200150
+  collateral 167611 raw   market free liquidity 1643.727251   helper limit 0.39897   borrowing 0.199485 USDC
+  borrow ok, gas 239096: user +0.197491  Safe +0.001994  position collateral 167611 borrowShares 199112089034
+  +7d repay-all ok, gas 187859: repaid 0.19975 USDC, collateral back 167611 raw, position now [0, 0, 0]
+
+NVDAc  holder 0xcd2f7B2272f860A7a60e25ff6cdd0BdD0A9FCEFa
+  collateral 6809726 raw   market free liquidity 699.512681   helper limit 8.202224   borrowing 4.101112 USDC
+  borrow ok, gas 239106: user +4.060101  Safe +0.041011  position collateral 6809726 borrowShares 4093442890944
+  +7d repay-all ok, gas 187868: repaid 4.106626 USDC, collateral back 6809726 raw, position now [0, 0, 0]
+
+METAc  holder 0x6AB880AFd1E0C7786cc5D05F4FD9b17761768da8
+  collateral 976840 raw   market free liquidity 483.244448   helper limit 3.702894   borrowing 1.851447 USDC
+  borrow ok, gas 239106: user +1.832933  Safe +0.018514  position collateral 976840 borrowShares 1847991963058
+  +7d repay-all ok, gas 187868: repaid 1.853924 USDC, collateral back 976840 raw, position now [0, 0, 0]
+
+problems: []
+===== END FILE borrow-helper/borrow-helper-sim.out.txt =====
+
+===== END OF PASTE-2-borrow-helper-tests.txt: 3 files. If you can read this line, nothing was cut off. =====

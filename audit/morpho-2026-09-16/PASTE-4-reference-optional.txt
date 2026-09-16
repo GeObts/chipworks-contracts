@@ -1,0 +1,3498 @@
+CHIPWORKS x MORPHO AUDIT PACKAGE - PASTE-4-reference-optional.txt
+source commit a0d533d (chipworks-contracts). Files in this paste: 11.
+Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
+marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
+
+  1. borrow-helper/ChipBorrowHelper.flat.sol  (1125 lines, sha256 188ac45f4a01c28e3a48985d687ce7d3e8e9c397e5180e7aa594a6ff003c08ba)
+  2. reference/morpho-blue__Morpho.sol  (557 lines, sha256 7f66c064ad0bdc046382fa65f449bb5a0b9181d5d03b65e3c8438226d437b9ce)
+  3. reference/morpho-blue__IMorpho.sol  (353 lines, sha256 24f96c2860c42cd5834c56cdb159c56435acaee0716d34d54ca18bd755edc97c)
+  4. reference/morpho-blue__MarketParamsLib.sol  (21 lines, sha256 94af290e2a2094b8547b925449484d247bce87cce4fed8902ecf82dd2b49242e)
+  5. reference/morpho-blue__MathLib.sol  (45 lines, sha256 2c6728d1bc8f5db81f2a7946f226c3c4a8cffe4134c55450ca445b05727011bc)
+  6. reference/morpho-blue__SharesMathLib.sol  (45 lines, sha256 4580deb1b1a3f2ea0b60f2305708428975613d1e94d404d647bcc573a7b2a2f0)
+  7. reference/metamorpho-v1.1__MetaMorphoV1_1.sol  (952 lines, sha256 be4b1540e398cb1e8b15d9aa86f0bcefb6b12ef5898dcbb25ab7ec51ad49317d)
+  8. reference/metamorpho-v1.1__IMetaMorphoV1_1.sol  (224 lines, sha256 8565c915b0bddd537e2a8f3bbb47d060c0e9fb5e8b80989ed1a33a2724162277)
+  9. reference/metamorpho-v1.1__MetaMorphoV1_1Factory.sol  (58 lines, sha256 532804687346a62b3230632387fa5e7050a7b32c5868b3b9b246258c9726254a)
+  10. reference/metamorpho-v1.1__ConstantsLib.sol  (20 lines, sha256 763c22b4e04560e2a8920ac89411cb1c0e58e8aa910c72b7f0fb7b3fbff1460b)
+  11. reference/metamorpho-v1.1__PendingLib.sol  (47 lines, sha256 ca53d7a1bd1c9fe0a9cf092f197cbb8b02192faf773060fc8b2dac1d432c909a)
+
+===== BEGIN FILE borrow-helper/ChipBorrowHelper.flat.sol | 1125 lines | sha256 188ac45f4a01c28e3a48985d687ce7d3e8e9c397e5180e7aa594a6ff003c08ba =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20 ^0.8.24;
+
+// lib/openzeppelin-contracts/contracts/utils/Context.sol
+
+// OpenZeppelin Contracts (last updated v5.0.1) (utils/Context.sol)
+
+/**
+ * @dev Provides information about the current execution context, including the
+ * sender of the transaction and its data. While these are generally available
+ * via msg.sender and msg.data, they should not be accessed in such a direct
+ * manner, since when dealing with meta-transactions the account sending and
+ * paying for execution may not be the actual sender (as far as an application
+ * is concerned).
+ *
+ * This contract is only required for intermediate, library-like contracts.
+ */
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes calldata) {
+        return msg.data;
+    }
+
+    function _contextSuffixLength() internal view virtual returns (uint256) {
+        return 0;
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/utils/Errors.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/Errors.sol)
+
+/**
+ * @dev Collection of common custom errors used in multiple contracts
+ *
+ * IMPORTANT: Backwards compatibility is not guaranteed in future versions of the library.
+ * It is recommended to avoid relying on the error API for critical functionality.
+ *
+ * _Available since v5.1._
+ */
+library Errors {
+    /**
+     * @dev The ETH balance of the account is not enough to perform the operation.
+     */
+    error InsufficientBalance(uint256 balance, uint256 needed);
+
+    /**
+     * @dev A call to an address target failed. The target may have reverted.
+     */
+    error FailedCall();
+
+    /**
+     * @dev The deployment failed.
+     */
+    error FailedDeployment();
+
+    /**
+     * @dev A necessary precompile is missing.
+     */
+    error MissingPrecompile(address);
+}
+
+// lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/introspection/IERC165.sol)
+
+/**
+ * @dev Interface of the ERC-165 standard, as defined in the
+ * https://eips.ethereum.org/EIPS/eip-165[ERC].
+ *
+ * Implementers can declare support of contract interfaces, which can then be
+ * queried by others ({ERC165Checker}).
+ *
+ * For an implementation, see {ERC165}.
+ */
+interface IERC165 {
+    /**
+     * @dev Returns true if this contract implements the interface defined by
+     * `interfaceId`. See the corresponding
+     * https://eips.ethereum.org/EIPS/eip-165#how-interfaces-are-identified[ERC section]
+     * to learn more about how these ids are created.
+     *
+     * This function call must use less than 30 000 gas.
+     */
+    function supportsInterface(bytes4 interfaceId) external view returns (bool);
+}
+
+// lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC20/IERC20.sol)
+
+/**
+ * @dev Interface of the ERC-20 standard as defined in the ERC.
+ */
+interface IERC20 {
+    /**
+     * @dev Emitted when `value` tokens are moved from one account (`from`) to
+     * another (`to`).
+     *
+     * Note that `value` may be zero.
+     */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    /**
+     * @dev Emitted when the allowance of a `spender` for an `owner` is set by
+     * a call to {approve}. `value` is the new allowance.
+     */
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    /**
+     * @dev Returns the value of tokens in existence.
+     */
+    function totalSupply() external view returns (uint256);
+
+    /**
+     * @dev Returns the value of tokens owned by `account`.
+     */
+    function balanceOf(address account) external view returns (uint256);
+
+    /**
+     * @dev Moves a `value` amount of tokens from the caller's account to `to`.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transfer(address to, uint256 value) external returns (bool);
+
+    /**
+     * @dev Returns the remaining number of tokens that `spender` will be
+     * allowed to spend on behalf of `owner` through {transferFrom}. This is
+     * zero by default.
+     *
+     * This value changes when {approve} or {transferFrom} are called.
+     */
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    /**
+     * @dev Sets a `value` amount of tokens as the allowance of `spender` over the
+     * caller's tokens.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * IMPORTANT: Beware that changing an allowance with this method brings the risk
+     * that someone may use both the old and the new allowance by unfortunate
+     * transaction ordering. One possible solution to mitigate this race
+     * condition is to first reduce the spender's allowance to 0 and set the
+     * desired value afterwards:
+     * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
+     *
+     * Emits an {Approval} event.
+     */
+    function approve(address spender, uint256 value) external returns (bool);
+
+    /**
+     * @dev Moves a `value` amount of tokens from `from` to `to` using the
+     * allowance mechanism. `value` is then deducted from the caller's
+     * allowance.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transferFrom(address from, address to, uint256 value) external returns (bool);
+}
+
+// lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/ReentrancyGuard.sol)
+
+/**
+ * @dev Contract module that helps prevent reentrant calls to a function.
+ *
+ * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier
+ * available, which can be applied to functions to make sure there are no nested
+ * (reentrant) calls to them.
+ *
+ * Note that because there is a single `nonReentrant` guard, functions marked as
+ * `nonReentrant` may not call one another. This can be worked around by making
+ * those functions `private`, and then adding `external` `nonReentrant` entry
+ * points to them.
+ *
+ * TIP: If EIP-1153 (transient storage) is available on the chain you're deploying at,
+ * consider using {ReentrancyGuardTransient} instead.
+ *
+ * TIP: If you would like to learn more about reentrancy and alternative ways
+ * to protect against it, check out our blog post
+ * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
+ */
+abstract contract ReentrancyGuard {
+    // Booleans are more expensive than uint256 or any type that takes up a full
+    // word because each write operation emits an extra SLOAD to first read the
+    // slot's contents, replace the bits taken up by the boolean, and then write
+    // back. This is the compiler's defense against contract upgrades and
+    // pointer aliasing, and it cannot be disabled.
+
+    // The values being non-zero value makes deployment a bit more expensive,
+    // but in exchange the refund on every call to nonReentrant will be lower in
+    // amount. Since refunds are capped to a percentage of the total
+    // transaction's gas, it is best to keep them low in cases like this one, to
+    // increase the likelihood of the full refund coming into effect.
+    uint256 private constant NOT_ENTERED = 1;
+    uint256 private constant ENTERED = 2;
+
+    uint256 private _status;
+
+    /**
+     * @dev Unauthorized reentrant call.
+     */
+    error ReentrancyGuardReentrantCall();
+
+    constructor() {
+        _status = NOT_ENTERED;
+    }
+
+    /**
+     * @dev Prevents a contract from calling itself, directly or indirectly.
+     * Calling a `nonReentrant` function from another `nonReentrant`
+     * function is not supported. It is possible to prevent this from happening
+     * by making the `nonReentrant` function external, and making it call a
+     * `private` function that does the actual work.
+     */
+    modifier nonReentrant() {
+        _nonReentrantBefore();
+        _;
+        _nonReentrantAfter();
+    }
+
+    function _nonReentrantBefore() private {
+        // On the first call to nonReentrant, _status will be NOT_ENTERED
+        if (_status == ENTERED) {
+            revert ReentrancyGuardReentrantCall();
+        }
+
+        // Any calls to nonReentrant after this point will fail
+        _status = ENTERED;
+    }
+
+    function _nonReentrantAfter() private {
+        // By storing the original value once again, a refund is triggered (see
+        // https://eips.ethereum.org/EIPS/eip-2200)
+        _status = NOT_ENTERED;
+    }
+
+    /**
+     * @dev Returns true if the reentrancy guard is currently set to "entered", which indicates there is a
+     * `nonReentrant` function in the call stack.
+     */
+    function _reentrancyGuardEntered() internal view returns (bool) {
+        return _status == ENTERED;
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/utils/Address.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (utils/Address.sol)
+
+/**
+ * @dev Collection of functions related to the address type
+ */
+library Address {
+    /**
+     * @dev There's no code at `target` (it is not a contract).
+     */
+    error AddressEmptyCode(address target);
+
+    /**
+     * @dev Replacement for Solidity's `transfer`: sends `amount` wei to
+     * `recipient`, forwarding all available gas and reverting on errors.
+     *
+     * https://eips.ethereum.org/EIPS/eip-1884[EIP1884] increases the gas cost
+     * of certain opcodes, possibly making contracts go over the 2300 gas limit
+     * imposed by `transfer`, making them unable to receive funds via
+     * `transfer`. {sendValue} removes this limitation.
+     *
+     * https://consensys.net/diligence/blog/2019/09/stop-using-soliditys-transfer-now/[Learn more].
+     *
+     * IMPORTANT: because control is transferred to `recipient`, care must be
+     * taken to not create reentrancy vulnerabilities. Consider using
+     * {ReentrancyGuard} or the
+     * https://solidity.readthedocs.io/en/v0.8.20/security-considerations.html#use-the-checks-effects-interactions-pattern[checks-effects-interactions pattern].
+     */
+    function sendValue(address payable recipient, uint256 amount) internal {
+        if (address(this).balance < amount) {
+            revert Errors.InsufficientBalance(address(this).balance, amount);
+        }
+
+        (bool success, ) = recipient.call{value: amount}("");
+        if (!success) {
+            revert Errors.FailedCall();
+        }
+    }
+
+    /**
+     * @dev Performs a Solidity function call using a low level `call`. A
+     * plain `call` is an unsafe replacement for a function call: use this
+     * function instead.
+     *
+     * If `target` reverts with a revert reason or custom error, it is bubbled
+     * up by this function (like regular Solidity function calls). However, if
+     * the call reverted with no returned reason, this function reverts with a
+     * {Errors.FailedCall} error.
+     *
+     * Returns the raw returned data. To convert to the expected return value,
+     * use https://solidity.readthedocs.io/en/latest/units-and-global-variables.html?highlight=abi.decode#abi-encoding-and-decoding-functions[`abi.decode`].
+     *
+     * Requirements:
+     *
+     * - `target` must be a contract.
+     * - calling `target` with `data` must not revert.
+     */
+    function functionCall(address target, bytes memory data) internal returns (bytes memory) {
+        return functionCallWithValue(target, data, 0);
+    }
+
+    /**
+     * @dev Same as {xref-Address-functionCall-address-bytes-}[`functionCall`],
+     * but also transferring `value` wei to `target`.
+     *
+     * Requirements:
+     *
+     * - the calling contract must have an ETH balance of at least `value`.
+     * - the called Solidity function must be `payable`.
+     */
+    function functionCallWithValue(address target, bytes memory data, uint256 value) internal returns (bytes memory) {
+        if (address(this).balance < value) {
+            revert Errors.InsufficientBalance(address(this).balance, value);
+        }
+        (bool success, bytes memory returndata) = target.call{value: value}(data);
+        return verifyCallResultFromTarget(target, success, returndata);
+    }
+
+    /**
+     * @dev Same as {xref-Address-functionCall-address-bytes-}[`functionCall`],
+     * but performing a static call.
+     */
+    function functionStaticCall(address target, bytes memory data) internal view returns (bytes memory) {
+        (bool success, bytes memory returndata) = target.staticcall(data);
+        return verifyCallResultFromTarget(target, success, returndata);
+    }
+
+    /**
+     * @dev Same as {xref-Address-functionCall-address-bytes-}[`functionCall`],
+     * but performing a delegate call.
+     */
+    function functionDelegateCall(address target, bytes memory data) internal returns (bytes memory) {
+        (bool success, bytes memory returndata) = target.delegatecall(data);
+        return verifyCallResultFromTarget(target, success, returndata);
+    }
+
+    /**
+     * @dev Tool to verify that a low level call to smart-contract was successful, and reverts if the target
+     * was not a contract or bubbling up the revert reason (falling back to {Errors.FailedCall}) in case
+     * of an unsuccessful call.
+     */
+    function verifyCallResultFromTarget(
+        address target,
+        bool success,
+        bytes memory returndata
+    ) internal view returns (bytes memory) {
+        if (!success) {
+            _revert(returndata);
+        } else {
+            // only check if target is a contract if the call was successful and the return data is empty
+            // otherwise we already know that it was a contract
+            if (returndata.length == 0 && target.code.length == 0) {
+                revert AddressEmptyCode(target);
+            }
+            return returndata;
+        }
+    }
+
+    /**
+     * @dev Tool to verify that a low level call was successful, and reverts if it wasn't, either by bubbling the
+     * revert reason or with a default {Errors.FailedCall} error.
+     */
+    function verifyCallResult(bool success, bytes memory returndata) internal pure returns (bytes memory) {
+        if (!success) {
+            _revert(returndata);
+        } else {
+            return returndata;
+        }
+    }
+
+    /**
+     * @dev Reverts with returndata if present. Otherwise reverts with {Errors.FailedCall}.
+     */
+    function _revert(bytes memory returndata) private pure {
+        // Look for revert reason and bubble it up if present
+        if (returndata.length > 0) {
+            // The easiest way to bubble the revert reason is using memory via assembly
+            assembly ("memory-safe") {
+                let returndata_size := mload(returndata)
+                revert(add(32, returndata), returndata_size)
+            }
+        } else {
+            revert Errors.FailedCall();
+        }
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/interfaces/IERC165.sol
+
+// OpenZeppelin Contracts (last updated v5.0.0) (interfaces/IERC165.sol)
+
+// lib/openzeppelin-contracts/contracts/interfaces/IERC20.sol
+
+// OpenZeppelin Contracts (last updated v5.0.0) (interfaces/IERC20.sol)
+
+// lib/openzeppelin-contracts/contracts/access/Ownable.sol
+
+// OpenZeppelin Contracts (last updated v5.0.0) (access/Ownable.sol)
+
+/**
+ * @dev Contract module which provides a basic access control mechanism, where
+ * there is an account (an owner) that can be granted exclusive access to
+ * specific functions.
+ *
+ * The initial owner is set to the address provided by the deployer. This can
+ * later be changed with {transferOwnership}.
+ *
+ * This module is used through inheritance. It will make available the modifier
+ * `onlyOwner`, which can be applied to your functions to restrict their use to
+ * the owner.
+ */
+abstract contract Ownable is Context {
+    address private _owner;
+
+    /**
+     * @dev The caller account is not authorized to perform an operation.
+     */
+    error OwnableUnauthorizedAccount(address account);
+
+    /**
+     * @dev The owner is not a valid owner account. (eg. `address(0)`)
+     */
+    error OwnableInvalidOwner(address owner);
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /**
+     * @dev Initializes the contract setting the address provided by the deployer as the initial owner.
+     */
+    constructor(address initialOwner) {
+        if (initialOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
+        }
+        _transferOwnership(initialOwner);
+    }
+
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        _checkOwner();
+        _;
+    }
+
+    /**
+     * @dev Returns the address of the current owner.
+     */
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+
+    /**
+     * @dev Throws if the sender is not the owner.
+     */
+    function _checkOwner() internal view virtual {
+        if (owner() != _msgSender()) {
+            revert OwnableUnauthorizedAccount(_msgSender());
+        }
+    }
+
+    /**
+     * @dev Leaves the contract without owner. It will not be possible to call
+     * `onlyOwner` functions. Can only be called by the current owner.
+     *
+     * NOTE: Renouncing ownership will leave the contract without an owner,
+     * thereby disabling any functionality that is only available to the owner.
+     */
+    function renounceOwnership() public virtual onlyOwner {
+        _transferOwnership(address(0));
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     * Can only be called by the current owner.
+     */
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        if (newOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
+        }
+        _transferOwnership(newOwner);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     * Internal function without access restriction.
+     */
+    function _transferOwnership(address newOwner) internal virtual {
+        address oldOwner = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/access/Ownable2Step.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (access/Ownable2Step.sol)
+
+/**
+ * @dev Contract module which provides access control mechanism, where
+ * there is an account (an owner) that can be granted exclusive access to
+ * specific functions.
+ *
+ * This extension of the {Ownable} contract includes a two-step mechanism to transfer
+ * ownership, where the new owner must call {acceptOwnership} in order to replace the
+ * old one. This can help prevent common mistakes, such as transfers of ownership to
+ * incorrect accounts, or to contracts that are unable to interact with the
+ * permission system.
+ *
+ * The initial owner is specified at deployment time in the constructor for `Ownable`. This
+ * can later be changed with {transferOwnership} and {acceptOwnership}.
+ *
+ * This module is used through inheritance. It will make available all functions
+ * from parent (Ownable).
+ */
+abstract contract Ownable2Step is Ownable {
+    address private _pendingOwner;
+
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+
+    /**
+     * @dev Returns the address of the pending owner.
+     */
+    function pendingOwner() public view virtual returns (address) {
+        return _pendingOwner;
+    }
+
+    /**
+     * @dev Starts the ownership transfer of the contract to a new account. Replaces the pending transfer if there is one.
+     * Can only be called by the current owner.
+     *
+     * Setting `newOwner` to the zero address is allowed; this can be used to cancel an initiated ownership transfer.
+     */
+    function transferOwnership(address newOwner) public virtual override onlyOwner {
+        _pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner(), newOwner);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`) and deletes any pending owner.
+     * Internal function without access restriction.
+     */
+    function _transferOwnership(address newOwner) internal virtual override {
+        delete _pendingOwner;
+        super._transferOwnership(newOwner);
+    }
+
+    /**
+     * @dev The new owner accepts the ownership transfer.
+     */
+    function acceptOwnership() public virtual {
+        address sender = _msgSender();
+        if (pendingOwner() != sender) {
+            revert OwnableUnauthorizedAccount(sender);
+        }
+        _transferOwnership(sender);
+    }
+}
+
+// lib/openzeppelin-contracts/contracts/interfaces/IERC1363.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (interfaces/IERC1363.sol)
+
+/**
+ * @title IERC1363
+ * @dev Interface of the ERC-1363 standard as defined in the https://eips.ethereum.org/EIPS/eip-1363[ERC-1363].
+ *
+ * Defines an extension interface for ERC-20 tokens that supports executing code on a recipient contract
+ * after `transfer` or `transferFrom`, or code on a spender contract after `approve`, in a single transaction.
+ */
+interface IERC1363 is IERC20, IERC165 {
+    /*
+     * Note: the ERC-165 identifier for this interface is 0xb0202a11.
+     * 0xb0202a11 ===
+     *   bytes4(keccak256('transferAndCall(address,uint256)')) ^
+     *   bytes4(keccak256('transferAndCall(address,uint256,bytes)')) ^
+     *   bytes4(keccak256('transferFromAndCall(address,address,uint256)')) ^
+     *   bytes4(keccak256('transferFromAndCall(address,address,uint256,bytes)')) ^
+     *   bytes4(keccak256('approveAndCall(address,uint256)')) ^
+     *   bytes4(keccak256('approveAndCall(address,uint256,bytes)'))
+     */
+
+    /**
+     * @dev Moves a `value` amount of tokens from the caller's account to `to`
+     * and then calls {IERC1363Receiver-onTransferReceived} on `to`.
+     * @param to The address which you want to transfer to.
+     * @param value The amount of tokens to be transferred.
+     * @return A boolean value indicating whether the operation succeeded unless throwing.
+     */
+    function transferAndCall(address to, uint256 value) external returns (bool);
+
+    /**
+     * @dev Moves a `value` amount of tokens from the caller's account to `to`
+     * and then calls {IERC1363Receiver-onTransferReceived} on `to`.
+     * @param to The address which you want to transfer to.
+     * @param value The amount of tokens to be transferred.
+     * @param data Additional data with no specified format, sent in call to `to`.
+     * @return A boolean value indicating whether the operation succeeded unless throwing.
+     */
+    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
+
+    /**
+     * @dev Moves a `value` amount of tokens from `from` to `to` using the allowance mechanism
+     * and then calls {IERC1363Receiver-onTransferReceived} on `to`.
+     * @param from The address which you want to send tokens from.
+     * @param to The address which you want to transfer to.
+     * @param value The amount of tokens to be transferred.
+     * @return A boolean value indicating whether the operation succeeded unless throwing.
+     */
+    function transferFromAndCall(address from, address to, uint256 value) external returns (bool);
+
+    /**
+     * @dev Moves a `value` amount of tokens from `from` to `to` using the allowance mechanism
+     * and then calls {IERC1363Receiver-onTransferReceived} on `to`.
+     * @param from The address which you want to send tokens from.
+     * @param to The address which you want to transfer to.
+     * @param value The amount of tokens to be transferred.
+     * @param data Additional data with no specified format, sent in call to `to`.
+     * @return A boolean value indicating whether the operation succeeded unless throwing.
+     */
+    function transferFromAndCall(address from, address to, uint256 value, bytes calldata data) external returns (bool);
+
+    /**
+     * @dev Sets a `value` amount of tokens as the allowance of `spender` over the
+     * caller's tokens and then calls {IERC1363Spender-onApprovalReceived} on `spender`.
+     * @param spender The address which will spend the funds.
+     * @param value The amount of tokens to be spent.
+     * @return A boolean value indicating whether the operation succeeded unless throwing.
+     */
+    function approveAndCall(address spender, uint256 value) external returns (bool);
+
+    /**
+     * @dev Sets a `value` amount of tokens as the allowance of `spender` over the
+     * caller's tokens and then calls {IERC1363Spender-onApprovalReceived} on `spender`.
+     * @param spender The address which will spend the funds.
+     * @param value The amount of tokens to be spent.
+     * @param data Additional data with no specified format, sent in call to `spender`.
+     * @return A boolean value indicating whether the operation succeeded unless throwing.
+     */
+    function approveAndCall(address spender, uint256 value, bytes calldata data) external returns (bool);
+}
+
+// lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol
+
+// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC20/utils/SafeERC20.sol)
+
+/**
+ * @title SafeERC20
+ * @dev Wrappers around ERC-20 operations that throw on failure (when the token
+ * contract returns false). Tokens that return no value (and instead revert or
+ * throw on failure) are also supported, non-reverting calls are assumed to be
+ * successful.
+ * To use this library you can add a `using SafeERC20 for IERC20;` statement to your contract,
+ * which allows you to call the safe operations as `token.safeTransfer(...)`, etc.
+ */
+library SafeERC20 {
+    /**
+     * @dev An operation with an ERC-20 token failed.
+     */
+    error SafeERC20FailedOperation(address token);
+
+    /**
+     * @dev Indicates a failed `decreaseAllowance` request.
+     */
+    error SafeERC20FailedDecreaseAllowance(address spender, uint256 currentAllowance, uint256 requestedDecrease);
+
+    /**
+     * @dev Transfer `value` amount of `token` from the calling contract to `to`. If `token` returns no value,
+     * non-reverting calls are assumed to be successful.
+     */
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeCall(token.transfer, (to, value)));
+    }
+
+    /**
+     * @dev Transfer `value` amount of `token` from `from` to `to`, spending the approval given by `from` to the
+     * calling contract. If `token` returns no value, non-reverting calls are assumed to be successful.
+     */
+    function safeTransferFrom(IERC20 token, address from, address to, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeCall(token.transferFrom, (from, to, value)));
+    }
+
+    /**
+     * @dev Increase the calling contract's allowance toward `spender` by `value`. If `token` returns no value,
+     * non-reverting calls are assumed to be successful.
+     *
+     * IMPORTANT: If the token implements ERC-7674 (ERC-20 with temporary allowance), and if the "client"
+     * smart contract uses ERC-7674 to set temporary allowances, then the "client" smart contract should avoid using
+     * this function. Performing a {safeIncreaseAllowance} or {safeDecreaseAllowance} operation on a token contract
+     * that has a non-zero temporary allowance (for that particular owner-spender) will result in unexpected behavior.
+     */
+    function safeIncreaseAllowance(IERC20 token, address spender, uint256 value) internal {
+        uint256 oldAllowance = token.allowance(address(this), spender);
+        forceApprove(token, spender, oldAllowance + value);
+    }
+
+    /**
+     * @dev Decrease the calling contract's allowance toward `spender` by `requestedDecrease`. If `token` returns no
+     * value, non-reverting calls are assumed to be successful.
+     *
+     * IMPORTANT: If the token implements ERC-7674 (ERC-20 with temporary allowance), and if the "client"
+     * smart contract uses ERC-7674 to set temporary allowances, then the "client" smart contract should avoid using
+     * this function. Performing a {safeIncreaseAllowance} or {safeDecreaseAllowance} operation on a token contract
+     * that has a non-zero temporary allowance (for that particular owner-spender) will result in unexpected behavior.
+     */
+    function safeDecreaseAllowance(IERC20 token, address spender, uint256 requestedDecrease) internal {
+        unchecked {
+            uint256 currentAllowance = token.allowance(address(this), spender);
+            if (currentAllowance < requestedDecrease) {
+                revert SafeERC20FailedDecreaseAllowance(spender, currentAllowance, requestedDecrease);
+            }
+            forceApprove(token, spender, currentAllowance - requestedDecrease);
+        }
+    }
+
+    /**
+     * @dev Set the calling contract's allowance toward `spender` to `value`. If `token` returns no value,
+     * non-reverting calls are assumed to be successful. Meant to be used with tokens that require the approval
+     * to be set to zero before setting it to a non-zero value, such as USDT.
+     *
+     * NOTE: If the token implements ERC-7674, this function will not modify any temporary allowance. This function
+     * only sets the "standard" allowance. Any temporary allowance will remain active, in addition to the value being
+     * set here.
+     */
+    function forceApprove(IERC20 token, address spender, uint256 value) internal {
+        bytes memory approvalCall = abi.encodeCall(token.approve, (spender, value));
+
+        if (!_callOptionalReturnBool(token, approvalCall)) {
+            _callOptionalReturn(token, abi.encodeCall(token.approve, (spender, 0)));
+            _callOptionalReturn(token, approvalCall);
+        }
+    }
+
+    /**
+     * @dev Performs an {ERC1363} transferAndCall, with a fallback to the simple {ERC20} transfer if the target has no
+     * code. This can be used to implement an {ERC721}-like safe transfer that rely on {ERC1363} checks when
+     * targeting contracts.
+     *
+     * Reverts if the returned value is other than `true`.
+     */
+    function transferAndCallRelaxed(IERC1363 token, address to, uint256 value, bytes memory data) internal {
+        if (to.code.length == 0) {
+            safeTransfer(token, to, value);
+        } else if (!token.transferAndCall(to, value, data)) {
+            revert SafeERC20FailedOperation(address(token));
+        }
+    }
+
+    /**
+     * @dev Performs an {ERC1363} transferFromAndCall, with a fallback to the simple {ERC20} transferFrom if the target
+     * has no code. This can be used to implement an {ERC721}-like safe transfer that rely on {ERC1363} checks when
+     * targeting contracts.
+     *
+     * Reverts if the returned value is other than `true`.
+     */
+    function transferFromAndCallRelaxed(
+        IERC1363 token,
+        address from,
+        address to,
+        uint256 value,
+        bytes memory data
+    ) internal {
+        if (to.code.length == 0) {
+            safeTransferFrom(token, from, to, value);
+        } else if (!token.transferFromAndCall(from, to, value, data)) {
+            revert SafeERC20FailedOperation(address(token));
+        }
+    }
+
+    /**
+     * @dev Performs an {ERC1363} approveAndCall, with a fallback to the simple {ERC20} approve if the target has no
+     * code. This can be used to implement an {ERC721}-like safe transfer that rely on {ERC1363} checks when
+     * targeting contracts.
+     *
+     * NOTE: When the recipient address (`to`) has no code (i.e. is an EOA), this function behaves as {forceApprove}.
+     * Opposedly, when the recipient address (`to`) has code, this function only attempts to call {ERC1363-approveAndCall}
+     * once without retrying, and relies on the returned value to be true.
+     *
+     * Reverts if the returned value is other than `true`.
+     */
+    function approveAndCallRelaxed(IERC1363 token, address to, uint256 value, bytes memory data) internal {
+        if (to.code.length == 0) {
+            forceApprove(token, to, value);
+        } else if (!token.approveAndCall(to, value, data)) {
+            revert SafeERC20FailedOperation(address(token));
+        }
+    }
+
+    /**
+     * @dev Imitates a Solidity high-level call (i.e. a regular function call to a contract), relaxing the requirement
+     * on the return value: the return value is optional (but if data is returned, it must not be false).
+     * @param token The token targeted by the call.
+     * @param data The call data (encoded using abi.encode or one of its variants).
+     *
+     * This is a variant of {_callOptionalReturnBool} that reverts if call fails to meet the requirements.
+     */
+    function _callOptionalReturn(IERC20 token, bytes memory data) private {
+        uint256 returnSize;
+        uint256 returnValue;
+        assembly ("memory-safe") {
+            let success := call(gas(), token, 0, add(data, 0x20), mload(data), 0, 0x20)
+            // bubble errors
+            if iszero(success) {
+                let ptr := mload(0x40)
+                returndatacopy(ptr, 0, returndatasize())
+                revert(ptr, returndatasize())
+            }
+            returnSize := returndatasize()
+            returnValue := mload(0)
+        }
+
+        if (returnSize == 0 ? address(token).code.length == 0 : returnValue != 1) {
+            revert SafeERC20FailedOperation(address(token));
+        }
+    }
+
+    /**
+     * @dev Imitates a Solidity high-level call (i.e. a regular function call to a contract), relaxing the requirement
+     * on the return value: the return value is optional (but if data is returned, it must not be false).
+     * @param token The token targeted by the call.
+     * @param data The call data (encoded using abi.encode or one of its variants).
+     *
+     * This is a variant of {_callOptionalReturn} that silently catches all reverts and returns a bool instead.
+     */
+    function _callOptionalReturnBool(IERC20 token, bytes memory data) private returns (bool) {
+        bool success;
+        uint256 returnSize;
+        uint256 returnValue;
+        assembly ("memory-safe") {
+            success := call(gas(), token, 0, add(data, 0x20), mload(data), 0, 0x20)
+            returnSize := returndatasize()
+            returnValue := mload(0)
+        }
+        return success && (returnSize == 0 ? address(token).code.length > 0 : returnValue == 1);
+    }
+}
+
+// src/morpho/ChipBorrowHelper.sol
+
+struct MarketParams {
+    address loanToken;
+    address collateralToken;
+    address oracle;
+    address irm;
+    uint256 lltv;
+}
+
+interface IMorphoBlue {
+    function supplyCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, bytes memory data)
+        external;
+    function withdrawCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, address receiver)
+        external;
+    function borrow(MarketParams memory marketParams, uint256 assets, uint256 shares, address onBehalf, address receiver)
+        external
+        returns (uint256 assetsBorrowed, uint256 sharesBorrowed);
+    function repay(MarketParams memory marketParams, uint256 assets, uint256 shares, address onBehalf, bytes memory data)
+        external
+        returns (uint256 assetsRepaid, uint256 sharesRepaid);
+    function accrueInterest(MarketParams memory marketParams) external;
+    function isAuthorized(address authorizer, address authorized) external view returns (bool);
+    function position(bytes32 id, address user)
+        external
+        view
+        returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral);
+    function market(bytes32 id)
+        external
+        view
+        returns (
+            uint128 totalSupplyAssets,
+            uint128 totalSupplyShares,
+            uint128 totalBorrowAssets,
+            uint128 totalBorrowShares,
+            uint128 lastUpdate,
+            uint128 fee
+        );
+}
+
+interface IMorphoOracle {
+    function price() external view returns (uint256);
+}
+
+/**
+ * BORROW USDC AGAINST A TOKENIZED STOCK, ON MORPHO, IN ONE CALL - FOR 1%.
+ *
+ * -- THE POSITION IS THE USER'S, NOT OURS ---------------------------------
+ *
+ * Every Morpho call here names `onBehalf = msg.sender`. The collateral and the debt
+ * sit in the user's OWN Morpho position, exactly as if they had gone to the Morpho
+ * app themselves. They can repay, top up or withdraw there directly, with or without
+ * this contract, forever. If this contract vanished nothing would be stuck.
+ *
+ * That is why the user has to call `Morpho.setAuthorization(helper, true)` once:
+ * Morpho only lets a third party borrow against a position its owner authorised.
+ *
+ * -- AN AUTHORISATION IS A LOADED GUN, SO THIS CONTRACT CANNOT AIM IT ------
+ *
+ * Morpho authorisation is ALL-MARKET: an authorised address may borrow against, and
+ * withdraw collateral from, every position the user has. So the one invariant this
+ * contract exists to keep is that it only ever acts for the CALLER. There is no
+ * function taking a user address, no owner path that touches positions, no upgrade,
+ * no arbitrary call. The owner can do exactly two things: choose which markets are
+ * offered for NEW borrowing, and hand ownership on. The fee and its recipient are
+ * immutable.
+ *
+ * -- THE FEE ---------------------------------------------------------------
+ *
+ * 1% of what is borrowed, taken once, at origination, sent straight to FEE_RECIPIENT.
+ * The debt is the full amount: borrow 1,000 and 990 arrives, 1,000 is owed. Repaying
+ * and withdrawing through here is free.
+ *
+ * -- WHY IT REFUSES TO BORROW RIGHT UP TO THE LIMIT ------------------------
+ *
+ * Morpho will let a position be opened at exactly its LLTV, and liquidate it on the
+ * next tick. Stock feeds hold Friday's close all weekend and gap on Monday's open. So
+ * a borrow through here - and a collateral withdrawal through here that leaves debt
+ * behind - must leave the position at or under MAX_LLTV_USE of the market's LLTV:
+ * 90%, which is 56.25% LTV on a 62.5% stock market. A position with no debt is never
+ * checked, so closing out never depends on an oracle. A user who wants
+ * to go further can do it on Morpho directly; this contract will not be the screen
+ * that walked them into a liquidation.
+ *
+ * -- NOTHING IS HELD BETWEEN TRANSACTIONS ----------------------------------
+ *
+ * Collateral passes through for the length of one call (Morpho pulls it from
+ * msg.sender, so it must be here to be supplied); USDC likewise. Every path ends with
+ * this contract holding what it started with.
+ */
+contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    IMorphoBlue public immutable MORPHO;
+    /// @notice Where the 1% goes. Immutable: nobody can redirect it after deployment.
+    address public immutable FEE_RECIPIENT;
+
+    uint256 public constant FEE_BPS = 100; // 1%
+    uint256 public constant MAX_LLTV_USE = 0.9e18; // borrow to at most 90% of the market's LLTV
+
+    uint256 internal constant WAD = 1e18;
+    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
+    uint256 internal constant VIRTUAL_SHARES = 1e6;
+    uint256 internal constant VIRTUAL_ASSETS = 1;
+
+    /// @notice Markets offered for new borrowing. Repaying and withdrawing ignore this,
+    ///         so delisting a market can never trap anyone in it.
+    mapping(bytes32 id => bool) public isListed;
+
+    event MarketListed(bytes32 indexed id, MarketParams params, bool listed);
+    event Borrowed(
+        address indexed user,
+        bytes32 indexed id,
+        uint256 collateralAdded,
+        uint256 borrowed,
+        uint256 fee,
+        uint256 received
+    );
+    event Repaid(address indexed user, bytes32 indexed id, uint256 repaid, uint256 collateralWithdrawn);
+
+    error MarketNotListed(bytes32 id);
+    error NotAuthorized();
+    error NothingToDo();
+    error TooCloseToLiquidation(uint256 borrowed, uint256 limit);
+    error CollateralAccountingMismatch(uint256 expected, uint256 received);
+    error ZeroAddress();
+
+    constructor(address morpho, address feeRecipient, address initialOwner) Ownable(initialOwner) {
+        if (morpho == address(0) || feeRecipient == address(0)) revert ZeroAddress();
+        MORPHO = IMorphoBlue(morpho);
+        FEE_RECIPIENT = feeRecipient;
+    }
+
+    // ---------------------------------------------------------------- owner
+
+    function setListed(MarketParams calldata params, bool listed) external onlyOwner {
+        bytes32 id = marketId(params);
+        isListed[id] = listed;
+        emit MarketListed(id, params, listed);
+    }
+
+    // ---------------------------------------------------------------- borrow
+
+    /**
+     * Post `collateralAmount` of the market's collateral (0 to borrow against what is
+     * already posted) and borrow `borrowAssets` of the loan token. The caller receives
+     * borrowAssets minus the 1% fee and owes borrowAssets.
+     *
+     * Needs: Morpho.setAuthorization(this, true), and an approval of the collateral
+     * token to this contract when collateralAmount > 0.
+     */
+    function supplyCollateralAndBorrow(MarketParams calldata params, uint256 collateralAmount, uint256 borrowAssets)
+        external
+        nonReentrant
+        returns (uint256 received)
+    {
+        bytes32 id = marketId(params);
+        if (!isListed[id]) revert MarketNotListed(id);
+        if (borrowAssets == 0) revert NothingToDo();
+        if (!MORPHO.isAuthorized(msg.sender, address(this))) revert NotAuthorized();
+
+        if (collateralAmount > 0) {
+            IERC20 collateral = IERC20(params.collateralToken);
+            uint256 before = collateral.balanceOf(address(this));
+            collateral.safeTransferFrom(msg.sender, address(this), collateralAmount);
+            uint256 got = collateral.balanceOf(address(this)) - before;
+            if (got != collateralAmount) revert CollateralAccountingMismatch(collateralAmount, got);
+            collateral.forceApprove(address(MORPHO), collateralAmount);
+            MORPHO.supplyCollateral(params, collateralAmount, msg.sender, "");
+        }
+
+        IERC20 loan = IERC20(params.loanToken);
+        uint256 loanBefore = loan.balanceOf(address(this));
+        MORPHO.borrow(params, borrowAssets, 0, msg.sender, address(this));
+        uint256 borrowed = loan.balanceOf(address(this)) - loanBefore;
+
+        _requireHeadroom(params, id, msg.sender);
+
+        uint256 fee = borrowed * FEE_BPS / 10_000;
+        received = borrowed - fee;
+        if (fee > 0) loan.safeTransfer(FEE_RECIPIENT, fee);
+        loan.safeTransfer(msg.sender, received);
+
+        emit Borrowed(msg.sender, id, collateralAmount, borrowed, fee, received);
+    }
+
+    // ---------------------------------------------------------------- repay
+
+    /**
+     * Repay `repayAssets` of the caller's debt (type(uint256).max repays ALL of it,
+     * to the last share, pulling exactly what that costs), then return
+     * `collateralOut` of collateral to the caller (type(uint256).max returns all of it).
+     * No fee. Works on delisted markets.
+     *
+     * Needs: an approval of the loan token to this contract when repaying, and
+     * Morpho.setAuthorization(this, true) when withdrawing collateral.
+     */
+    function repayAndWithdraw(MarketParams calldata params, uint256 repayAssets, uint256 collateralOut)
+        external
+        nonReentrant
+        returns (uint256 repaid, uint256 withdrawn)
+    {
+        if (repayAssets == 0 && collateralOut == 0) revert NothingToDo();
+        bytes32 id = marketId(params);
+
+        if (repayAssets > 0) {
+            MORPHO.accrueInterest(params);
+            (, uint256 borrowShares,) = MORPHO.position(id, msg.sender);
+            (,, uint256 totalBorrowAssets, uint256 totalBorrowShares,,) = MORPHO.market(id);
+            uint256 owed = _toAssetsUp(borrowShares, totalBorrowAssets, totalBorrowShares);
+
+            IERC20 loan = IERC20(params.loanToken);
+            if (borrowShares == 0) {
+                // Nothing owed: "repay all, then withdraw" on a clean position is just a withdraw.
+            } else if (repayAssets >= owed) {
+                // By shares, so the position closes exactly: repaying by assets leaves dust.
+                loan.safeTransferFrom(msg.sender, address(this), owed);
+                loan.forceApprove(address(MORPHO), owed);
+                (repaid,) = MORPHO.repay(params, 0, borrowShares, msg.sender, "");
+            } else {
+                loan.safeTransferFrom(msg.sender, address(this), repayAssets);
+                loan.forceApprove(address(MORPHO), repayAssets);
+                (repaid,) = MORPHO.repay(params, repayAssets, 0, msg.sender, "");
+            }
+            loan.forceApprove(address(MORPHO), 0);
+        }
+
+        if (collateralOut > 0) {
+            (,, uint256 collateral) = MORPHO.position(id, msg.sender);
+            withdrawn = collateralOut > collateral ? collateral : collateralOut;
+            if (withdrawn > 0) {
+                MORPHO.withdrawCollateral(params, withdrawn, msg.sender, msg.sender);
+                // Same line as borrowing: taking collateral out may not leave a debt past 90% of LLTV.
+                _requireHeadroom(params, id, msg.sender);
+            }
+        }
+
+        emit Repaid(msg.sender, id, repaid, withdrawn);
+    }
+
+    // ---------------------------------------------------------------- views
+
+    function marketId(MarketParams calldata params) public pure returns (bytes32) {
+        return keccak256(abi.encode(params));
+    }
+
+    /// @notice The most a position may owe after borrowing through here.
+    function borrowLimit(MarketParams calldata params, uint256 collateral) public view returns (uint256) {
+        uint256 price = IMorphoOracle(params.oracle).price();
+        return collateral * price / ORACLE_PRICE_SCALE * params.lltv / WAD * MAX_LLTV_USE / WAD;
+    }
+
+    // ---------------------------------------------------------------- internal
+
+    function _requireHeadroom(MarketParams calldata params, bytes32 id, address user) internal view {
+        (, uint256 borrowShares, uint256 collateral) = MORPHO.position(id, user);
+        // No debt, nothing to protect - and no oracle read, so a debt-free exit never depends on a feed.
+        if (borrowShares == 0) return;
+        (,, uint256 totalBorrowAssets, uint256 totalBorrowShares,,) = MORPHO.market(id);
+        uint256 debt = _toAssetsUp(borrowShares, totalBorrowAssets, totalBorrowShares);
+        uint256 limit = borrowLimit(params, collateral);
+        if (debt > limit) revert TooCloseToLiquidation(debt, limit);
+    }
+
+    /// @dev Morpho's SharesMathLib.toAssetsUp, so "owed" here equals what Morpho charges.
+    function _toAssetsUp(uint256 shares, uint256 totalAssets, uint256 totalShares) internal pure returns (uint256) {
+        uint256 num = shares * (totalAssets + VIRTUAL_ASSETS);
+        uint256 den = totalShares + VIRTUAL_SHARES;
+        return (num + den - 1) / den;
+    }
+}
+
+===== END FILE borrow-helper/ChipBorrowHelper.flat.sol =====
+
+===== BEGIN FILE reference/morpho-blue__Morpho.sol | 557 lines | sha256 7f66c064ad0bdc046382fa65f449bb5a0b9181d5d03b65e3c8438226d437b9ce =====
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.19;
+
+import {
+    Id,
+    IMorphoStaticTyping,
+    IMorphoBase,
+    MarketParams,
+    Position,
+    Market,
+    Authorization,
+    Signature
+} from "./interfaces/IMorpho.sol";
+import {
+    IMorphoLiquidateCallback,
+    IMorphoRepayCallback,
+    IMorphoSupplyCallback,
+    IMorphoSupplyCollateralCallback,
+    IMorphoFlashLoanCallback
+} from "./interfaces/IMorphoCallbacks.sol";
+import {IIrm} from "./interfaces/IIrm.sol";
+import {IERC20} from "./interfaces/IERC20.sol";
+import {IOracle} from "./interfaces/IOracle.sol";
+
+import "./libraries/ConstantsLib.sol";
+import {UtilsLib} from "./libraries/UtilsLib.sol";
+import {EventsLib} from "./libraries/EventsLib.sol";
+import {ErrorsLib} from "./libraries/ErrorsLib.sol";
+import {MathLib, WAD} from "./libraries/MathLib.sol";
+import {SharesMathLib} from "./libraries/SharesMathLib.sol";
+import {MarketParamsLib} from "./libraries/MarketParamsLib.sol";
+import {SafeTransferLib} from "./libraries/SafeTransferLib.sol";
+
+/// @title Morpho
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice The Morpho contract.
+contract Morpho is IMorphoStaticTyping {
+    using MathLib for uint128;
+    using MathLib for uint256;
+    using UtilsLib for uint256;
+    using SharesMathLib for uint256;
+    using SafeTransferLib for IERC20;
+    using MarketParamsLib for MarketParams;
+
+    /* IMMUTABLES */
+
+    /// @inheritdoc IMorphoBase
+    bytes32 public immutable DOMAIN_SEPARATOR;
+
+    /* STORAGE */
+
+    /// @inheritdoc IMorphoBase
+    address public owner;
+    /// @inheritdoc IMorphoBase
+    address public feeRecipient;
+    /// @inheritdoc IMorphoStaticTyping
+    mapping(Id => mapping(address => Position)) public position;
+    /// @inheritdoc IMorphoStaticTyping
+    mapping(Id => Market) public market;
+    /// @inheritdoc IMorphoBase
+    mapping(address => bool) public isIrmEnabled;
+    /// @inheritdoc IMorphoBase
+    mapping(uint256 => bool) public isLltvEnabled;
+    /// @inheritdoc IMorphoBase
+    mapping(address => mapping(address => bool)) public isAuthorized;
+    /// @inheritdoc IMorphoBase
+    mapping(address => uint256) public nonce;
+    /// @inheritdoc IMorphoStaticTyping
+    mapping(Id => MarketParams) public idToMarketParams;
+
+    /* CONSTRUCTOR */
+
+    /// @param newOwner The new owner of the contract.
+    constructor(address newOwner) {
+        require(newOwner != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
+        owner = newOwner;
+
+        emit EventsLib.SetOwner(newOwner);
+    }
+
+    /* MODIFIERS */
+
+    /// @dev Reverts if the caller is not the owner.
+    modifier onlyOwner() {
+        require(msg.sender == owner, ErrorsLib.NOT_OWNER);
+        _;
+    }
+
+    /* ONLY OWNER FUNCTIONS */
+
+    /// @inheritdoc IMorphoBase
+    function setOwner(address newOwner) external onlyOwner {
+        require(newOwner != owner, ErrorsLib.ALREADY_SET);
+
+        owner = newOwner;
+
+        emit EventsLib.SetOwner(newOwner);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function enableIrm(address irm) external onlyOwner {
+        require(!isIrmEnabled[irm], ErrorsLib.ALREADY_SET);
+
+        isIrmEnabled[irm] = true;
+
+        emit EventsLib.EnableIrm(irm);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function enableLltv(uint256 lltv) external onlyOwner {
+        require(!isLltvEnabled[lltv], ErrorsLib.ALREADY_SET);
+        require(lltv < WAD, ErrorsLib.MAX_LLTV_EXCEEDED);
+
+        isLltvEnabled[lltv] = true;
+
+        emit EventsLib.EnableLltv(lltv);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function setFee(MarketParams memory marketParams, uint256 newFee) external onlyOwner {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(newFee != market[id].fee, ErrorsLib.ALREADY_SET);
+        require(newFee <= MAX_FEE, ErrorsLib.MAX_FEE_EXCEEDED);
+
+        // Accrue interest using the previous fee set before changing it.
+        _accrueInterest(marketParams, id);
+
+        // Safe "unchecked" cast.
+        market[id].fee = uint128(newFee);
+
+        emit EventsLib.SetFee(id, newFee);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function setFeeRecipient(address newFeeRecipient) external onlyOwner {
+        require(newFeeRecipient != feeRecipient, ErrorsLib.ALREADY_SET);
+
+        feeRecipient = newFeeRecipient;
+
+        emit EventsLib.SetFeeRecipient(newFeeRecipient);
+    }
+
+    /* MARKET CREATION */
+
+    /// @inheritdoc IMorphoBase
+    function createMarket(MarketParams memory marketParams) external {
+        Id id = marketParams.id();
+        require(isIrmEnabled[marketParams.irm], ErrorsLib.IRM_NOT_ENABLED);
+        require(isLltvEnabled[marketParams.lltv], ErrorsLib.LLTV_NOT_ENABLED);
+        require(market[id].lastUpdate == 0, ErrorsLib.MARKET_ALREADY_CREATED);
+
+        // Safe "unchecked" cast.
+        market[id].lastUpdate = uint128(block.timestamp);
+        idToMarketParams[id] = marketParams;
+
+        emit EventsLib.CreateMarket(id, marketParams);
+
+        // Call to initialize the IRM in case it is stateful.
+        if (marketParams.irm != address(0)) IIrm(marketParams.irm).borrowRate(marketParams, market[id]);
+    }
+
+    /* SUPPLY MANAGEMENT */
+
+    /// @inheritdoc IMorphoBase
+    function supply(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        bytes calldata data
+    ) external returns (uint256, uint256) {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
+        require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        _accrueInterest(marketParams, id);
+
+        if (assets > 0) shares = assets.toSharesDown(market[id].totalSupplyAssets, market[id].totalSupplyShares);
+        else assets = shares.toAssetsUp(market[id].totalSupplyAssets, market[id].totalSupplyShares);
+
+        position[id][onBehalf].supplyShares += shares;
+        market[id].totalSupplyShares += shares.toUint128();
+        market[id].totalSupplyAssets += assets.toUint128();
+
+        emit EventsLib.Supply(id, msg.sender, onBehalf, assets, shares);
+
+        if (data.length > 0) IMorphoSupplyCallback(msg.sender).onMorphoSupply(assets, data);
+
+        IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
+
+        return (assets, shares);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function withdraw(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        address receiver
+    ) external returns (uint256, uint256) {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
+        require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
+        // No need to verify that onBehalf != address(0) thanks to the following authorization check.
+        require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+
+        _accrueInterest(marketParams, id);
+
+        if (assets > 0) shares = assets.toSharesUp(market[id].totalSupplyAssets, market[id].totalSupplyShares);
+        else assets = shares.toAssetsDown(market[id].totalSupplyAssets, market[id].totalSupplyShares);
+
+        position[id][onBehalf].supplyShares -= shares;
+        market[id].totalSupplyShares -= shares.toUint128();
+        market[id].totalSupplyAssets -= assets.toUint128();
+
+        require(market[id].totalBorrowAssets <= market[id].totalSupplyAssets, ErrorsLib.INSUFFICIENT_LIQUIDITY);
+
+        emit EventsLib.Withdraw(id, msg.sender, onBehalf, receiver, assets, shares);
+
+        IERC20(marketParams.loanToken).safeTransfer(receiver, assets);
+
+        return (assets, shares);
+    }
+
+    /* BORROW MANAGEMENT */
+
+    /// @inheritdoc IMorphoBase
+    function borrow(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        address receiver
+    ) external returns (uint256, uint256) {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
+        require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
+        // No need to verify that onBehalf != address(0) thanks to the following authorization check.
+        require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+
+        _accrueInterest(marketParams, id);
+
+        if (assets > 0) shares = assets.toSharesUp(market[id].totalBorrowAssets, market[id].totalBorrowShares);
+        else assets = shares.toAssetsDown(market[id].totalBorrowAssets, market[id].totalBorrowShares);
+
+        position[id][onBehalf].borrowShares += shares.toUint128();
+        market[id].totalBorrowShares += shares.toUint128();
+        market[id].totalBorrowAssets += assets.toUint128();
+
+        require(_isHealthy(marketParams, id, onBehalf), ErrorsLib.INSUFFICIENT_COLLATERAL);
+        require(market[id].totalBorrowAssets <= market[id].totalSupplyAssets, ErrorsLib.INSUFFICIENT_LIQUIDITY);
+
+        emit EventsLib.Borrow(id, msg.sender, onBehalf, receiver, assets, shares);
+
+        IERC20(marketParams.loanToken).safeTransfer(receiver, assets);
+
+        return (assets, shares);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function repay(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        bytes calldata data
+    ) external returns (uint256, uint256) {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
+        require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        _accrueInterest(marketParams, id);
+
+        if (assets > 0) shares = assets.toSharesDown(market[id].totalBorrowAssets, market[id].totalBorrowShares);
+        else assets = shares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares);
+
+        position[id][onBehalf].borrowShares -= shares.toUint128();
+        market[id].totalBorrowShares -= shares.toUint128();
+        market[id].totalBorrowAssets = UtilsLib.zeroFloorSub(market[id].totalBorrowAssets, assets).toUint128();
+
+        // `assets` may be greater than `totalBorrowAssets` by 1.
+        emit EventsLib.Repay(id, msg.sender, onBehalf, assets, shares);
+
+        if (data.length > 0) IMorphoRepayCallback(msg.sender).onMorphoRepay(assets, data);
+
+        IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
+
+        return (assets, shares);
+    }
+
+    /* COLLATERAL MANAGEMENT */
+
+    /// @inheritdoc IMorphoBase
+    function supplyCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, bytes calldata data)
+        external
+    {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(assets != 0, ErrorsLib.ZERO_ASSETS);
+        require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        // Don't accrue interest because it's not required and it saves gas.
+
+        position[id][onBehalf].collateral += assets.toUint128();
+
+        emit EventsLib.SupplyCollateral(id, msg.sender, onBehalf, assets);
+
+        if (data.length > 0) IMorphoSupplyCollateralCallback(msg.sender).onMorphoSupplyCollateral(assets, data);
+
+        IERC20(marketParams.collateralToken).safeTransferFrom(msg.sender, address(this), assets);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function withdrawCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, address receiver)
+        external
+    {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(assets != 0, ErrorsLib.ZERO_ASSETS);
+        require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
+        // No need to verify that onBehalf != address(0) thanks to the following authorization check.
+        require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+
+        _accrueInterest(marketParams, id);
+
+        position[id][onBehalf].collateral -= assets.toUint128();
+
+        require(_isHealthy(marketParams, id, onBehalf), ErrorsLib.INSUFFICIENT_COLLATERAL);
+
+        emit EventsLib.WithdrawCollateral(id, msg.sender, onBehalf, receiver, assets);
+
+        IERC20(marketParams.collateralToken).safeTransfer(receiver, assets);
+    }
+
+    /* LIQUIDATION */
+
+    /// @inheritdoc IMorphoBase
+    function liquidate(
+        MarketParams memory marketParams,
+        address borrower,
+        uint256 seizedAssets,
+        uint256 repaidShares,
+        bytes calldata data
+    ) external returns (uint256, uint256) {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+        require(UtilsLib.exactlyOneZero(seizedAssets, repaidShares), ErrorsLib.INCONSISTENT_INPUT);
+
+        _accrueInterest(marketParams, id);
+
+        {
+            uint256 collateralPrice = IOracle(marketParams.oracle).price();
+
+            require(!_isHealthy(marketParams, id, borrower, collateralPrice), ErrorsLib.HEALTHY_POSITION);
+
+            // The liquidation incentive factor is min(maxLiquidationIncentiveFactor, 1/(1 - cursor*(1 - lltv))).
+            uint256 liquidationIncentiveFactor = UtilsLib.min(
+                MAX_LIQUIDATION_INCENTIVE_FACTOR,
+                WAD.wDivDown(WAD - LIQUIDATION_CURSOR.wMulDown(WAD - marketParams.lltv))
+            );
+
+            if (seizedAssets > 0) {
+                uint256 seizedAssetsQuoted = seizedAssets.mulDivUp(collateralPrice, ORACLE_PRICE_SCALE);
+
+                repaidShares = seizedAssetsQuoted.wDivUp(liquidationIncentiveFactor).toSharesUp(
+                    market[id].totalBorrowAssets, market[id].totalBorrowShares
+                );
+            } else {
+                seizedAssets = repaidShares.toAssetsDown(market[id].totalBorrowAssets, market[id].totalBorrowShares)
+                    .wMulDown(liquidationIncentiveFactor).mulDivDown(ORACLE_PRICE_SCALE, collateralPrice);
+            }
+        }
+        uint256 repaidAssets = repaidShares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares);
+
+        position[id][borrower].borrowShares -= repaidShares.toUint128();
+        market[id].totalBorrowShares -= repaidShares.toUint128();
+        market[id].totalBorrowAssets = UtilsLib.zeroFloorSub(market[id].totalBorrowAssets, repaidAssets).toUint128();
+
+        position[id][borrower].collateral -= seizedAssets.toUint128();
+
+        uint256 badDebtShares;
+        uint256 badDebtAssets;
+        if (position[id][borrower].collateral == 0) {
+            badDebtShares = position[id][borrower].borrowShares;
+            badDebtAssets = UtilsLib.min(
+                market[id].totalBorrowAssets,
+                badDebtShares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares)
+            );
+
+            market[id].totalBorrowAssets -= badDebtAssets.toUint128();
+            market[id].totalSupplyAssets -= badDebtAssets.toUint128();
+            market[id].totalBorrowShares -= badDebtShares.toUint128();
+            position[id][borrower].borrowShares = 0;
+        }
+
+        // `repaidAssets` may be greater than `totalBorrowAssets` by 1.
+        emit EventsLib.Liquidate(
+            id, msg.sender, borrower, repaidAssets, repaidShares, seizedAssets, badDebtAssets, badDebtShares
+        );
+
+        IERC20(marketParams.collateralToken).safeTransfer(msg.sender, seizedAssets);
+
+        if (data.length > 0) IMorphoLiquidateCallback(msg.sender).onMorphoLiquidate(repaidAssets, data);
+
+        IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), repaidAssets);
+
+        return (seizedAssets, repaidAssets);
+    }
+
+    /* FLASH LOANS */
+
+    /// @inheritdoc IMorphoBase
+    function flashLoan(address token, uint256 assets, bytes calldata data) external {
+        require(assets != 0, ErrorsLib.ZERO_ASSETS);
+
+        emit EventsLib.FlashLoan(msg.sender, token, assets);
+
+        IERC20(token).safeTransfer(msg.sender, assets);
+
+        IMorphoFlashLoanCallback(msg.sender).onMorphoFlashLoan(assets, data);
+
+        IERC20(token).safeTransferFrom(msg.sender, address(this), assets);
+    }
+
+    /* AUTHORIZATION */
+
+    /// @inheritdoc IMorphoBase
+    function setAuthorization(address authorized, bool newIsAuthorized) external {
+        require(newIsAuthorized != isAuthorized[msg.sender][authorized], ErrorsLib.ALREADY_SET);
+
+        isAuthorized[msg.sender][authorized] = newIsAuthorized;
+
+        emit EventsLib.SetAuthorization(msg.sender, msg.sender, authorized, newIsAuthorized);
+    }
+
+    /// @inheritdoc IMorphoBase
+    function setAuthorizationWithSig(Authorization memory authorization, Signature calldata signature) external {
+        /// Do not check whether authorization is already set because the nonce increment is a desired side effect.
+        require(block.timestamp <= authorization.deadline, ErrorsLib.SIGNATURE_EXPIRED);
+        require(authorization.nonce == nonce[authorization.authorizer]++, ErrorsLib.INVALID_NONCE);
+
+        bytes32 hashStruct = keccak256(abi.encode(AUTHORIZATION_TYPEHASH, authorization));
+        bytes32 digest = keccak256(bytes.concat("\x19\x01", DOMAIN_SEPARATOR, hashStruct));
+        address signatory = ecrecover(digest, signature.v, signature.r, signature.s);
+
+        require(signatory != address(0) && authorization.authorizer == signatory, ErrorsLib.INVALID_SIGNATURE);
+
+        emit EventsLib.IncrementNonce(msg.sender, authorization.authorizer, authorization.nonce);
+
+        isAuthorized[authorization.authorizer][authorization.authorized] = authorization.isAuthorized;
+
+        emit EventsLib.SetAuthorization(
+            msg.sender, authorization.authorizer, authorization.authorized, authorization.isAuthorized
+        );
+    }
+
+    /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.
+    function _isSenderAuthorized(address onBehalf) internal view returns (bool) {
+        return msg.sender == onBehalf || isAuthorized[onBehalf][msg.sender];
+    }
+
+    /* INTEREST MANAGEMENT */
+
+    /// @inheritdoc IMorphoBase
+    function accrueInterest(MarketParams memory marketParams) external {
+        Id id = marketParams.id();
+        require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+
+        _accrueInterest(marketParams, id);
+    }
+
+    /// @dev Accrues interest for the given market `marketParams`.
+    /// @dev Assumes that the inputs `marketParams` and `id` match.
+    function _accrueInterest(MarketParams memory marketParams, Id id) internal {
+        uint256 elapsed = block.timestamp - market[id].lastUpdate;
+        if (elapsed == 0) return;
+
+        if (marketParams.irm != address(0)) {
+            uint256 borrowRate = IIrm(marketParams.irm).borrowRate(marketParams, market[id]);
+            uint256 interest = market[id].totalBorrowAssets.wMulDown(borrowRate.wTaylorCompounded(elapsed));
+            market[id].totalBorrowAssets += interest.toUint128();
+            market[id].totalSupplyAssets += interest.toUint128();
+
+            uint256 feeShares;
+            if (market[id].fee != 0) {
+                uint256 feeAmount = interest.wMulDown(market[id].fee);
+                // The fee amount is subtracted from the total supply in this calculation to compensate for the fact
+                // that total supply is already increased by the full interest (including the fee amount).
+                feeShares =
+                    feeAmount.toSharesDown(market[id].totalSupplyAssets - feeAmount, market[id].totalSupplyShares);
+                position[id][feeRecipient].supplyShares += feeShares;
+                market[id].totalSupplyShares += feeShares.toUint128();
+            }
+
+            emit EventsLib.AccrueInterest(id, borrowRate, interest, feeShares);
+        }
+
+        // Safe "unchecked" cast.
+        market[id].lastUpdate = uint128(block.timestamp);
+    }
+
+    /* HEALTH CHECK */
+
+    /// @dev Returns whether the position of `borrower` in the given market `marketParams` is healthy.
+    /// @dev Assumes that the inputs `marketParams` and `id` match.
+    function _isHealthy(MarketParams memory marketParams, Id id, address borrower) internal view returns (bool) {
+        if (position[id][borrower].borrowShares == 0) return true;
+
+        uint256 collateralPrice = IOracle(marketParams.oracle).price();
+
+        return _isHealthy(marketParams, id, borrower, collateralPrice);
+    }
+
+    /// @dev Returns whether the position of `borrower` in the given market `marketParams` with the given
+    /// `collateralPrice` is healthy.
+    /// @dev Assumes that the inputs `marketParams` and `id` match.
+    /// @dev Rounds in favor of the protocol, so one might not be able to borrow exactly `maxBorrow` but one unit less.
+    function _isHealthy(MarketParams memory marketParams, Id id, address borrower, uint256 collateralPrice)
+        internal
+        view
+        returns (bool)
+    {
+        uint256 borrowed = uint256(position[id][borrower].borrowShares).toAssetsUp(
+            market[id].totalBorrowAssets, market[id].totalBorrowShares
+        );
+        uint256 maxBorrow = uint256(position[id][borrower].collateral).mulDivDown(collateralPrice, ORACLE_PRICE_SCALE)
+            .wMulDown(marketParams.lltv);
+
+        return maxBorrow >= borrowed;
+    }
+
+    /* STORAGE VIEW */
+
+    /// @inheritdoc IMorphoBase
+    function extSloads(bytes32[] calldata slots) external view returns (bytes32[] memory res) {
+        uint256 nSlots = slots.length;
+
+        res = new bytes32[](nSlots);
+
+        for (uint256 i; i < nSlots;) {
+            bytes32 slot = slots[i++];
+
+            assembly ("memory-safe") {
+                mstore(add(res, mul(i, 32)), sload(slot))
+            }
+        }
+    }
+}
+===== END FILE reference/morpho-blue__Morpho.sol =====
+
+===== BEGIN FILE reference/morpho-blue__IMorpho.sol | 353 lines | sha256 24f96c2860c42cd5834c56cdb159c56435acaee0716d34d54ca18bd755edc97c =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity >=0.5.0;
+
+type Id is bytes32;
+
+struct MarketParams {
+    address loanToken;
+    address collateralToken;
+    address oracle;
+    address irm;
+    uint256 lltv;
+}
+
+/// @dev Warning: For `feeRecipient`, `supplyShares` does not contain the accrued shares since the last interest
+/// accrual.
+struct Position {
+    uint256 supplyShares;
+    uint128 borrowShares;
+    uint128 collateral;
+}
+
+/// @dev Warning: `totalSupplyAssets` does not contain the accrued interest since the last interest accrual.
+/// @dev Warning: `totalBorrowAssets` does not contain the accrued interest since the last interest accrual.
+/// @dev Warning: `totalSupplyShares` does not contain the additional shares accrued by `feeRecipient` since the last
+/// interest accrual.
+struct Market {
+    uint128 totalSupplyAssets;
+    uint128 totalSupplyShares;
+    uint128 totalBorrowAssets;
+    uint128 totalBorrowShares;
+    uint128 lastUpdate;
+    uint128 fee;
+}
+
+struct Authorization {
+    address authorizer;
+    address authorized;
+    bool isAuthorized;
+    uint256 nonce;
+    uint256 deadline;
+}
+
+struct Signature {
+    uint8 v;
+    bytes32 r;
+    bytes32 s;
+}
+
+/// @dev This interface is used for factorizing IMorphoStaticTyping and IMorpho.
+/// @dev Consider using the IMorpho interface instead of this one.
+interface IMorphoBase {
+    /// @notice The EIP-712 domain separator.
+    /// @dev Warning: Every EIP-712 signed message based on this domain separator can be reused on another chain sharing
+    /// the same chain id because the domain separator would be the same.
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
+
+    /// @notice The owner of the contract.
+    /// @dev It has the power to change the owner.
+    /// @dev It has the power to set fees on markets and set the fee recipient.
+    /// @dev It has the power to enable but not disable IRMs and LLTVs.
+    function owner() external view returns (address);
+
+    /// @notice The fee recipient of all markets.
+    /// @dev The recipient receives the fees of a given market through a supply position on that market.
+    function feeRecipient() external view returns (address);
+
+    /// @notice Whether the `irm` is enabled.
+    function isIrmEnabled(address irm) external view returns (bool);
+
+    /// @notice Whether the `lltv` is enabled.
+    function isLltvEnabled(uint256 lltv) external view returns (bool);
+
+    /// @notice Whether `authorized` is authorized to modify `authorizer`'s position on all markets.
+    /// @dev Anyone is authorized to modify their own positions, regardless of this variable.
+    function isAuthorized(address authorizer, address authorized) external view returns (bool);
+
+    /// @notice The `authorizer`'s current nonce. Used to prevent replay attacks with EIP-712 signatures.
+    function nonce(address authorizer) external view returns (uint256);
+
+    /// @notice Sets `newOwner` as `owner` of the contract.
+    /// @dev Warning: No two-step transfer ownership.
+    /// @dev Warning: The owner can be set to the zero address.
+    function setOwner(address newOwner) external;
+
+    /// @notice Enables `irm` as a possible IRM for market creation.
+    /// @dev Warning: It is not possible to disable an IRM.
+    function enableIrm(address irm) external;
+
+    /// @notice Enables `lltv` as a possible LLTV for market creation.
+    /// @dev Warning: It is not possible to disable a LLTV.
+    function enableLltv(uint256 lltv) external;
+
+    /// @notice Sets the `newFee` for the given market `marketParams`.
+    /// @param newFee The new fee, scaled by WAD.
+    /// @dev Warning: The recipient can be the zero address.
+    function setFee(MarketParams memory marketParams, uint256 newFee) external;
+
+    /// @notice Sets `newFeeRecipient` as `feeRecipient` of the fee.
+    /// @dev Warning: If the fee recipient is set to the zero address, fees will accrue there and will be lost.
+    /// @dev Modifying the fee recipient will allow the new recipient to claim any pending fees not yet accrued. To
+    /// ensure that the current recipient receives all due fees, accrue interest manually prior to making any changes.
+    function setFeeRecipient(address newFeeRecipient) external;
+
+    /// @notice Creates the market `marketParams`.
+    /// @dev Here is the list of assumptions on the market's dependencies (tokens, IRM and oracle) that guarantees
+    /// Morpho behaves as expected:
+    /// - The token should be ERC-20 compliant, except that it can omit return values on `transfer` and `transferFrom`.
+    /// - The token balance of Morpho should only decrease on `transfer` and `transferFrom`. In particular, tokens with
+    /// burn functions are not supported.
+    /// - The token should not re-enter Morpho on `transfer` nor `transferFrom`.
+    /// - The token balance of the sender (resp. receiver) should decrease (resp. increase) by exactly the given amount
+    /// on `transfer` and `transferFrom`. In particular, tokens with fees on transfer are not supported.
+    /// - The IRM should not re-enter Morpho.
+    /// - The oracle should return a price with the correct scaling.
+    /// @dev Here is a list of properties on the market's dependencies that could break Morpho's liveness properties
+    /// (funds could get stuck):
+    /// - The token can revert on `transfer` and `transferFrom` for a reason other than an approval or balance issue.
+    /// - A very high amount of assets (~1e35) supplied or borrowed can make the computation of `toSharesUp` and
+    /// `toSharesDown` overflow.
+    /// - The IRM can revert on `borrowRate`.
+    /// - A very high borrow rate returned by the IRM can make the computation of `interest` in `_accrueInterest`
+    /// overflow.
+    /// - The oracle can revert on `price`. Note that this can be used to prevent `borrow`, `withdrawCollateral` and
+    /// `liquidate` from being used under certain market conditions.
+    /// - A very high price returned by the oracle can make the computation of `maxBorrow` in `_isHealthy` overflow, or
+    /// the computation of `assetsRepaid` in `liquidate` overflow.
+    /// @dev The borrow share price of a market with less than 1e4 assets borrowed can be decreased by manipulations, to
+    /// the point where `totalBorrowShares` is very large and borrowing overflows.
+    function createMarket(MarketParams memory marketParams) external;
+
+    /// @notice Supplies `assets` or `shares` on behalf of `onBehalf`, optionally calling back the caller's
+    /// `onMorphoSupply` function with the given `data`.
+    /// @dev Either `assets` or `shares` should be zero. Most use cases should rely on `assets` as an input so the
+    /// caller is guaranteed to have `assets` tokens pulled from their balance, but the possibility to mint a specific
+    /// amount of shares is given for full compatibility and precision.
+    /// @dev Supplying a large amount can revert for overflow.
+    /// @dev Supplying an amount of shares may lead to supply more or fewer assets than expected due to slippage.
+    /// Consider using the `assets` parameter to avoid this.
+    /// @param marketParams The market to supply assets to.
+    /// @param assets The amount of assets to supply.
+    /// @param shares The amount of shares to mint.
+    /// @param onBehalf The address that will own the increased supply position.
+    /// @param data Arbitrary data to pass to the `onMorphoSupply` callback. Pass empty data if not needed.
+    /// @return assetsSupplied The amount of assets supplied.
+    /// @return sharesSupplied The amount of shares minted.
+    function supply(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        bytes memory data
+    ) external returns (uint256 assetsSupplied, uint256 sharesSupplied);
+
+    /// @notice Withdraws `assets` or `shares` on behalf of `onBehalf` and sends the assets to `receiver`.
+    /// @dev Either `assets` or `shares` should be zero. To withdraw max, pass the `shares`'s balance of `onBehalf`.
+    /// @dev `msg.sender` must be authorized to manage `onBehalf`'s positions.
+    /// @dev Withdrawing an amount corresponding to more shares than supplied will revert for underflow.
+    /// @dev It is advised to use the `shares` input when withdrawing the full position to avoid reverts due to
+    /// conversion roundings between shares and assets.
+    /// @param marketParams The market to withdraw assets from.
+    /// @param assets The amount of assets to withdraw.
+    /// @param shares The amount of shares to burn.
+    /// @param onBehalf The address of the owner of the supply position.
+    /// @param receiver The address that will receive the withdrawn assets.
+    /// @return assetsWithdrawn The amount of assets withdrawn.
+    /// @return sharesWithdrawn The amount of shares burned.
+    function withdraw(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        address receiver
+    ) external returns (uint256 assetsWithdrawn, uint256 sharesWithdrawn);
+
+    /// @notice Borrows `assets` or `shares` on behalf of `onBehalf` and sends the assets to `receiver`.
+    /// @dev Either `assets` or `shares` should be zero. Most use cases should rely on `assets` as an input so the
+    /// caller is guaranteed to borrow `assets` of tokens, but the possibility to mint a specific amount of shares is
+    /// given for full compatibility and precision.
+    /// @dev `msg.sender` must be authorized to manage `onBehalf`'s positions.
+    /// @dev Borrowing a large amount can revert for overflow.
+    /// @dev Borrowing an amount of shares may lead to borrow fewer assets than expected due to slippage.
+    /// Consider using the `assets` parameter to avoid this.
+    /// @param marketParams The market to borrow assets from.
+    /// @param assets The amount of assets to borrow.
+    /// @param shares The amount of shares to mint.
+    /// @param onBehalf The address that will own the increased borrow position.
+    /// @param receiver The address that will receive the borrowed assets.
+    /// @return assetsBorrowed The amount of assets borrowed.
+    /// @return sharesBorrowed The amount of shares minted.
+    function borrow(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        address receiver
+    ) external returns (uint256 assetsBorrowed, uint256 sharesBorrowed);
+
+    /// @notice Repays `assets` or `shares` on behalf of `onBehalf`, optionally calling back the caller's
+    /// `onMorphoReplay` function with the given `data`.
+    /// @dev Either `assets` or `shares` should be zero. To repay max, pass the `shares`'s balance of `onBehalf`.
+    /// @dev Repaying an amount corresponding to more shares than borrowed will revert for underflow.
+    /// @dev It is advised to use the `shares` input when repaying the full position to avoid reverts due to conversion
+    /// roundings between shares and assets.
+    /// @dev An attacker can front-run a repay with a small repay making the transaction revert for underflow.
+    /// @param marketParams The market to repay assets to.
+    /// @param assets The amount of assets to repay.
+    /// @param shares The amount of shares to burn.
+    /// @param onBehalf The address of the owner of the debt position.
+    /// @param data Arbitrary data to pass to the `onMorphoRepay` callback. Pass empty data if not needed.
+    /// @return assetsRepaid The amount of assets repaid.
+    /// @return sharesRepaid The amount of shares burned.
+    function repay(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        bytes memory data
+    ) external returns (uint256 assetsRepaid, uint256 sharesRepaid);
+
+    /// @notice Supplies `assets` of collateral on behalf of `onBehalf`, optionally calling back the caller's
+    /// `onMorphoSupplyCollateral` function with the given `data`.
+    /// @dev Interest are not accrued since it's not required and it saves gas.
+    /// @dev Supplying a large amount can revert for overflow.
+    /// @param marketParams The market to supply collateral to.
+    /// @param assets The amount of collateral to supply.
+    /// @param onBehalf The address that will own the increased collateral position.
+    /// @param data Arbitrary data to pass to the `onMorphoSupplyCollateral` callback. Pass empty data if not needed.
+    function supplyCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, bytes memory data)
+        external;
+
+    /// @notice Withdraws `assets` of collateral on behalf of `onBehalf` and sends the assets to `receiver`.
+    /// @dev `msg.sender` must be authorized to manage `onBehalf`'s positions.
+    /// @dev Withdrawing an amount corresponding to more collateral than supplied will revert for underflow.
+    /// @param marketParams The market to withdraw collateral from.
+    /// @param assets The amount of collateral to withdraw.
+    /// @param onBehalf The address of the owner of the collateral position.
+    /// @param receiver The address that will receive the collateral assets.
+    function withdrawCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, address receiver)
+        external;
+
+    /// @notice Liquidates the given `repaidShares` of debt asset or seize the given `seizedAssets` of collateral on the
+    /// given market `marketParams` of the given `borrower`'s position, optionally calling back the caller's
+    /// `onMorphoLiquidate` function with the given `data`.
+    /// @dev Either `seizedAssets` or `repaidShares` should be zero.
+    /// @dev Seizing more than the collateral balance will underflow and revert without any error message.
+    /// @dev Repaying more than the borrow balance will underflow and revert without any error message.
+    /// @dev An attacker can front-run a liquidation with a small repay making the transaction revert for underflow.
+    /// @param marketParams The market of the position.
+    /// @param borrower The owner of the position.
+    /// @param seizedAssets The amount of collateral to seize.
+    /// @param repaidShares The amount of shares to repay.
+    /// @param data Arbitrary data to pass to the `onMorphoLiquidate` callback. Pass empty data if not needed.
+    /// @return The amount of assets seized.
+    /// @return The amount of assets repaid.
+    function liquidate(
+        MarketParams memory marketParams,
+        address borrower,
+        uint256 seizedAssets,
+        uint256 repaidShares,
+        bytes memory data
+    ) external returns (uint256, uint256);
+
+    /// @notice Executes a flash loan.
+    /// @dev Flash loans have access to the whole balance of the contract (the liquidity and deposited collateral of all
+    /// markets combined, plus donations).
+    /// @dev Warning: Not ERC-3156 compliant but compatibility is easily reached:
+    /// - `flashFee` is zero.
+    /// - `maxFlashLoan` is the token's balance of this contract.
+    /// - The receiver of `assets` is the caller.
+    /// @param token The token to flash loan.
+    /// @param assets The amount of assets to flash loan.
+    /// @param data Arbitrary data to pass to the `onMorphoFlashLoan` callback.
+    function flashLoan(address token, uint256 assets, bytes calldata data) external;
+
+    /// @notice Sets the authorization for `authorized` to manage `msg.sender`'s positions.
+    /// @param authorized The authorized address.
+    /// @param newIsAuthorized The new authorization status.
+    function setAuthorization(address authorized, bool newIsAuthorized) external;
+
+    /// @notice Sets the authorization for `authorization.authorized` to manage `authorization.authorizer`'s positions.
+    /// @dev Warning: Reverts if the signature has already been submitted.
+    /// @dev The signature is malleable, but it has no impact on the security here.
+    /// @dev The nonce is passed as argument to be able to revert with a different error message.
+    /// @param authorization The `Authorization` struct.
+    /// @param signature The signature.
+    function setAuthorizationWithSig(Authorization calldata authorization, Signature calldata signature) external;
+
+    /// @notice Accrues interest for the given market `marketParams`.
+    function accrueInterest(MarketParams memory marketParams) external;
+
+    /// @notice Returns the data stored on the different `slots`.
+    function extSloads(bytes32[] memory slots) external view returns (bytes32[] memory);
+}
+
+/// @dev This interface is inherited by Morpho so that function signatures are checked by the compiler.
+/// @dev Consider using the IMorpho interface instead of this one.
+interface IMorphoStaticTyping is IMorphoBase {
+    /// @notice The state of the position of `user` on the market corresponding to `id`.
+    /// @dev Warning: For `feeRecipient`, `supplyShares` does not contain the accrued shares since the last interest
+    /// accrual.
+    function position(Id id, address user)
+        external
+        view
+        returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral);
+
+    /// @notice The state of the market corresponding to `id`.
+    /// @dev Warning: `totalSupplyAssets` does not contain the accrued interest since the last interest accrual.
+    /// @dev Warning: `totalBorrowAssets` does not contain the accrued interest since the last interest accrual.
+    /// @dev Warning: `totalSupplyShares` does not contain the accrued shares by `feeRecipient` since the last interest
+    /// accrual.
+    function market(Id id)
+        external
+        view
+        returns (
+            uint128 totalSupplyAssets,
+            uint128 totalSupplyShares,
+            uint128 totalBorrowAssets,
+            uint128 totalBorrowShares,
+            uint128 lastUpdate,
+            uint128 fee
+        );
+
+    /// @notice The market params corresponding to `id`.
+    /// @dev This mapping is not used in Morpho. It is there to enable reducing the cost associated to calldata on layer
+    /// 2s by creating a wrapper contract with functions that take `id` as input instead of `marketParams`.
+    function idToMarketParams(Id id)
+        external
+        view
+        returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv);
+}
+
+/// @title IMorpho
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @dev Use this interface for Morpho to have access to all the functions with the appropriate function signatures.
+interface IMorpho is IMorphoBase {
+    /// @notice The state of the position of `user` on the market corresponding to `id`.
+    /// @dev Warning: For `feeRecipient`, `p.supplyShares` does not contain the accrued shares since the last interest
+    /// accrual.
+    function position(Id id, address user) external view returns (Position memory p);
+
+    /// @notice The state of the market corresponding to `id`.
+    /// @dev Warning: `m.totalSupplyAssets` does not contain the accrued interest since the last interest accrual.
+    /// @dev Warning: `m.totalBorrowAssets` does not contain the accrued interest since the last interest accrual.
+    /// @dev Warning: `m.totalSupplyShares` does not contain the accrued shares by `feeRecipient` since the last
+    /// interest accrual.
+    function market(Id id) external view returns (Market memory m);
+
+    /// @notice The market params corresponding to `id`.
+    /// @dev This mapping is not used in Morpho. It is there to enable reducing the cost associated to calldata on layer
+    /// 2s by creating a wrapper contract with functions that take `id` as input instead of `marketParams`.
+    function idToMarketParams(Id id) external view returns (MarketParams memory);
+}
+===== END FILE reference/morpho-blue__IMorpho.sol =====
+
+===== BEGIN FILE reference/morpho-blue__MarketParamsLib.sol | 21 lines | sha256 94af290e2a2094b8547b925449484d247bce87cce4fed8902ecf82dd2b49242e =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity ^0.8.0;
+
+import {Id, MarketParams} from "../interfaces/IMorpho.sol";
+
+/// @title MarketParamsLib
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice Library to convert a market to its id.
+library MarketParamsLib {
+    /// @notice The length of the data used to compute the id of a market.
+    /// @dev The length is 5 * 32 because `MarketParams` has 5 variables of 32 bytes each.
+    uint256 internal constant MARKET_PARAMS_BYTES_LENGTH = 5 * 32;
+
+    /// @notice Returns the id of the market `marketParams`.
+    function id(MarketParams memory marketParams) internal pure returns (Id marketParamsId) {
+        assembly ("memory-safe") {
+            marketParamsId := keccak256(marketParams, MARKET_PARAMS_BYTES_LENGTH)
+        }
+    }
+}
+===== END FILE reference/morpho-blue__MarketParamsLib.sol =====
+
+===== BEGIN FILE reference/morpho-blue__MathLib.sol | 45 lines | sha256 2c6728d1bc8f5db81f2a7946f226c3c4a8cffe4134c55450ca445b05727011bc =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity ^0.8.0;
+
+uint256 constant WAD = 1e18;
+
+/// @title MathLib
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice Library to manage fixed-point arithmetic.
+library MathLib {
+    /// @dev Returns (`x` * `y`) / `WAD` rounded down.
+    function wMulDown(uint256 x, uint256 y) internal pure returns (uint256) {
+        return mulDivDown(x, y, WAD);
+    }
+
+    /// @dev Returns (`x` * `WAD`) / `y` rounded down.
+    function wDivDown(uint256 x, uint256 y) internal pure returns (uint256) {
+        return mulDivDown(x, WAD, y);
+    }
+
+    /// @dev Returns (`x` * `WAD`) / `y` rounded up.
+    function wDivUp(uint256 x, uint256 y) internal pure returns (uint256) {
+        return mulDivUp(x, WAD, y);
+    }
+
+    /// @dev Returns (`x` * `y`) / `d` rounded down.
+    function mulDivDown(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
+        return (x * y) / d;
+    }
+
+    /// @dev Returns (`x` * `y`) / `d` rounded up.
+    function mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
+        return (x * y + (d - 1)) / d;
+    }
+
+    /// @dev Returns the sum of the first three non-zero terms of a Taylor expansion of e^(nx) - 1, to approximate a
+    /// continuous compound interest rate.
+    function wTaylorCompounded(uint256 x, uint256 n) internal pure returns (uint256) {
+        uint256 firstTerm = x * n;
+        uint256 secondTerm = mulDivDown(firstTerm, firstTerm, 2 * WAD);
+        uint256 thirdTerm = mulDivDown(secondTerm, firstTerm, 3 * WAD);
+
+        return firstTerm + secondTerm + thirdTerm;
+    }
+}
+===== END FILE reference/morpho-blue__MathLib.sol =====
+
+===== BEGIN FILE reference/morpho-blue__SharesMathLib.sol | 45 lines | sha256 4580deb1b1a3f2ea0b60f2305708428975613d1e94d404d647bcc573a7b2a2f0 =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity ^0.8.0;
+
+import {MathLib} from "./MathLib.sol";
+
+/// @title SharesMathLib
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice Shares management library.
+/// @dev This implementation mitigates share price manipulations, using OpenZeppelin's method of virtual shares:
+/// https://docs.openzeppelin.com/contracts/4.x/erc4626#inflation-attack.
+library SharesMathLib {
+    using MathLib for uint256;
+
+    /// @dev The number of virtual shares has been chosen low enough to prevent overflows, and high enough to ensure
+    /// high precision computations.
+    /// @dev Virtual shares can never be redeemed for the assets they are entitled to, but it is assumed the share price
+    /// stays low enough not to inflate these assets to a significant value.
+    /// @dev Warning: The assets to which virtual borrow shares are entitled behave like unrealizable bad debt.
+    uint256 internal constant VIRTUAL_SHARES = 1e6;
+
+    /// @dev A number of virtual assets of 1 enforces a conversion rate between shares and assets when a market is
+    /// empty.
+    uint256 internal constant VIRTUAL_ASSETS = 1;
+
+    /// @dev Calculates the value of `assets` quoted in shares, rounding down.
+    function toSharesDown(uint256 assets, uint256 totalAssets, uint256 totalShares) internal pure returns (uint256) {
+        return assets.mulDivDown(totalShares + VIRTUAL_SHARES, totalAssets + VIRTUAL_ASSETS);
+    }
+
+    /// @dev Calculates the value of `shares` quoted in assets, rounding down.
+    function toAssetsDown(uint256 shares, uint256 totalAssets, uint256 totalShares) internal pure returns (uint256) {
+        return shares.mulDivDown(totalAssets + VIRTUAL_ASSETS, totalShares + VIRTUAL_SHARES);
+    }
+
+    /// @dev Calculates the value of `assets` quoted in shares, rounding up.
+    function toSharesUp(uint256 assets, uint256 totalAssets, uint256 totalShares) internal pure returns (uint256) {
+        return assets.mulDivUp(totalShares + VIRTUAL_SHARES, totalAssets + VIRTUAL_ASSETS);
+    }
+
+    /// @dev Calculates the value of `shares` quoted in assets, rounding up.
+    function toAssetsUp(uint256 shares, uint256 totalAssets, uint256 totalShares) internal pure returns (uint256) {
+        return shares.mulDivUp(totalAssets + VIRTUAL_ASSETS, totalShares + VIRTUAL_SHARES);
+    }
+}
+===== END FILE reference/morpho-blue__SharesMathLib.sol =====
+
+===== BEGIN FILE reference/metamorpho-v1.1__MetaMorphoV1_1.sol | 952 lines | sha256 be4b1540e398cb1e8b15d9aa86f0bcefb6b12ef5898dcbb25ab7ec51ad49317d =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity 0.8.26;
+
+import {
+    MarketConfig,
+    PendingUint192,
+    PendingAddress,
+    MarketAllocation,
+    IMetaMorphoV1_1Base,
+    IMetaMorphoV1_1StaticTyping
+} from "./interfaces/IMetaMorphoV1_1.sol";
+import {Id, MarketParams, Market, IMorpho} from "../lib/morpho-blue/src/interfaces/IMorpho.sol";
+
+import {PendingUint192, PendingAddress, PendingLib} from "./libraries/PendingLib.sol";
+import {ConstantsLib} from "./libraries/ConstantsLib.sol";
+import {ErrorsLib} from "./libraries/ErrorsLib.sol";
+import {EventsLib} from "./libraries/EventsLib.sol";
+import {WAD} from "../lib/morpho-blue/src/libraries/MathLib.sol";
+import {UtilsLib} from "../lib/morpho-blue/src/libraries/UtilsLib.sol";
+import {SafeCast} from "../lib/openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
+import {SharesMathLib} from "../lib/morpho-blue/src/libraries/SharesMathLib.sol";
+import {MorphoLib} from "../lib/morpho-blue/src/libraries/periphery/MorphoLib.sol";
+import {MarketParamsLib} from "../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
+import {IERC20Metadata} from "../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {MorphoBalancesLib} from "../lib/morpho-blue/src/libraries/periphery/MorphoBalancesLib.sol";
+
+import {Multicall} from "../lib/openzeppelin-contracts/contracts/utils/Multicall.sol";
+import {Ownable2Step, Ownable} from "../lib/openzeppelin-contracts/contracts/access/Ownable2Step.sol";
+import {ERC20Permit} from "../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import {
+    IERC20,
+    IERC4626,
+    ERC20,
+    ERC4626,
+    Math,
+    SafeERC20
+} from "../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
+
+/// @title MetaMorpho
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice ERC4626 compliant vault allowing users to deposit assets to Morpho.
+contract MetaMorphoV1_1 is ERC4626, ERC20Permit, Ownable2Step, Multicall, IMetaMorphoV1_1StaticTyping {
+    using Math for uint256;
+    using UtilsLib for uint256;
+    using SafeCast for uint256;
+    using SafeERC20 for IERC20;
+    using MorphoLib for IMorpho;
+    using SharesMathLib for uint256;
+    using MorphoBalancesLib for IMorpho;
+    using MarketParamsLib for MarketParams;
+    using PendingLib for MarketConfig;
+    using PendingLib for PendingUint192;
+    using PendingLib for PendingAddress;
+
+    /* IMMUTABLES */
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    IMorpho public immutable MORPHO;
+
+    /// @notice OpenZeppelin decimals offset used by the ERC4626 implementation.
+    /// @dev Calculated to be max(0, 18 - underlyingDecimals) at construction, so the initial conversion rate maximizes
+    /// precision between shares and assets.
+    uint8 public immutable DECIMALS_OFFSET;
+
+    /* STORAGE */
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    address public curator;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    mapping(address => bool) public isAllocator;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    address public guardian;
+
+    /// @inheritdoc IMetaMorphoV1_1StaticTyping
+    mapping(Id => MarketConfig) public config;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    uint256 public timelock;
+
+    /// @inheritdoc IMetaMorphoV1_1StaticTyping
+    PendingAddress public pendingGuardian;
+
+    /// @inheritdoc IMetaMorphoV1_1StaticTyping
+    mapping(Id => PendingUint192) public pendingCap;
+
+    /// @inheritdoc IMetaMorphoV1_1StaticTyping
+    PendingUint192 public pendingTimelock;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    uint96 public fee;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    address public feeRecipient;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    address public skimRecipient;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    Id[] public supplyQueue;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    Id[] public withdrawQueue;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    uint256 public lastTotalAssets;
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    uint256 public lostAssets;
+
+    /// @dev "Overrides" the ERC20's storage variable to be able to modify it.
+    string private _name;
+
+    /// @dev "Overrides" the ERC20's storage variable to be able to modify it.
+    string private _symbol;
+
+    /* CONSTRUCTOR */
+
+    /// @dev Initializes the contract.
+    /// @param owner The owner of the contract.
+    /// @param morpho The address of the Morpho contract.
+    /// @param initialTimelock The initial timelock.
+    /// @param _asset The address of the underlying asset.
+    /// @param __name The name of the vault.
+    /// @param __symbol The symbol of the vault.
+    /// @dev We pass "" as name and symbol to the ERC20 because these are overriden in this contract.
+    /// This means that the contract deviates slightly from the ERC2612 standard.
+    constructor(
+        address owner,
+        address morpho,
+        uint256 initialTimelock,
+        address _asset,
+        string memory __name,
+        string memory __symbol
+    ) ERC4626(IERC20(_asset)) ERC20Permit("") ERC20("", "") Ownable(owner) {
+        if (morpho == address(0)) revert ErrorsLib.ZeroAddress();
+        if (initialTimelock != 0) _checkTimelockBounds(initialTimelock);
+        _setTimelock(initialTimelock);
+
+        _name = __name;
+        emit EventsLib.SetName(__name);
+
+        _symbol = __symbol;
+        emit EventsLib.SetSymbol(__symbol);
+
+        MORPHO = IMorpho(morpho);
+        DECIMALS_OFFSET = uint8(uint256(18).zeroFloorSub(IERC20Metadata(_asset).decimals()));
+
+        IERC20(_asset).forceApprove(morpho, type(uint256).max);
+    }
+
+    /* MODIFIERS */
+
+    /// @dev Reverts if the caller doesn't have the curator role.
+    modifier onlyCuratorRole() {
+        address sender = _msgSender();
+        if (sender != curator && sender != owner()) revert ErrorsLib.NotCuratorRole();
+
+        _;
+    }
+
+    /// @dev Reverts if the caller doesn't have the allocator role.
+    modifier onlyAllocatorRole() {
+        address sender = _msgSender();
+        if (!isAllocator[sender] && sender != curator && sender != owner()) {
+            revert ErrorsLib.NotAllocatorRole();
+        }
+
+        _;
+    }
+
+    /// @dev Reverts if the caller doesn't have the guardian role.
+    modifier onlyGuardianRole() {
+        if (_msgSender() != owner() && _msgSender() != guardian) revert ErrorsLib.NotGuardianRole();
+
+        _;
+    }
+
+    /// @dev Reverts if the caller doesn't have the curator nor the guardian role.
+    modifier onlyCuratorOrGuardianRole() {
+        if (_msgSender() != guardian && _msgSender() != curator && _msgSender() != owner()) {
+            revert ErrorsLib.NotCuratorNorGuardianRole();
+        }
+
+        _;
+    }
+
+    /// @dev Makes sure conditions are met to accept a pending value.
+    /// @dev Reverts if:
+    /// - there's no pending value;
+    /// - the timelock has not elapsed since the pending value has been submitted.
+    modifier afterTimelock(uint256 validAt) {
+        if (validAt == 0) revert ErrorsLib.NoPendingValue();
+        if (block.timestamp < validAt) revert ErrorsLib.TimelockNotElapsed();
+
+        _;
+    }
+
+    /* ONLY OWNER FUNCTIONS */
+
+    function setName(string memory newName) external onlyOwner {
+        _name = newName;
+
+        emit EventsLib.SetName(newName);
+    }
+
+    function setSymbol(string memory newSymbol) external onlyOwner {
+        _symbol = newSymbol;
+
+        emit EventsLib.SetSymbol(newSymbol);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function setCurator(address newCurator) external onlyOwner {
+        if (newCurator == curator) revert ErrorsLib.AlreadySet();
+
+        curator = newCurator;
+
+        emit EventsLib.SetCurator(newCurator);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function setIsAllocator(address newAllocator, bool newIsAllocator) external onlyOwner {
+        if (isAllocator[newAllocator] == newIsAllocator) revert ErrorsLib.AlreadySet();
+
+        isAllocator[newAllocator] = newIsAllocator;
+
+        emit EventsLib.SetIsAllocator(newAllocator, newIsAllocator);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function setSkimRecipient(address newSkimRecipient) external onlyOwner {
+        if (newSkimRecipient == skimRecipient) revert ErrorsLib.AlreadySet();
+
+        skimRecipient = newSkimRecipient;
+
+        emit EventsLib.SetSkimRecipient(newSkimRecipient);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function submitTimelock(uint256 newTimelock) external onlyOwner {
+        if (newTimelock == timelock) revert ErrorsLib.AlreadySet();
+        if (pendingTimelock.validAt != 0) revert ErrorsLib.AlreadyPending();
+        _checkTimelockBounds(newTimelock);
+
+        if (newTimelock > timelock) {
+            _setTimelock(newTimelock);
+        } else {
+            // Safe "unchecked" cast because newTimelock <= MAX_TIMELOCK.
+            pendingTimelock.update(uint184(newTimelock), timelock);
+
+            emit EventsLib.SubmitTimelock(newTimelock);
+        }
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function setFee(uint256 newFee) external onlyOwner {
+        if (newFee == fee) revert ErrorsLib.AlreadySet();
+        if (newFee > ConstantsLib.MAX_FEE) revert ErrorsLib.MaxFeeExceeded();
+        if (newFee != 0 && feeRecipient == address(0)) revert ErrorsLib.ZeroFeeRecipient();
+
+        // Accrue interest and fee using the previous fee set before changing it.
+        _accrueInterest();
+
+        // Safe "unchecked" cast because newFee <= MAX_FEE.
+        fee = uint96(newFee);
+
+        emit EventsLib.SetFee(_msgSender(), fee);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function setFeeRecipient(address newFeeRecipient) external onlyOwner {
+        if (newFeeRecipient == feeRecipient) revert ErrorsLib.AlreadySet();
+        if (newFeeRecipient == address(0) && fee != 0) revert ErrorsLib.ZeroFeeRecipient();
+
+        // Accrue interest and fee to the previous fee recipient set before changing it.
+        _accrueInterest();
+
+        feeRecipient = newFeeRecipient;
+
+        emit EventsLib.SetFeeRecipient(newFeeRecipient);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function submitGuardian(address newGuardian) external onlyOwner {
+        if (newGuardian == guardian) revert ErrorsLib.AlreadySet();
+        if (pendingGuardian.validAt != 0) revert ErrorsLib.AlreadyPending();
+
+        if (guardian == address(0)) {
+            _setGuardian(newGuardian);
+        } else {
+            pendingGuardian.update(newGuardian, timelock);
+
+            emit EventsLib.SubmitGuardian(newGuardian);
+        }
+    }
+
+    /* ONLY CURATOR FUNCTIONS */
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function submitCap(MarketParams memory marketParams, uint256 newSupplyCap) external onlyCuratorRole {
+        Id id = marketParams.id();
+        if (marketParams.loanToken != asset()) revert ErrorsLib.InconsistentAsset(id);
+        if (MORPHO.lastUpdate(id) == 0) revert ErrorsLib.MarketNotCreated();
+        if (pendingCap[id].validAt != 0) revert ErrorsLib.AlreadyPending();
+        if (config[id].removableAt != 0) revert ErrorsLib.PendingRemoval();
+        uint256 supplyCap = config[id].cap;
+        if (newSupplyCap == supplyCap) revert ErrorsLib.AlreadySet();
+
+        if (newSupplyCap < supplyCap) {
+            _setCap(marketParams, id, newSupplyCap.toUint184());
+        } else {
+            pendingCap[id].update(newSupplyCap.toUint184(), timelock);
+
+            emit EventsLib.SubmitCap(_msgSender(), id, newSupplyCap);
+        }
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function submitMarketRemoval(MarketParams memory marketParams) external onlyCuratorRole {
+        Id id = marketParams.id();
+        if (config[id].removableAt != 0) revert ErrorsLib.AlreadyPending();
+        if (config[id].cap != 0) revert ErrorsLib.NonZeroCap();
+        if (!config[id].enabled) revert ErrorsLib.MarketNotEnabled(id);
+        if (pendingCap[id].validAt != 0) revert ErrorsLib.PendingCap(id);
+
+        // Safe "unchecked" cast because timelock <= MAX_TIMELOCK.
+        config[id].removableAt = uint64(block.timestamp + timelock);
+
+        emit EventsLib.SubmitMarketRemoval(_msgSender(), id);
+    }
+
+    /* ONLY ALLOCATOR FUNCTIONS */
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function setSupplyQueue(Id[] calldata newSupplyQueue) external onlyAllocatorRole {
+        uint256 length = newSupplyQueue.length;
+
+        if (length > ConstantsLib.MAX_QUEUE_LENGTH) revert ErrorsLib.MaxQueueLengthExceeded();
+
+        for (uint256 i; i < length; ++i) {
+            if (config[newSupplyQueue[i]].cap == 0) revert ErrorsLib.UnauthorizedMarket(newSupplyQueue[i]);
+        }
+
+        supplyQueue = newSupplyQueue;
+
+        emit EventsLib.SetSupplyQueue(_msgSender(), newSupplyQueue);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function updateWithdrawQueue(uint256[] calldata indexes) external onlyAllocatorRole {
+        uint256 newLength = indexes.length;
+        uint256 currLength = withdrawQueue.length;
+
+        bool[] memory seen = new bool[](currLength);
+        Id[] memory newWithdrawQueue = new Id[](newLength);
+
+        for (uint256 i; i < newLength; ++i) {
+            uint256 prevIndex = indexes[i];
+
+            // If prevIndex >= currLength, it will revert with native "Index out of bounds".
+            Id id = withdrawQueue[prevIndex];
+            if (seen[prevIndex]) revert ErrorsLib.DuplicateMarket(id);
+            seen[prevIndex] = true;
+
+            newWithdrawQueue[i] = id;
+        }
+
+        for (uint256 i; i < currLength; ++i) {
+            if (!seen[i]) {
+                Id id = withdrawQueue[i];
+
+                if (config[id].cap != 0) revert ErrorsLib.InvalidMarketRemovalNonZeroCap(id);
+                if (pendingCap[id].validAt != 0) revert ErrorsLib.PendingCap(id);
+
+                if (MORPHO.supplyShares(id, address(this)) != 0) {
+                    if (config[id].removableAt == 0) revert ErrorsLib.InvalidMarketRemovalNonZeroSupply(id);
+
+                    if (block.timestamp < config[id].removableAt) {
+                        revert ErrorsLib.InvalidMarketRemovalTimelockNotElapsed(id);
+                    }
+                }
+
+                delete config[id];
+            }
+        }
+
+        withdrawQueue = newWithdrawQueue;
+
+        emit EventsLib.SetWithdrawQueue(_msgSender(), newWithdrawQueue);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function reallocate(MarketAllocation[] calldata allocations) external onlyAllocatorRole {
+        uint256 totalSupplied;
+        uint256 totalWithdrawn;
+        for (uint256 i; i < allocations.length; ++i) {
+            MarketAllocation memory allocation = allocations[i];
+            Id id = allocation.marketParams.id();
+            if (!config[id].enabled) revert ErrorsLib.MarketNotEnabled(id);
+
+            (uint256 supplyAssets, uint256 supplyShares,) = _accruedSupplyBalance(allocation.marketParams, id);
+            uint256 withdrawn = supplyAssets.zeroFloorSub(allocation.assets);
+
+            if (withdrawn > 0) {
+                // Guarantees that unknown frontrunning donations can be withdrawn, in order to disable a market.
+                uint256 shares;
+                if (allocation.assets == 0) {
+                    shares = supplyShares;
+                    withdrawn = 0;
+                }
+
+                (uint256 withdrawnAssets, uint256 withdrawnShares) =
+                    MORPHO.withdraw(allocation.marketParams, withdrawn, shares, address(this), address(this));
+
+                emit EventsLib.ReallocateWithdraw(_msgSender(), id, withdrawnAssets, withdrawnShares);
+
+                totalWithdrawn += withdrawnAssets;
+            } else {
+                uint256 suppliedAssets = allocation.assets == type(uint256).max
+                    ? totalWithdrawn.zeroFloorSub(totalSupplied)
+                    : allocation.assets.zeroFloorSub(supplyAssets);
+
+                if (suppliedAssets == 0) continue;
+
+                uint256 supplyCap = config[id].cap;
+                if (supplyAssets + suppliedAssets > supplyCap) revert ErrorsLib.SupplyCapExceeded(id);
+
+                // The market's loan asset is guaranteed to be the vault's asset because it has a non-zero supply cap.
+                (, uint256 suppliedShares) =
+                    MORPHO.supply(allocation.marketParams, suppliedAssets, 0, address(this), hex"");
+
+                emit EventsLib.ReallocateSupply(_msgSender(), id, suppliedAssets, suppliedShares);
+
+                totalSupplied += suppliedAssets;
+            }
+        }
+
+        if (totalWithdrawn != totalSupplied) revert ErrorsLib.InconsistentReallocation();
+    }
+
+    /* REVOKE FUNCTIONS */
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function revokePendingTimelock() external onlyGuardianRole {
+        delete pendingTimelock;
+
+        emit EventsLib.RevokePendingTimelock(_msgSender());
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function revokePendingGuardian() external onlyGuardianRole {
+        delete pendingGuardian;
+
+        emit EventsLib.RevokePendingGuardian(_msgSender());
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function revokePendingCap(Id id) external onlyCuratorOrGuardianRole {
+        delete pendingCap[id];
+
+        emit EventsLib.RevokePendingCap(_msgSender(), id);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function revokePendingMarketRemoval(Id id) external onlyCuratorOrGuardianRole {
+        delete config[id].removableAt;
+
+        emit EventsLib.RevokePendingMarketRemoval(_msgSender(), id);
+    }
+
+    /* EXTERNAL */
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function supplyQueueLength() external view returns (uint256) {
+        return supplyQueue.length;
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function withdrawQueueLength() external view returns (uint256) {
+        return withdrawQueue.length;
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function acceptTimelock() external afterTimelock(pendingTimelock.validAt) {
+        _setTimelock(pendingTimelock.value);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function acceptGuardian() external afterTimelock(pendingGuardian.validAt) {
+        _setGuardian(pendingGuardian.value);
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function acceptCap(MarketParams memory marketParams)
+        external
+        afterTimelock(pendingCap[marketParams.id()].validAt)
+    {
+        Id id = marketParams.id();
+
+        // Safe "unchecked" cast because pendingCap <= type(uint184).max.
+        _setCap(marketParams, id, uint184(pendingCap[id].value));
+    }
+
+    /// @inheritdoc IMetaMorphoV1_1Base
+    function skim(address token) external {
+        if (skimRecipient == address(0)) revert ErrorsLib.ZeroAddress();
+
+        uint256 amount = IERC20(token).balanceOf(address(this));
+
+        IERC20(token).safeTransfer(skimRecipient, amount);
+
+        emit EventsLib.Skim(_msgSender(), token, amount);
+    }
+
+    /* ERC4626 (PUBLIC) */
+
+    /// @inheritdoc IERC20Metadata
+    function decimals() public view override(ERC20, ERC4626) returns (uint8) {
+        return ERC4626.decimals();
+    }
+
+    function name() public view override(IERC20Metadata, ERC20) returns (string memory) {
+        return _name;
+    }
+
+    function symbol() public view override(IERC20Metadata, ERC20) returns (string memory) {
+        return _symbol;
+    }
+
+    /// @inheritdoc IERC4626
+    /// @dev Warning: May be higher than the actual max deposit due to duplicate markets in the supplyQueue.
+    function maxDeposit(address) public view override returns (uint256) {
+        return _maxDeposit();
+    }
+
+    /// @inheritdoc IERC4626
+    /// @dev Warning: May be higher than the actual max mint due to duplicate markets in the supplyQueue.
+    function maxMint(address) public view override returns (uint256) {
+        uint256 suppliable = _maxDeposit();
+
+        return _convertToShares(suppliable, Math.Rounding.Floor);
+    }
+
+    /// @inheritdoc IERC4626
+    /// @dev Warning: May be lower than the actual amount of assets that can be withdrawn by `owner` due to conversion
+    /// roundings between shares and assets.
+    function maxWithdraw(address owner) public view override returns (uint256 assets) {
+        (assets,,) = _maxWithdraw(owner);
+    }
+
+    /// @inheritdoc IERC4626
+    /// @dev Warning: May be lower than the actual amount of shares that can be redeemed by `owner` due to conversion
+    /// roundings between shares and assets.
+    function maxRedeem(address owner) public view override returns (uint256) {
+        (uint256 assets, uint256 newTotalSupply, uint256 newTotalAssets) = _maxWithdraw(owner);
+
+        return _convertToSharesWithTotals(assets, newTotalSupply, newTotalAssets, Math.Rounding.Floor);
+    }
+
+    /// @inheritdoc IERC4626
+    function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
+        _accrueInterest();
+
+        shares = _convertToSharesWithTotals(assets, totalSupply(), lastTotalAssets, Math.Rounding.Floor);
+
+        _deposit(_msgSender(), receiver, assets, shares);
+    }
+
+    /// @inheritdoc IERC4626
+    function mint(uint256 shares, address receiver) public override returns (uint256 assets) {
+        _accrueInterest();
+
+        assets = _convertToAssetsWithTotals(shares, totalSupply(), lastTotalAssets, Math.Rounding.Ceil);
+
+        _deposit(_msgSender(), receiver, assets, shares);
+    }
+
+    /// @inheritdoc IERC4626
+    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
+        _accrueInterest();
+
+        // Do not call expensive `maxWithdraw` and optimistically withdraw assets.
+
+        shares = _convertToSharesWithTotals(assets, totalSupply(), lastTotalAssets, Math.Rounding.Ceil);
+
+        _withdraw(_msgSender(), receiver, owner, assets, shares);
+    }
+
+    /// @inheritdoc IERC4626
+    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
+        _accrueInterest();
+
+        // Do not call expensive `maxRedeem` and optimistically redeem shares.
+
+        assets = _convertToAssetsWithTotals(shares, totalSupply(), lastTotalAssets, Math.Rounding.Floor);
+
+        _withdraw(_msgSender(), receiver, owner, assets, shares);
+    }
+
+    /// @inheritdoc IERC4626
+    /// @dev totalAssets is the sum of the vault's assets on the Morpho markets plus the lost assets (see corresponding
+    /// docs in IMetaMorphoV1_1.sol).
+    function totalAssets() public view override returns (uint256) {
+        (, uint256 newTotalAssets,) = _accruedFeeAndAssets();
+
+        return newTotalAssets;
+    }
+
+    /* ERC4626 (INTERNAL) */
+
+    /// @inheritdoc ERC4626
+    function _decimalsOffset() internal view override returns (uint8) {
+        return DECIMALS_OFFSET;
+    }
+
+    /// @dev Returns the maximum amount of asset (`assets`) that the `owner` can withdraw from the vault, as well as the
+    /// new vault's total supply (`newTotalSupply`) and total assets (`newTotalAssets`).
+    function _maxWithdraw(address owner)
+        internal
+        view
+        returns (uint256 assets, uint256 newTotalSupply, uint256 newTotalAssets)
+    {
+        uint256 feeShares;
+        (feeShares, newTotalAssets,) = _accruedFeeAndAssets();
+        newTotalSupply = totalSupply() + feeShares;
+
+        assets = _convertToAssetsWithTotals(balanceOf(owner), newTotalSupply, newTotalAssets, Math.Rounding.Floor);
+        assets -= _simulateWithdrawMorpho(assets);
+    }
+
+    /// @dev Returns the maximum amount of assets that the vault can supply on Morpho.
+    function _maxDeposit() internal view returns (uint256 totalSuppliable) {
+        for (uint256 i; i < supplyQueue.length; ++i) {
+            Id id = supplyQueue[i];
+
+            uint256 supplyCap = config[id].cap;
+            if (supplyCap == 0) continue;
+
+            uint256 supplyShares = MORPHO.supplyShares(id, address(this));
+            (uint256 totalSupplyAssets, uint256 totalSupplyShares,,) = MORPHO.expectedMarketBalances(_marketParams(id));
+            // `supplyAssets` needs to be rounded up for `totalSuppliable` to be rounded down.
+            uint256 supplyAssets = supplyShares.toAssetsUp(totalSupplyAssets, totalSupplyShares);
+
+            totalSuppliable += supplyCap.zeroFloorSub(supplyAssets);
+        }
+    }
+
+    /// @inheritdoc ERC4626
+    /// @dev The accrual of performance fees is taken into account in the conversion.
+    function _convertToShares(uint256 assets, Math.Rounding rounding) internal view override returns (uint256) {
+        (uint256 feeShares, uint256 newTotalAssets,) = _accruedFeeAndAssets();
+
+        return _convertToSharesWithTotals(assets, totalSupply() + feeShares, newTotalAssets, rounding);
+    }
+
+    /// @inheritdoc ERC4626
+    /// @dev The accrual of performance fees is taken into account in the conversion.
+    function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
+        (uint256 feeShares, uint256 newTotalAssets,) = _accruedFeeAndAssets();
+
+        return _convertToAssetsWithTotals(shares, totalSupply() + feeShares, newTotalAssets, rounding);
+    }
+
+    /// @dev Returns the amount of shares that the vault would exchange for the amount of `assets` provided.
+    /// @dev It assumes that the arguments `newTotalSupply` and `newTotalAssets` are up to date.
+    function _convertToSharesWithTotals(
+        uint256 assets,
+        uint256 newTotalSupply,
+        uint256 newTotalAssets,
+        Math.Rounding rounding
+    ) internal view returns (uint256) {
+        return assets.mulDiv(newTotalSupply + 10 ** _decimalsOffset(), newTotalAssets + 1, rounding);
+    }
+
+    /// @dev Returns the amount of assets that the vault would exchange for the amount of `shares` provided.
+    /// @dev It assumes that the arguments `newTotalSupply` and `newTotalAssets` are up to date.
+    function _convertToAssetsWithTotals(
+        uint256 shares,
+        uint256 newTotalSupply,
+        uint256 newTotalAssets,
+        Math.Rounding rounding
+    ) internal view returns (uint256) {
+        return shares.mulDiv(newTotalAssets + 1, newTotalSupply + 10 ** _decimalsOffset(), rounding);
+    }
+
+    /// @inheritdoc ERC4626
+    /// @dev Used in mint or deposit to deposit the underlying asset to Morpho markets.
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
+        super._deposit(caller, receiver, assets, shares);
+
+        _supplyMorpho(assets);
+
+        // `lastTotalAssets + assets` may be a little above `totalAssets()`.
+        // This can lead to a small accrual of `lostAssets` at the next interaction.
+        _updateLastTotalAssets(lastTotalAssets + assets);
+    }
+
+    /// @inheritdoc ERC4626
+    /// @dev Used in redeem or withdraw to withdraw the underlying asset from Morpho markets.
+    /// @dev Depending on 3 cases, reverts when withdrawing "too much" with:
+    /// 1. NotEnoughLiquidity when withdrawing more than available liquidity.
+    /// 2. ERC20InsufficientAllowance when withdrawing more than `caller`'s allowance.
+    /// 3. ERC20InsufficientBalance when withdrawing more than `owner`'s balance.
+    function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
+        internal
+        override
+    {
+        // `lastTotalAssets - assets` may be a little above `totalAssets()`.
+        // This can lead to a small accrual of `lostAssets` at the next interaction.
+        // clamp at 0 so the error raised is the more informative NotEnoughLiquidity.
+        _updateLastTotalAssets(lastTotalAssets.zeroFloorSub(assets));
+
+        _withdrawMorpho(assets);
+
+        super._withdraw(caller, receiver, owner, assets, shares);
+    }
+
+    /* INTERNAL */
+
+    /// @dev Returns the market params of the market defined by `id`.
+    function _marketParams(Id id) internal view returns (MarketParams memory) {
+        return MORPHO.idToMarketParams(id);
+    }
+
+    /// @dev Accrues interest on Morpho Blue and returns the vault's assets & corresponding shares supplied on the
+    /// market defined by `marketParams`, as well as the market's state.
+    /// @dev Assumes that the inputs `marketParams` and `id` match.
+    function _accruedSupplyBalance(MarketParams memory marketParams, Id id)
+        internal
+        returns (uint256 assets, uint256 shares, Market memory market)
+    {
+        MORPHO.accrueInterest(marketParams);
+
+        market = MORPHO.market(id);
+        shares = MORPHO.supplyShares(id, address(this));
+        assets = shares.toAssetsDown(market.totalSupplyAssets, market.totalSupplyShares);
+    }
+
+    /// @dev Reverts if `newTimelock` is not within the bounds.
+    function _checkTimelockBounds(uint256 newTimelock) internal pure {
+        if (newTimelock > ConstantsLib.MAX_TIMELOCK) revert ErrorsLib.AboveMaxTimelock();
+        if (newTimelock < ConstantsLib.POST_INITIALIZATION_MIN_TIMELOCK) revert ErrorsLib.BelowMinTimelock();
+    }
+
+    /// @dev Sets `timelock` to `newTimelock`.
+    function _setTimelock(uint256 newTimelock) internal {
+        timelock = newTimelock;
+
+        emit EventsLib.SetTimelock(_msgSender(), newTimelock);
+
+        delete pendingTimelock;
+    }
+
+    /// @dev Sets `guardian` to `newGuardian`.
+    function _setGuardian(address newGuardian) internal {
+        guardian = newGuardian;
+
+        emit EventsLib.SetGuardian(_msgSender(), newGuardian);
+
+        delete pendingGuardian;
+    }
+
+    /// @dev Sets the cap of the market defined by `id` to `supplyCap`.
+    /// @dev Assumes that the inputs `marketParams` and `id` match.
+    function _setCap(MarketParams memory marketParams, Id id, uint184 supplyCap) internal {
+        MarketConfig storage marketConfig = config[id];
+
+        if (supplyCap > 0) {
+            if (!marketConfig.enabled) {
+                withdrawQueue.push(id);
+
+                if (withdrawQueue.length > ConstantsLib.MAX_QUEUE_LENGTH) revert ErrorsLib.MaxQueueLengthExceeded();
+
+                marketConfig.enabled = true;
+
+                // Take into account assets of the new market without applying a fee.
+                _updateLastTotalAssets(lastTotalAssets + MORPHO.expectedSupplyAssets(marketParams, address(this)));
+
+                emit EventsLib.SetWithdrawQueue(msg.sender, withdrawQueue);
+            }
+
+            marketConfig.removableAt = 0;
+        }
+
+        marketConfig.cap = supplyCap;
+
+        emit EventsLib.SetCap(_msgSender(), id, supplyCap);
+
+        delete pendingCap[id];
+    }
+
+    /* LIQUIDITY ALLOCATION */
+
+    /// @dev Supplies `assets` to Morpho.
+    function _supplyMorpho(uint256 assets) internal {
+        for (uint256 i; i < supplyQueue.length; ++i) {
+            Id id = supplyQueue[i];
+
+            uint256 supplyCap = config[id].cap;
+            if (supplyCap == 0) continue;
+
+            MarketParams memory marketParams = _marketParams(id);
+
+            MORPHO.accrueInterest(marketParams);
+
+            Market memory market = MORPHO.market(id);
+            uint256 supplyShares = MORPHO.supplyShares(id, address(this));
+            // `supplyAssets` needs to be rounded up for `toSupply` to be rounded down.
+            uint256 supplyAssets = supplyShares.toAssetsUp(market.totalSupplyAssets, market.totalSupplyShares);
+
+            uint256 toSupply = UtilsLib.min(supplyCap.zeroFloorSub(supplyAssets), assets);
+
+            if (toSupply > 0) {
+                // Using try/catch to skip markets that revert.
+                try MORPHO.supply(marketParams, toSupply, 0, address(this), hex"") {
+                    assets -= toSupply;
+                } catch {}
+            }
+
+            if (assets == 0) return;
+        }
+
+        if (assets != 0) revert ErrorsLib.AllCapsReached();
+    }
+
+    /// @dev Withdraws `assets` from Morpho.
+    function _withdrawMorpho(uint256 assets) internal {
+        for (uint256 i; i < withdrawQueue.length; ++i) {
+            Id id = withdrawQueue[i];
+            MarketParams memory marketParams = _marketParams(id);
+            (uint256 supplyAssets,, Market memory market) = _accruedSupplyBalance(marketParams, id);
+
+            uint256 toWithdraw = UtilsLib.min(
+                _withdrawable(marketParams, market.totalSupplyAssets, market.totalBorrowAssets, supplyAssets), assets
+            );
+
+            if (toWithdraw > 0) {
+                // Using try/catch to skip markets that revert.
+                try MORPHO.withdraw(marketParams, toWithdraw, 0, address(this), address(this)) {
+                    assets -= toWithdraw;
+                } catch {}
+            }
+
+            if (assets == 0) return;
+        }
+
+        if (assets != 0) revert ErrorsLib.NotEnoughLiquidity();
+    }
+
+    /// @dev Simulates a withdraw of `assets` from Morpho.
+    /// @return The remaining assets to be withdrawn.
+    function _simulateWithdrawMorpho(uint256 assets) internal view returns (uint256) {
+        for (uint256 i; i < withdrawQueue.length; ++i) {
+            Id id = withdrawQueue[i];
+            MarketParams memory marketParams = _marketParams(id);
+
+            uint256 supplyShares = MORPHO.supplyShares(id, address(this));
+            (uint256 totalSupplyAssets, uint256 totalSupplyShares, uint256 totalBorrowAssets,) =
+                MORPHO.expectedMarketBalances(marketParams);
+
+            // The vault withdrawing from Morpho cannot fail because:
+            // 1. oracle.price() is never called (the vault doesn't borrow)
+            // 2. the amount is capped to the liquidity available on Morpho
+            // 3. virtually accruing interest didn't fail
+            assets = assets.zeroFloorSub(
+                _withdrawable(
+                    marketParams,
+                    totalSupplyAssets,
+                    totalBorrowAssets,
+                    supplyShares.toAssetsDown(totalSupplyAssets, totalSupplyShares)
+                )
+            );
+
+            if (assets == 0) break;
+        }
+
+        return assets;
+    }
+
+    /// @dev Returns the withdrawable amount of assets from the market defined by `marketParams`, given the market's
+    /// total supply and borrow assets and the vault's assets supplied.
+    function _withdrawable(
+        MarketParams memory marketParams,
+        uint256 totalSupplyAssets,
+        uint256 totalBorrowAssets,
+        uint256 supplyAssets
+    ) internal view returns (uint256) {
+        // Inside a flashloan callback, liquidity on Morpho Blue may be limited to the singleton's balance.
+        uint256 availableLiquidity = UtilsLib.min(
+            totalSupplyAssets - totalBorrowAssets, ERC20(marketParams.loanToken).balanceOf(address(MORPHO))
+        );
+
+        return UtilsLib.min(supplyAssets, availableLiquidity);
+    }
+
+    /* FEE MANAGEMENT */
+
+    /// @dev Updates `lastTotalAssets` to `updatedTotalAssets`.
+    function _updateLastTotalAssets(uint256 updatedTotalAssets) internal {
+        lastTotalAssets = updatedTotalAssets;
+
+        emit EventsLib.UpdateLastTotalAssets(updatedTotalAssets);
+    }
+
+    /// @dev Accrues `lastTotalAssets`, `lostAssets` and mints the fee shares to the fee recipient.
+    function _accrueInterest() internal {
+        (uint256 feeShares, uint256 newTotalAssets, uint256 newLostAssets) = _accruedFeeAndAssets();
+
+        _updateLastTotalAssets(newTotalAssets);
+        lostAssets = newLostAssets;
+        emit EventsLib.UpdateLostAssets(newLostAssets);
+
+        if (feeShares != 0) _mint(feeRecipient, feeShares);
+
+        emit EventsLib.AccrueInterest(newTotalAssets, feeShares);
+    }
+
+    /// @dev Computes and returns the `feeShares` to mint, the new `totalAssets` and the new `lostAssets`.
+    /// @return feeShares the shares to mint to `feeRecipient`.
+    /// @return newTotalAssets the new `totalAssets`.
+    /// @return newLostAssets the new lostAssets.
+    function _accruedFeeAndAssets()
+        internal
+        view
+        returns (uint256 feeShares, uint256 newTotalAssets, uint256 newLostAssets)
+    {
+        // The assets that the vault has on Morpho.
+        uint256 realTotalAssets;
+        for (uint256 i; i < withdrawQueue.length; ++i) {
+            realTotalAssets += MORPHO.expectedSupplyAssets(_marketParams(withdrawQueue[i]), address(this));
+        }
+
+        // If the vault lost some assets (realTotalAssets decreased), lostAssets is increased.
+        if (realTotalAssets < lastTotalAssets - lostAssets) newLostAssets = lastTotalAssets - realTotalAssets;
+        // If it did not, lostAssets stays the same.
+        else newLostAssets = lostAssets;
+
+        newTotalAssets = realTotalAssets + newLostAssets;
+        uint256 totalInterest = newTotalAssets - lastTotalAssets;
+        if (totalInterest != 0 && fee != 0) {
+            // It is acknowledged that `feeAssets` may be rounded down to 0 if `totalInterest * fee < WAD`.
+            uint256 feeAssets = totalInterest.mulDiv(fee, WAD);
+            // The fee assets is subtracted from the total assets in this calculation to compensate for the fact
+            // that total assets is already increased by the total interest (including the fee assets).
+            feeShares =
+                _convertToSharesWithTotals(feeAssets, totalSupply(), newTotalAssets - feeAssets, Math.Rounding.Floor);
+        }
+    }
+}
+===== END FILE reference/metamorpho-v1.1__MetaMorphoV1_1.sol =====
+
+===== BEGIN FILE reference/metamorpho-v1.1__IMetaMorphoV1_1.sol | 224 lines | sha256 8565c915b0bddd537e2a8f3bbb47d060c0e9fb5e8b80989ed1a33a2724162277 =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity >=0.5.0;
+
+import {IMorpho, Id, MarketParams} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
+import {IERC4626} from "../../lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IERC20Permit} from "../../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Permit.sol";
+
+import {MarketConfig, PendingUint192, PendingAddress} from "../libraries/PendingLib.sol";
+
+struct MarketAllocation {
+    /// @notice The market to allocate.
+    MarketParams marketParams;
+    /// @notice The amount of assets to allocate.
+    uint256 assets;
+}
+
+interface IMulticall {
+    function multicall(bytes[] calldata) external returns (bytes[] memory);
+}
+
+interface IOwnable {
+    function owner() external view returns (address);
+    function transferOwnership(address) external;
+    function renounceOwnership() external;
+    function acceptOwnership() external;
+    function pendingOwner() external view returns (address);
+}
+
+/// @dev This interface is used for factorizing IMetaMorphoV1_1StaticTyping and IMetaMorphoV1_1.
+/// @dev Consider using the IMetaMorphoV1_1 interface instead of this one.
+interface IMetaMorphoV1_1Base {
+    /// @notice The address of the Morpho contract.
+    function MORPHO() external view returns (IMorpho);
+    function DECIMALS_OFFSET() external view returns (uint8);
+
+    /// @notice The address of the curator.
+    function curator() external view returns (address);
+
+    /// @notice Stores whether an address is an allocator or not.
+    function isAllocator(address target) external view returns (bool);
+
+    /// @notice The current guardian. Can be set even without the timelock set.
+    function guardian() external view returns (address);
+
+    /// @notice The current fee.
+    function fee() external view returns (uint96);
+
+    /// @notice The fee recipient.
+    function feeRecipient() external view returns (address);
+
+    /// @notice The skim recipient.
+    function skimRecipient() external view returns (address);
+
+    /// @notice The current timelock.
+    function timelock() external view returns (uint256);
+
+    /// @dev Stores the order of markets on which liquidity is supplied upon deposit.
+    /// @dev Can contain any market. A market is skipped as soon as its supply cap is reached.
+    function supplyQueue(uint256) external view returns (Id);
+
+    /// @notice Returns the length of the supply queue.
+    function supplyQueueLength() external view returns (uint256);
+
+    /// @dev Stores the order of markets from which liquidity is withdrawn upon withdrawal.
+    /// @dev Always contain all non-zero cap markets as well as all markets on which the vault supplies liquidity,
+    /// without duplicate.
+    function withdrawQueue(uint256) external view returns (Id);
+
+    /// @notice Returns the length of the withdraw queue.
+    function withdrawQueueLength() external view returns (uint256);
+
+    /// @notice Stores the total assets managed by this vault when the fee was last accrued.
+    /// @dev May be greater than `totalAssets()` due to removal of markets with non-zero supply or socialized bad debt.
+    /// This difference will decrease the fee accrued until one of the functions updating `lastTotalAssets` is
+    /// triggered (deposit/mint/withdraw/redeem/setFee/setFeeRecipient).
+    function lastTotalAssets() external view returns (uint256);
+
+    /// @notice Stores the missing assets due to realized bad debt or forced market removal.
+    /// @dev In order to cover those lost assets, it is advised to supply on behalf of address(1) on the vault
+    /// (canonical method).
+    function lostAssets() external view returns (uint256);
+
+    /// @notice Submits a `newTimelock`.
+    /// @dev Warning: Reverts if a timelock is already pending. Revoke the pending timelock to overwrite it.
+    /// @dev In case the new timelock is higher than the current one, the timelock is set immediately.
+    function submitTimelock(uint256 newTimelock) external;
+
+    /// @notice Accepts the pending timelock.
+    function acceptTimelock() external;
+
+    /// @notice Revokes the pending timelock.
+    /// @dev Does not revert if there is no pending timelock.
+    function revokePendingTimelock() external;
+
+    /// @notice Submits a `newSupplyCap` for the market defined by `marketParams`.
+    /// @dev Warning: Reverts if a cap is already pending. Revoke the pending cap to overwrite it.
+    /// @dev Warning: Reverts if a market removal is pending.
+    /// @dev In case the new cap is lower than the current one, the cap is set immediately.
+    function submitCap(MarketParams memory marketParams, uint256 newSupplyCap) external;
+
+    /// @notice Accepts the pending cap of the market defined by `marketParams`.
+    function acceptCap(MarketParams memory marketParams) external;
+
+    /// @notice Revokes the pending cap of the market defined by `id`.
+    /// @dev Does not revert if there is no pending cap.
+    function revokePendingCap(Id id) external;
+
+    /// @notice Submits a forced market removal from the vault, eventually losing all funds supplied to the market.
+    /// @notice Funds can be recovered by enabling this market again and withdrawing from it (using `reallocate`),
+    /// but funds will be distributed pro-rata to the shares at the time of withdrawal, not at the time of removal.
+    /// @notice This forced removal is expected to be used as an emergency process in case a market constantly reverts.
+    /// To softly remove a sane market, the curator role is expected to bundle a reallocation that empties the market
+    /// first (using `reallocate`), followed by the removal of the market (using `updateWithdrawQueue`).
+    /// @dev Warning: Removing a market with non-zero supply will instantly impact the vault's price per share.
+    /// @dev Warning: Reverts for non-zero cap or if there is a pending cap. Successfully submitting a zero cap will
+    /// prevent such reverts.
+    function submitMarketRemoval(MarketParams memory marketParams) external;
+
+    /// @notice Revokes the pending removal of the market defined by `id`.
+    /// @dev Does not revert if there is no pending market removal.
+    function revokePendingMarketRemoval(Id id) external;
+
+    /// @notice Sets the name of the vault.
+    function setName(string memory newName) external;
+
+    /// @notice Sets the symbol of the vault.
+    function setSymbol(string memory newSymbol) external;
+
+    /// @notice Submits a `newGuardian`.
+    /// @notice Warning: a malicious guardian could disrupt the vault's operation, and would have the power to revoke
+    /// any pending guardian.
+    /// @dev In case there is no guardian, the gardian is set immediately.
+    /// @dev Warning: Submitting a gardian will overwrite the current pending gardian.
+    function submitGuardian(address newGuardian) external;
+
+    /// @notice Accepts the pending guardian.
+    function acceptGuardian() external;
+
+    /// @notice Revokes the pending guardian.
+    function revokePendingGuardian() external;
+
+    /// @notice Skims the vault `token` balance to `skimRecipient`.
+    function skim(address) external;
+
+    /// @notice Sets `newAllocator` as an allocator or not (`newIsAllocator`).
+    function setIsAllocator(address newAllocator, bool newIsAllocator) external;
+
+    /// @notice Sets `curator` to `newCurator`.
+    function setCurator(address newCurator) external;
+
+    /// @notice Sets the `fee` to `newFee`.
+    function setFee(uint256 newFee) external;
+
+    /// @notice Sets `feeRecipient` to `newFeeRecipient`.
+    function setFeeRecipient(address newFeeRecipient) external;
+
+    /// @notice Sets `skimRecipient` to `newSkimRecipient`.
+    function setSkimRecipient(address newSkimRecipient) external;
+
+    /// @notice Sets `supplyQueue` to `newSupplyQueue`.
+    /// @param newSupplyQueue is an array of enabled markets, and can contain duplicate markets, but it would only
+    /// increase the cost of depositing to the vault.
+    function setSupplyQueue(Id[] calldata newSupplyQueue) external;
+
+    /// @notice Updates the withdraw queue. Some markets can be removed, but no market can be added.
+    /// @notice Removing a market requires the vault to have 0 supply on it, or to have previously submitted a removal
+    /// for this market (with the function `submitMarketRemoval`).
+    /// @notice Warning: Anyone can supply on behalf of the vault so the call to `updateWithdrawQueue` that expects a
+    /// market to be empty can be griefed by a front-run. To circumvent this, the allocator can simply bundle a
+    /// reallocation that withdraws max from this market with a call to `updateWithdrawQueue`.
+    /// @dev Warning: Removing a market with supply will decrease the fee accrued until one of the functions updating
+    /// `lastTotalAssets` is triggered (deposit/mint/withdraw/redeem/setFee/setFeeRecipient).
+    /// @dev Warning: `updateWithdrawQueue` is not idempotent. Submitting twice the same tx will change the queue twice.
+    /// @param indexes The indexes of each market in the previous withdraw queue, in the new withdraw queue's order.
+    function updateWithdrawQueue(uint256[] calldata indexes) external;
+
+    /// @notice Reallocates the vault's liquidity so as to reach a given allocation of assets on each given market.
+    /// @dev The behavior of the reallocation can be altered by state changes, including:
+    /// - Deposits on the vault that supplies to markets that are expected to be supplied to during reallocation.
+    /// - Withdrawals from the vault that withdraws from markets that are expected to be withdrawn from during
+    /// reallocation.
+    /// - Donations to the vault on markets that are expected to be supplied to during reallocation.
+    /// - Withdrawals from markets that are expected to be withdrawn from during reallocation.
+    /// @dev Sender is expected to pass `assets = type(uint256).max` with the last MarketAllocation of `allocations` to
+    /// supply all the remaining withdrawn liquidity, which would ensure that `totalWithdrawn` = `totalSupplied`.
+    /// @dev A supply in a reallocation step will make the reallocation revert if the amount is greater than the net
+    /// amount from previous steps (i.e. total withdrawn minus total supplied).
+    function reallocate(MarketAllocation[] calldata allocations) external;
+}
+
+/// @dev This interface is inherited by MetaMorphoV1_1 so that function signatures are checked by the compiler.
+/// @dev Consider using the IMetaMorphoV1_1 interface instead of this one.
+interface IMetaMorphoV1_1StaticTyping is IMetaMorphoV1_1Base {
+    /// @notice Returns the current configuration of each market.
+    function config(Id) external view returns (uint184 cap, bool enabled, uint64 removableAt);
+
+    /// @notice Returns the pending guardian.
+    function pendingGuardian() external view returns (address guardian, uint64 validAt);
+
+    /// @notice Returns the pending cap for each market.
+    function pendingCap(Id) external view returns (uint192 value, uint64 validAt);
+
+    /// @notice Returns the pending timelock.
+    function pendingTimelock() external view returns (uint192 value, uint64 validAt);
+}
+
+/// @title IMetaMorphoV1_1
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @dev Use this interface for MetaMorphoV1_1 to have access to all the functions with the appropriate function
+/// signatures.
+interface IMetaMorphoV1_1 is IMetaMorphoV1_1Base, IERC4626, IERC20Permit, IOwnable, IMulticall {
+    /// @notice Returns the current configuration of each market.
+    function config(Id) external view returns (MarketConfig memory);
+
+    /// @notice Returns the pending guardian.
+    function pendingGuardian() external view returns (PendingAddress memory);
+
+    /// @notice Returns the pending cap for each market.
+    function pendingCap(Id) external view returns (PendingUint192 memory);
+
+    /// @notice Returns the pending timelock.
+    function pendingTimelock() external view returns (PendingUint192 memory);
+}
+===== END FILE reference/metamorpho-v1.1__IMetaMorphoV1_1.sol =====
+
+===== BEGIN FILE reference/metamorpho-v1.1__MetaMorphoV1_1Factory.sol | 58 lines | sha256 532804687346a62b3230632387fa5e7050a7b32c5868b3b9b246258c9726254a =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity 0.8.26;
+
+import {IMetaMorphoV1_1} from "./interfaces/IMetaMorphoV1_1.sol";
+import {IMetaMorphoV1_1Factory} from "./interfaces/IMetaMorphoV1_1Factory.sol";
+
+import {EventsLib} from "./libraries/EventsLib.sol";
+import {ErrorsLib} from "./libraries/ErrorsLib.sol";
+
+import {MetaMorphoV1_1} from "./MetaMorphoV1_1.sol";
+
+/// @title MetaMorphoV1_1Factory
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice This contract allows to create MetaMorphoV1_1 vaults, and to index them easily.
+contract MetaMorphoV1_1Factory is IMetaMorphoV1_1Factory {
+    /* IMMUTABLES */
+
+    /// @inheritdoc IMetaMorphoV1_1Factory
+    address public immutable MORPHO;
+
+    /* STORAGE */
+
+    /// @inheritdoc IMetaMorphoV1_1Factory
+    mapping(address => bool) public isMetaMorpho;
+
+    /* CONSTRUCTOR */
+
+    /// @dev Initializes the contract.
+    /// @param morpho The address of the Morpho contract.
+    constructor(address morpho) {
+        if (morpho == address(0)) revert ErrorsLib.ZeroAddress();
+
+        MORPHO = morpho;
+    }
+
+    /* EXTERNAL */
+
+    /// @inheritdoc IMetaMorphoV1_1Factory
+    function createMetaMorpho(
+        address initialOwner,
+        uint256 initialTimelock,
+        address asset,
+        string memory name,
+        string memory symbol,
+        bytes32 salt
+    ) external returns (IMetaMorphoV1_1 metaMorpho) {
+        metaMorpho = IMetaMorphoV1_1(
+            address(new MetaMorphoV1_1{salt: salt}(initialOwner, MORPHO, initialTimelock, asset, name, symbol))
+        );
+
+        isMetaMorpho[address(metaMorpho)] = true;
+
+        emit EventsLib.CreateMetaMorpho(
+            address(metaMorpho), msg.sender, initialOwner, initialTimelock, asset, name, symbol, salt
+        );
+    }
+}
+===== END FILE reference/metamorpho-v1.1__MetaMorphoV1_1Factory.sol =====
+
+===== BEGIN FILE reference/metamorpho-v1.1__ConstantsLib.sol | 20 lines | sha256 763c22b4e04560e2a8920ac89411cb1c0e58e8aa910c72b7f0fb7b3fbff1460b =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity ^0.8.0;
+
+/// @title ConstantsLib
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice Library exposing constants.
+library ConstantsLib {
+    /// @dev The maximum delay of a timelock.
+    uint256 internal constant MAX_TIMELOCK = 2 weeks;
+
+    /// @dev The minimum delay of a timelock post initialization.
+    uint256 internal constant POST_INITIALIZATION_MIN_TIMELOCK = 1 days;
+
+    /// @dev The maximum number of markets in the supply/withdraw queue.
+    uint256 internal constant MAX_QUEUE_LENGTH = 30;
+
+    /// @dev The maximum fee the vault can have (50%).
+    uint256 internal constant MAX_FEE = 0.5e18;
+}
+===== END FILE reference/metamorpho-v1.1__ConstantsLib.sol =====
+
+===== BEGIN FILE reference/metamorpho-v1.1__PendingLib.sol | 47 lines | sha256 ca53d7a1bd1c9fe0a9cf092f197cbb8b02192faf773060fc8b2dac1d432c909a =====
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity ^0.8.0;
+
+struct MarketConfig {
+    /// @notice The maximum amount of assets that can be allocated to the market.
+    uint184 cap;
+    /// @notice Whether the market is in the withdraw queue.
+    bool enabled;
+    /// @notice The timestamp at which the market can be instantly removed from the withdraw queue.
+    uint64 removableAt;
+}
+
+struct PendingUint192 {
+    /// @notice The pending value to set.
+    uint192 value;
+    /// @notice The timestamp at which the pending value becomes valid.
+    uint64 validAt;
+}
+
+struct PendingAddress {
+    /// @notice The pending value to set.
+    address value;
+    /// @notice The timestamp at which the pending value becomes valid.
+    uint64 validAt;
+}
+
+/// @title PendingLib
+/// @author Morpho Labs
+/// @custom:contact security@morpho.org
+/// @notice Library to manage pending values and their validity timestamp.
+library PendingLib {
+    /// @dev Updates `pending`'s value to `newValue` and its corresponding `validAt` timestamp.
+    /// @dev Assumes `timelock` <= `MAX_TIMELOCK`.
+    function update(PendingUint192 storage pending, uint184 newValue, uint256 timelock) internal {
+        pending.value = newValue;
+        // Safe "unchecked" cast because timelock <= MAX_TIMELOCK.
+        pending.validAt = uint64(block.timestamp + timelock);
+    }
+
+    /// @dev Updates `pending`'s value to `newValue` and its corresponding `validAt` timestamp.
+    /// @dev Assumes `timelock` <= `MAX_TIMELOCK`.
+    function update(PendingAddress storage pending, address newValue, uint256 timelock) internal {
+        pending.value = newValue;
+        // Safe "unchecked" cast because timelock <= MAX_TIMELOCK.
+        pending.validAt = uint64(block.timestamp + timelock);
+    }
+}
+===== END FILE reference/metamorpho-v1.1__PendingLib.sol =====
+
+===== END OF PASTE-4-reference-optional.txt: 11 files. If you can read this line, nothing was cut off. =====

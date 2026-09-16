@@ -1,0 +1,926 @@
+CHIPWORKS x MORPHO AUDIT PACKAGE - PASTE-3-vault.txt
+source commit a0d533d (chipworks-contracts). Files in this paste: 4.
+Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
+marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
+
+  1. vault/safecalls-morpho-vault.json  (168 lines, sha256 5435c567d8956043af7bcc16a694c55a5c409798afdaa1e33bb0684d5ce5f1d0)
+  2. vault/vault-bundle.cjs  (253 lines, sha256 b1181d1e8b5659cb9b85fae6e7cdc932d9887d6fb130716ea0b5e876a6f76964)
+  3. vault/vault-bundle.out.txt  (112 lines, sha256 d579866df9c0ac8d1e223f4e4c69b0cf441572dfb146d45cda1bf1083b53987f)
+  4. vault/MorphoVaultRehearsal.t.sol  (370 lines, sha256 891dbf95f5ecf40a40e9ee528d4350e70cab968a5f4fbeeac5cc857ea7ffd8d7)
+
+===== BEGIN FILE vault/safecalls-morpho-vault.json | 168 lines | sha256 5435c567d8956043af7bcc16a694c55a5c409798afdaa1e33bb0684d5ce5f1d0 =====
+{
+  "version": "1.0",
+  "chainId": "8453",
+  "createdAt": 1789591550666,
+  "meta": {
+    "name": "deploy-chipworks-usdc-vault",
+    "description": "MetaMorpho V1.1 \"Chipworks USDC\" (cwUSDC) at 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6: owner+fee to Safe, 15% fee, 8 markets (4 stocks at 2,000 USDC first in supply, 4 deep at 5M first in withdraw), then 1-day timelock",
+    "txBuilderVersion": "1.16.5",
+    "createdFromSafeAddress": "0xe1096B727499a3f70FaD8bc0267F5e69d01373C7",
+    "createdFromOwnerAddress": ""
+  },
+  "transactions": [
+    {
+      "to": "0xFf62A7c278C62eD665133147129245053Bbf5918",
+      "value": "0",
+      "data": "0xb5102025000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c70000000000000000000000000000000000000000000000000000000000000000000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000010063686970776f726b732d757364632d3100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e43686970776f726b73205553444300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000066377555344430000000000000000000000000000000000000000000000000000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0xe74b981b000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c7",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x69fe0e2d0000000000000000000000000000000000000000000000000214e8348c4f0000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b200000000000000000000c2e324d24d7eecd1fb000000000000000000000000ecc5c9bf18cb2cfc94c2f7eff8bdd5837a60ab0e00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000000077359400",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b200000000000000000000c2e324d24d7eecd1fb000000000000000000000000ecc5c9bf18cb2cfc94c2f7eff8bdd5837a60ab0e00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000002d0ba3164cc74f58b700000000000000000000000024dc11055aa5b2c5692e4b77d7285c4f0fd9cf9900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000aaf96eb9d0d00000000000000000000000000000000000000000000000000000000000077359400",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000002d0ba3164cc74f58b700000000000000000000000024dc11055aa5b2c5692e4b77d7285c4f0fd9cf9900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000aaf96eb9d0d0000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b20000000000000000000078ee7ce2fe4908108c0000000000000000000000004f698c04d01d9cebcdd9494c189abdd6c5453f8400000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000000077359400",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b20000000000000000000078ee7ce2fe4908108c0000000000000000000000004f698c04d01d9cebcdd9494c189abdd6c5453f8400000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000008bc8786b856e61707c0000000000000000000000004752b27dfc1931eb9a5dfefc7fbc9d0af9020dc700000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000000077359400",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000008bc8786b856e61707c0000000000000000000000004752b27dfc1931eb9a5dfefc7fbc9d0af9020dc700000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cbb7c0000ab88b473b1f5afd9ef808440eed33bf000000000000000000000000663becd10dae6c4a3dcd89f1d76c1174199639b900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad600000000000000000000000000000000000000000000000000000000048c27395000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cbb7c0000ab88b473b1f5afd9ef808440eed33bf000000000000000000000000663becd10dae6c4a3dcd89f1d76c1174199639b900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad60000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000005d3a1ff2b6bab83b63cd9ad0787074081a52ef34000000000000000000000000f4b17c79492d68775e22e8dd0a2bb22854a39a4700000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000cb2bba6f17b80000000000000000000000000000000000000000000000000000000048c27395000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000005d3a1ff2b6bab83b63cd9ad0787074081a52ef34000000000000000000000000f4b17c79492d68775e22e8dd0a2bb22854a39a4700000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000cb2bba6f17b8000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000004200000000000000000000000000000000000006000000000000000000000000fea2d58cefcb9fcb597723c6bae66ffe4193afe400000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad600000000000000000000000000000000000000000000000000000000048c27395000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000004200000000000000000000000000000000000006000000000000000000000000fea2d58cefcb9fcb597723c6bae66ffe4193afe400000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad60000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cb585250f852c6c6bf90434ab21a00f02833a4af000000000000000000000000031b2efc8d70042ac8d9f5c793c4149ec4b60fde00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000048c27395000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cb585250f852c6c6bf90434ab21a00f02833a4af000000000000000000000000031b2efc8d70042ac8d9f5c793c4149ec4b60fde00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x2acc56f900000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000008ae1a30486234bf7e7ac166c7c03d9bc5f2cd8a39be2c48e73c665ac7148c3c28a3913d896b7e9c0e0a84f1be27d376cf2065616101cb7c44674af8a154e684ccb4b42dd66cef25614b94510a910d54b2c148e7621d22b4271566724beda63d1344b343b5087c0bd34207cb5c199f12030777bf6b8c0a128438246f1212f37ca59103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d31243419183654cf9be57fdfa6457a660991907434ff9d295c465a603a50126ff647d50b73548793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bdad4a903dc6d949519060c7707f9604fdc9772c046e05c2e3a8fce0bd7196e4109",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x41b678330000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000005000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000070000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6",
+      "value": "0",
+      "data": "0x7224a5120000000000000000000000000000000000000000000000000000000000015180",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}
+===== END FILE vault/safecalls-morpho-vault.json =====
+
+===== BEGIN FILE vault/vault-bundle.cjs | 253 lines | sha256 b1181d1e8b5659cb9b85fae6e7cdc932d9887d6fb130716ea0b5e876a6f76964 =====
+// The Safe bundle that deploys and configures the Chipworks USDC vault - a stock MetaMorpho V1.1
+// vault from Morpho's own factory - simulated end to end from the Safe on the live node, then
+// used: a depositor deposits, 30 days pass, they withdraw, and the Safe redeems its fee.
+//
+// Nothing is signed or sent. Writes safecalls-morpho-vault.json at the repo root for Transaction
+// Builder, and prints every call decoded so the bundle can be read before it is signed.
+//
+//   node vault-bundle.cjs
+const { createRequire } = require('module');
+const req = createRequire('C:/Users/1136962520/chipworks/package.json');
+const { encodeFunctionData, decodeFunctionResult, decodeErrorResult, parseAbi, getAddress, formatUnits, stringToHex, keccak256, encodeAbiParameters } = req('viem');
+const fs = require('fs');
+const path = require('path');
+const env = fs.readFileSync(path.join(__dirname, '../../.env'), 'utf8');
+const RPC = env.match(/^BASE_RPC_URL=(.*)$/m)[1].trim();
+
+// ---- every value that goes on chain, in one place -------------------------------------------
+const FACTORY = '0xFf62A7c278C62eD665133147129245053Bbf5918'; // MetaMorpho Factory V1.1 (docs.morpho.org addresses, Base)
+const MORPHO = '0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb'; // Morpho (Blue)
+const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const SAFE = '0xe1096B727499a3f70FaD8bc0267F5e69d01373C7';
+const IRM = '0x46415998764C29aB2a25CbeA6254146D50D22687'; // AdaptiveCurveIrm
+const NAME = 'Chipworks USDC';
+const SYMBOL = 'cwUSDC';
+const SALT = stringToHex('chipworks-usdc-1', { size: 32 });
+const FEE = 150000000000000000n; // 0.15e18 = 15% of interest
+const TIMELOCK = 86400n; // 1 day, set as the LAST call
+const DEEP_CAP = 5_000_000n * 10n ** 6n;
+const STOCK_CAP = 2_000n * 10n ** 6n;
+
+// Supply-queue order is the order listed: STOCKS FIRST (see MorphoVaultRehearsal.t.sol for why).
+const MARKETS = [
+  { sym: 'AAPLc', collateral: '0xb200000000000000000000C2e324d24d7eEcd1fb', oracle: '0xEcC5c9bf18CB2CfC94C2f7EFf8BDd5837A60AB0e', lltv: 625000000000000000n, cap: STOCK_CAP },
+  { sym: 'GOOGLc', collateral: '0xb2000000000000000000002D0BA3164cc74f58B7', oracle: '0x24DC11055aa5b2C5692E4B77d7285c4f0fd9Cf99', lltv: 770000000000000000n, cap: STOCK_CAP },
+  { sym: 'NVDAc', collateral: '0xb20000000000000000000078ee7ce2fE4908108C', oracle: '0x4F698C04d01d9CebCDd9494c189aBdD6C5453f84', lltv: 625000000000000000n, cap: STOCK_CAP },
+  { sym: 'METAc', collateral: '0xb2000000000000000000008bC8786B856E61707C', oracle: '0x4752B27dFc1931eb9a5DFEFC7FBC9d0af9020dC7', lltv: 625000000000000000n, cap: STOCK_CAP },
+  { sym: 'cbBTC', collateral: '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf', oracle: '0x663BECd10daE6C4A3Dcd89F1d76c1174199639B9', lltv: 860000000000000000n, cap: DEEP_CAP },
+  { sym: 'USDe', collateral: '0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34', oracle: '0xF4b17C79492d68775e22e8Dd0a2Bb22854A39A47', lltv: 915000000000000000n, cap: DEEP_CAP },
+  { sym: 'WETH', collateral: '0x4200000000000000000000000000000000000006', oracle: '0xFEa2D58cEfCb9fcb597723c6bAE66fFE4193aFE4', lltv: 860000000000000000n, cap: DEEP_CAP },
+  { sym: 'cbXRP', collateral: '0xcb585250f852C6c6bf90434AB21A00f02833a4af', oracle: '0x031b2EFC8d70042Ac8d9f5c793c4149eC4b60fdE', lltv: 625000000000000000n, cap: DEEP_CAP },
+].map((m) => {
+  const params = { loanToken: USDC, collateralToken: m.collateral, oracle: m.oracle, irm: IRM, lltv: m.lltv };
+  const id = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'address' }, { type: 'address' }, { type: 'address' }, { type: 'uint256' }], [params.loanToken, params.collateralToken, params.oracle, params.irm, params.lltv]));
+  return { ...m, params, id };
+});
+
+const MP = 'struct MarketParams { address loanToken; address collateralToken; address oracle; address irm; uint256 lltv; }';
+const F = parseAbi(['function createMetaMorpho(address initialOwner, uint256 initialTimelock, address asset, string name, string symbol, bytes32 salt) returns (address)', 'function isMetaMorpho(address) view returns (bool)']);
+const V = parseAbi([
+  MP,
+  'function setFeeRecipient(address newFeeRecipient)',
+  'function setFee(uint256 newFee)',
+  'function submitCap(MarketParams marketParams, uint256 newSupplyCap)',
+  'function acceptCap(MarketParams marketParams)',
+  'function setSupplyQueue(bytes32[] newSupplyQueue)',
+  'function updateWithdrawQueue(uint256[] indexes)',
+  'function withdrawQueue(uint256) view returns (bytes32)',
+  'function submitTimelock(uint256 newTimelock)',
+  'function owner() view returns (address)', 'function curator() view returns (address)', 'function guardian() view returns (address)',
+  'function fee() view returns (uint96)', 'function feeRecipient() view returns (address)', 'function timelock() view returns (uint256)',
+  'function asset() view returns (address)', 'function name() view returns (string)', 'function symbol() view returns (string)', 'function MORPHO() view returns (address)',
+  'function config(bytes32) view returns (uint184 cap, bool enabled, uint64 removableAt)',
+  'function supplyQueueLength() view returns (uint256)', 'function supplyQueue(uint256) view returns (bytes32)',
+  'function withdrawQueueLength() view returns (uint256)',
+  'function deposit(uint256 assets, address receiver) returns (uint256)', 'function redeem(uint256 shares, address receiver, address owner) returns (uint256)',
+  'function balanceOf(address) view returns (uint256)', 'function totalAssets() view returns (uint256)',
+]);
+const ERC20 = parseAbi(['function transfer(address,uint256) returns (bool)', 'function approve(address,uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)']);
+const MB = parseAbi(['function market(bytes32) view returns (uint128,uint128,uint128,uint128,uint128,uint128)', 'function position(bytes32,address) view returns (uint256,uint128,uint128)']);
+const hex = (n) => '0x' + BigInt(n).toString(16);
+const GAS = hex(3_000_000);
+const CREATE_GAS = hex(15_000_000); // a MetaMorpho deploy is ~5M; at 3M it fails and every later call "succeeds" against empty code
+const rpc = async (method, params) => {
+  const r = await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+  const j = await r.json();
+  if (j.error) throw new Error(JSON.stringify(j.error));
+  return j.result;
+};
+const usd = (x) => Number(formatUnits(x, 6)).toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+(async () => {
+  const problems = [];
+  const block = BigInt(await rpc('eth_blockNumber', []));
+  const now = BigInt((await rpc('eth_getBlockByNumber', [hex(block), false])).timestamp);
+
+  // The vault address is CREATE2 over (factory, salt, init code + args): the same for any caller.
+  const createData = encodeFunctionData({ abi: F, functionName: 'createMetaMorpho', args: [SAFE, 0n, USDC, NAME, SYMBOL, SALT] });
+  const vault = getAddress(decodeFunctionResult({ abi: F, functionName: 'createMetaMorpho', data: await rpc('eth_call', [{ from: SAFE, to: FACTORY, data: createData }, hex(block)]) }));
+  if ((await rpc('eth_getCode', [vault, hex(block)])) !== '0x') problems.push(`${vault} already has code - someone created this vault; change SALT`);
+
+  const txs = [
+    { label: `factory.createMetaMorpho(owner=Safe, timelock=0, USDC, "${NAME}", "${SYMBOL}", salt="chipworks-usdc-1") -> ${vault}`, to: FACTORY, data: createData },
+    { label: 'vault.setFeeRecipient(Safe)', to: vault, data: encodeFunctionData({ abi: V, functionName: 'setFeeRecipient', args: [SAFE] }) },
+    { label: 'vault.setFee(0.15e18) = 15% of interest', to: vault, data: encodeFunctionData({ abi: V, functionName: 'setFee', args: [FEE] }) },
+  ];
+  for (const m of MARKETS) {
+    txs.push({ label: `vault.submitCap(${m.sym} @ ${Number(m.lltv) / 1e16}% LLTV, ${usd(m.cap)} USDC)   id ${m.id}`, to: vault, data: encodeFunctionData({ abi: V, functionName: 'submitCap', args: [m.params, m.cap] }) });
+    txs.push({ label: `vault.acceptCap(${m.sym})  (timelock is still 0, so valid in the same block)`, to: vault, data: encodeFunctionData({ abi: V, functionName: 'acceptCap', args: [m.params] }) });
+  }
+  txs.push({ label: `vault.setSupplyQueue([${MARKETS.map((m) => m.sym).join(', ')}])  stocks first`, to: vault, data: encodeFunctionData({ abi: V, functionName: 'setSupplyQueue', args: [MARKETS.map((m) => m.id)] }) });
+  /*
+    WITHDRAWALS DRAIN THE WITHDRAW QUEUE IN ORDER, and _setCap appends markets in the order their
+    caps were accepted - stocks first. Left alone, every withdrawal would pull the thin stock-market
+    liquidity that Chipworks borrowers draw on before touching a cent of cbBTC. Reorder it deep
+    first: deposits land in the stock markets (supply queue), withdrawals leave from the deep ones.
+    Not timelocked. Indexes are positions in the CURRENT queue: [4,5,6,7] are the deep four.
+  */
+  txs.push({ label: 'vault.updateWithdrawQueue([4,5,6,7,0,1,2,3]) = withdraw from cbBTC, USDe, WETH, cbXRP first, stocks last', to: vault, data: encodeFunctionData({ abi: V, functionName: 'updateWithdrawQueue', args: [[4n, 5n, 6n, 7n, 0n, 1n, 2n, 3n]] }) });
+  txs.push({ label: 'vault.submitTimelock(86400) = 1 day. LAST, and raising it applies immediately', to: vault, data: encodeFunctionData({ abi: V, functionName: 'submitTimelock', args: [TIMELOCK] }) });
+
+  // ---- block 1: the bundle, as the Safe, then read everything back --------------------------
+  const r = (fn, args = [], to = vault, abi = V) => ({ from: SAFE, to, data: encodeFunctionData({ abi, functionName: fn, args }), fn, abi });
+  const reads = [
+    r('isMetaMorpho', [vault], FACTORY, F), r('MORPHO'), r('owner'), r('curator'), r('guardian'), r('asset'), r('name'), r('symbol'),
+    r('fee'), r('feeRecipient'), r('timelock'), r('supplyQueueLength'), r('withdrawQueueLength'),
+    ...MARKETS.map((m) => ({ ...r('config', [m.id]), m })),
+    ...MARKETS.map((_, i) => ({ ...r('supplyQueue', [BigInt(i)]), i })),
+    ...MARKETS.map((_, i) => ({ ...r('withdrawQueue', [BigInt(i)]), wi: i })),
+  ];
+  // ---- block 2: a depositor uses it --------------------------------------------------------
+  const DEP = '0x00000000000000000000000000000000c41b0002';
+  const AMOUNT = 50_000n * 10n ** 6n;
+  const b2 = [
+    { from: MORPHO, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'transfer', args: [DEP, AMOUNT] }), gas: GAS }, // harness funding
+    { from: DEP, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'approve', args: [vault, AMOUNT] }), gas: GAS },
+    { from: DEP, to: vault, data: encodeFunctionData({ abi: V, functionName: 'deposit', args: [AMOUNT, DEP] }), gas: GAS },
+    ...MARKETS.map((m) => ({ from: DEP, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'position', args: [m.id, vault] }) })),
+    { from: DEP, to: vault, data: encodeFunctionData({ abi: V, functionName: 'totalAssets' }) },
+  ];
+  // ---- block 3: 30 days later the depositor leaves and the Safe cashes its fee ---------------
+  const b3 = [
+    { from: DEP, to: vault, data: encodeFunctionData({ abi: V, functionName: 'balanceOf', args: [DEP] }) },
+  ];
+
+  const sim = async (blocks) => rpc('eth_simulateV1', [{ blockStateCalls: blocks, validation: false }, hex(block)]);
+  const first = await sim([
+    { calls: [...txs.map((t, i) => ({ from: SAFE, to: t.to, data: t.data, gas: i === 0 ? CREATE_GAS : GAS })), ...reads.map(({ from, to, data }) => ({ from, to, data }))] },
+    { calls: b2 },
+    { blockOverrides: { time: hex(now + 30n * 86400n) }, calls: b3 },
+  ]);
+  const c1 = first[0].calls;
+  console.log(`block ${block}   vault ${vault}\n\nTHE BUNDLE (${txs.length} calls, all from the Safe ${SAFE}), simulated:`);
+  txs.forEach((t, i) => {
+    const ok = c1[i].status === '0x1';
+    if (!ok) problems.push(`call ${i + 1} reverted: ${t.label}  ${c1[i].returnData}`);
+    console.log(`  ${String(i + 1).padStart(2)}. ${ok ? 'OK  ' : 'FAIL'} ${t.label}`);
+  });
+  const got = {};
+  reads.forEach((rd, i) => {
+    const c = c1[txs.length + i];
+    const v = c.status === '0x1' ? decodeFunctionResult({ abi: rd.abi, functionName: rd.fn, data: c.returnData }) : 'REVERT';
+    if (rd.m) got[`config ${rd.m.sym}`] = v; else if (rd.wi !== undefined) got[`withdrawQueue[${rd.wi}]`] = v; else if (rd.i !== undefined) got[`supplyQueue[${rd.i}]`] = v; else got[rd.fn] = v;
+  });
+  console.log('\nSTATE AFTER THE BUNDLE:');
+  const expect = (k, want, show = got[k]) => {
+    const ok = String(got[k]).toLowerCase() === String(want).toLowerCase();
+    if (!ok) problems.push(`${k} = ${got[k]}, expected ${want}`);
+    console.log(`  ${ok ? 'ok ' : 'BAD'} ${k.padEnd(20)} ${show}`);
+  };
+  if (c1[0].status !== '0x1') problems.push('the vault was never created - every later OK is a call to empty code');
+  expect('isMetaMorpho', true, `${got.isMetaMorpho}  (Morpho's factory recognises it)`);
+  expect('MORPHO', MORPHO); expect('owner', SAFE); expect('asset', USDC); expect('name', NAME); expect('symbol', SYMBOL);
+  expect('curator', '0x0000000000000000000000000000000000000000', `${got.curator}  (none: the owner holds curator and allocator powers)`);
+  expect('guardian', '0x0000000000000000000000000000000000000000', `${got.guardian}  (none)`);
+  expect('fee', FEE, `${got.fee}  (15%)`); expect('feeRecipient', SAFE); expect('timelock', TIMELOCK, `${got.timelock}  (1 day)`);
+  expect('supplyQueueLength', MARKETS.length); expect('withdrawQueueLength', MARKETS.length);
+  for (const [i, m] of MARKETS.entries()) {
+    const cfg = got[`config ${m.sym}`];
+    const ok = cfg !== 'REVERT' && cfg[0] === m.cap && cfg[1] === true && cfg[2] === 0n;
+    if (!ok) problems.push(`config ${m.sym} = ${cfg}`);
+    if (String(got[`supplyQueue[${i}]`]).toLowerCase() !== m.id.toLowerCase()) problems.push(`supplyQueue[${i}] is not ${m.sym}`);
+    const wq = (i + 4) % 8; // deep ones at 0..3, stocks at 4..7
+    if (String(got[`withdrawQueue[${wq}]`]).toLowerCase() !== m.id.toLowerCase()) problems.push(`withdrawQueue[${wq}] is not ${m.sym}`);
+    console.log(`  ${ok ? 'ok ' : 'BAD'} ${m.sym.padEnd(7)} cap ${usd(m.cap).padStart(12)}  enabled  supply #${i + 1}  withdraw #${wq + 1}`);
+  }
+
+  const c2 = first[1].calls;
+  if (c2[2].status !== '0x1') problems.push(`deposit reverted ${c2[2].returnData}`);
+  console.log(`\nA DEPOSIT OF ${usd(AMOUNT)} USDC:  ${c2[2].status === '0x1' ? 'ok' : 'REVERTED'}`);
+  MARKETS.forEach((m, i) => {
+    const pos = decodeFunctionResult({ abi: MB, functionName: 'position', data: c2[3 + i].returnData });
+    if (i < 4 && pos[0] === 0n) problems.push(`${m.sym} got nothing from the deposit`);
+    if (pos[0] > 0n) console.log(`  landed in ${m.sym}`);
+  });
+  const shares = decodeFunctionResult({ abi: V, functionName: 'balanceOf', data: first[2].calls[0].returnData });
+
+  // Second pass now the share count is known: redeem everything 30 days later, then the Safe's fee.
+  const second = await sim([
+    { calls: txs.map((t, i) => ({ from: SAFE, to: t.to, data: t.data, gas: i === 0 ? CREATE_GAS : GAS })) },
+    { calls: b2.slice(0, 3) },
+    { blockOverrides: { time: hex(now + 30n * 86400n) }, calls: [
+      ...MARKETS.slice(0, 4).map((m) => ({ from: DEP, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'position', args: [m.id, vault] }) })),
+      { from: DEP, to: vault, data: encodeFunctionData({ abi: V, functionName: 'redeem', args: [shares / 5n, DEP, DEP] }), gas: GAS },
+      ...MARKETS.slice(0, 4).map((m) => ({ from: DEP, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'position', args: [m.id, vault] }) })),
+      { from: DEP, to: vault, data: encodeFunctionData({ abi: V, functionName: 'redeem', args: [shares - shares / 5n, DEP, DEP] }), gas: GAS },
+      { from: DEP, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [DEP] }) },
+      { from: SAFE, to: vault, data: encodeFunctionData({ abi: V, functionName: 'balanceOf', args: [SAFE] }) },
+    ] },
+  ]);
+  const c3x = second[2].calls;
+  if (c3x[4].status !== '0x1') problems.push(`partial redeem reverted ${c3x[4].returnData}`);
+  let stockTouched = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = decodeFunctionResult({ abi: MB, functionName: 'position', data: c3x[i].returnData })[0];
+    const b = decodeFunctionResult({ abi: MB, functionName: 'position', data: c3x[5 + i].returnData })[0];
+    if (a !== b) { stockTouched++; problems.push(`a 10,000 USDC withdrawal pulled from ${MARKETS[i].sym}`); }
+  }
+  console.log(`
+A 10,000 USDC PARTIAL WITHDRAWAL: ${c3x[4].status === '0x1' ? 'ok' : 'REVERTED'}, stock-market supply touched: ${stockTouched} of 4 (deep markets paid it)`);
+  const c3 = c3x.slice(9);
+  if (c3[0].status !== '0x1') problems.push(`redeem reverted ${c3[0].returnData}`);
+  const out = decodeFunctionResult({ abi: ERC20, functionName: 'balanceOf', data: c3[1].returnData });
+  const safeShares = decodeFunctionResult({ abi: V, functionName: 'balanceOf', data: c3[2].returnData });
+  const third = await sim([
+    { calls: txs.map((t, i) => ({ from: SAFE, to: t.to, data: t.data, gas: i === 0 ? CREATE_GAS : GAS })) },
+    { calls: b2.slice(0, 3) },
+    { blockOverrides: { time: hex(now + 30n * 86400n) }, calls: [
+      { from: DEP, to: vault, data: encodeFunctionData({ abi: V, functionName: 'redeem', args: [shares, DEP, DEP] }), gas: GAS },
+      { from: SAFE, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [SAFE] }) },
+      { from: SAFE, to: vault, data: encodeFunctionData({ abi: V, functionName: 'redeem', args: [safeShares, SAFE, SAFE] }), gas: GAS },
+      { from: SAFE, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [SAFE] }) },
+    ] },
+  ]);
+  const c4 = third[2].calls;
+  if (c4[2].status !== '0x1') problems.push(`Safe fee redeem reverted ${c4[2].returnData}`);
+  const safeGot = decodeFunctionResult({ abi: ERC20, functionName: 'balanceOf', data: c4[3].returnData }) - decodeFunctionResult({ abi: ERC20, functionName: 'balanceOf', data: c4[1].returnData });
+  if (out < AMOUNT) problems.push(`depositor got back ${out} < ${AMOUNT}`);
+  if (safeGot === 0n) problems.push('Safe fee redeemed to nothing');
+  const interest = out - AMOUNT;
+  console.log(`\n30 DAYS LATER:\n  depositor redeemed all: ${usd(out)} USDC (+${usd(interest)})\n  Safe redeemed its fee shares: +${usd(safeGot)} USDC in the Safe`);
+  console.log(`  fee share of gross interest: ${(Number(safeGot) / Number(interest + safeGot) * 100).toFixed(2)}%`);
+
+  const bundle = {
+    version: '1.0',
+    chainId: '8453',
+    createdAt: Date.now(),
+    meta: {
+      name: 'deploy-chipworks-usdc-vault',
+      description: `MetaMorpho V1.1 "${NAME}" (${SYMBOL}) at ${vault}: owner+fee to Safe, 15% fee, 8 markets (4 stocks at 2,000 USDC first in supply, 4 deep at 5M first in withdraw), then 1-day timelock`,
+      txBuilderVersion: '1.16.5',
+      createdFromSafeAddress: SAFE,
+      createdFromOwnerAddress: '',
+    },
+    transactions: txs.map((t) => ({ to: t.to, value: '0', data: t.data, contractMethod: null, contractInputsValues: null })),
+  };
+  const file = path.join(__dirname, '../../safecalls-morpho-vault.json');
+  fs.writeFileSync(file, JSON.stringify(bundle, null, 2) + '\n');
+  console.log(`\nSafe Transaction Builder file: ${file}`);
+  console.log('\nraw calldata, in order:');
+  txs.forEach((t, i) => console.log(`  ${i + 1}. to ${t.to}\n     ${t.data}`));
+  console.log('\nproblems:', problems);
+  if (problems.length) process.exit(1);
+})().catch((e) => { console.error(String(e.shortMessage || e.message).replace(/https:\/\/\S+/g, '<url>')); process.exit(1); });
+===== END FILE vault/vault-bundle.cjs =====
+
+===== BEGIN FILE vault/vault-bundle.out.txt | 112 lines | sha256 d579866df9c0ac8d1e223f4e4c69b0cf441572dfb146d45cda1bf1083b53987f =====
+block 51401100   vault 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+
+THE BUNDLE (22 calls, all from the Safe 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7), simulated:
+   1. OK   factory.createMetaMorpho(owner=Safe, timelock=0, USDC, "Chipworks USDC", "cwUSDC", salt="chipworks-usdc-1") -> 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+   2. OK   vault.setFeeRecipient(Safe)
+   3. OK   vault.setFee(0.15e18) = 15% of interest
+   4. OK   vault.submitCap(AAPLc @ 62.5% LLTV, 2,000 USDC)   id 0xae1a30486234bf7e7ac166c7c03d9bc5f2cd8a39be2c48e73c665ac7148c3c28
+   5. OK   vault.acceptCap(AAPLc)  (timelock is still 0, so valid in the same block)
+   6. OK   vault.submitCap(GOOGLc @ 77% LLTV, 2,000 USDC)   id 0xa3913d896b7e9c0e0a84f1be27d376cf2065616101cb7c44674af8a154e684cc
+   7. OK   vault.acceptCap(GOOGLc)  (timelock is still 0, so valid in the same block)
+   8. OK   vault.submitCap(NVDAc @ 62.5% LLTV, 2,000 USDC)   id 0xb4b42dd66cef25614b94510a910d54b2c148e7621d22b4271566724beda63d13
+   9. OK   vault.acceptCap(NVDAc)  (timelock is still 0, so valid in the same block)
+  10. OK   vault.submitCap(METAc @ 62.5% LLTV, 2,000 USDC)   id 0x44b343b5087c0bd34207cb5c199f12030777bf6b8c0a128438246f1212f37ca5
+  11. OK   vault.acceptCap(METAc)  (timelock is still 0, so valid in the same block)
+  12. OK   vault.submitCap(cbBTC @ 86% LLTV, 5,000,000 USDC)   id 0x9103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d312434191836
+  13. OK   vault.acceptCap(cbBTC)  (timelock is still 0, so valid in the same block)
+  14. OK   vault.submitCap(USDe @ 91.5% LLTV, 5,000,000 USDC)   id 0x54cf9be57fdfa6457a660991907434ff9d295c465a603a50126ff647d50b7354
+  15. OK   vault.acceptCap(USDe)  (timelock is still 0, so valid in the same block)
+  16. OK   vault.submitCap(WETH @ 86% LLTV, 5,000,000 USDC)   id 0x8793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bda
+  17. OK   vault.acceptCap(WETH)  (timelock is still 0, so valid in the same block)
+  18. OK   vault.submitCap(cbXRP @ 62.5% LLTV, 5,000,000 USDC)   id 0xd4a903dc6d949519060c7707f9604fdc9772c046e05c2e3a8fce0bd7196e4109
+  19. OK   vault.acceptCap(cbXRP)  (timelock is still 0, so valid in the same block)
+  20. OK   vault.setSupplyQueue([AAPLc, GOOGLc, NVDAc, METAc, cbBTC, USDe, WETH, cbXRP])  stocks first
+  21. OK   vault.updateWithdrawQueue([4,5,6,7,0,1,2,3]) = withdraw from cbBTC, USDe, WETH, cbXRP first, stocks last
+  22. OK   vault.submitTimelock(86400) = 1 day. LAST, and raising it applies immediately
+
+STATE AFTER THE BUNDLE:
+  ok  isMetaMorpho         true  (Morpho's factory recognises it)
+  ok  MORPHO               0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
+  ok  owner                0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  asset                0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  ok  name                 Chipworks USDC
+  ok  symbol               cwUSDC
+  ok  curator              0x0000000000000000000000000000000000000000  (none: the owner holds curator and allocator powers)
+  ok  guardian             0x0000000000000000000000000000000000000000  (none)
+  ok  fee                  150000000000000000  (15%)
+  ok  feeRecipient         0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  timelock             86400  (1 day)
+  ok  supplyQueueLength    8
+  ok  withdrawQueueLength  8
+  ok  AAPLc   cap        2,000  enabled  supply #1  withdraw #5
+  ok  GOOGLc  cap        2,000  enabled  supply #2  withdraw #6
+  ok  NVDAc   cap        2,000  enabled  supply #3  withdraw #7
+  ok  METAc   cap        2,000  enabled  supply #4  withdraw #8
+  ok  cbBTC   cap    5,000,000  enabled  supply #5  withdraw #1
+  ok  USDe    cap    5,000,000  enabled  supply #6  withdraw #2
+  ok  WETH    cap    5,000,000  enabled  supply #7  withdraw #3
+  ok  cbXRP   cap    5,000,000  enabled  supply #8  withdraw #4
+
+A DEPOSIT OF 50,000 USDC:  ok
+  landed in AAPLc
+  landed in GOOGLc
+  landed in NVDAc
+  landed in METAc
+  landed in cbBTC
+
+A 10,000 USDC PARTIAL WITHDRAWAL: ok, stock-market supply touched: 0 of 4 (deep markets paid it)
+
+30 DAYS LATER:
+  depositor redeemed all: 50,143.69 USDC (+143.69)
+  Safe redeemed its fee shares: +25.36 USDC in the Safe
+  fee share of gross interest: 15.00%
+
+Safe Transaction Builder file: C:\Users\1136962520\chipworks-contracts\safecalls-morpho-vault.json
+
+raw calldata, in order:
+  1. to 0xFf62A7c278C62eD665133147129245053Bbf5918
+     0xb5102025000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c70000000000000000000000000000000000000000000000000000000000000000000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000010063686970776f726b732d757364632d3100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e43686970776f726b73205553444300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000066377555344430000000000000000000000000000000000000000000000000000
+  2. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0xe74b981b000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c7
+  3. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x69fe0e2d0000000000000000000000000000000000000000000000000214e8348c4f0000
+  4. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b200000000000000000000c2e324d24d7eecd1fb000000000000000000000000ecc5c9bf18cb2cfc94c2f7eff8bdd5837a60ab0e00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000000077359400
+  5. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b200000000000000000000c2e324d24d7eecd1fb000000000000000000000000ecc5c9bf18cb2cfc94c2f7eff8bdd5837a60ab0e00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000
+  6. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000002d0ba3164cc74f58b700000000000000000000000024dc11055aa5b2c5692e4b77d7285c4f0fd9cf9900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000aaf96eb9d0d00000000000000000000000000000000000000000000000000000000000077359400
+  7. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000002d0ba3164cc74f58b700000000000000000000000024dc11055aa5b2c5692e4b77d7285c4f0fd9cf9900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000aaf96eb9d0d0000
+  8. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b20000000000000000000078ee7ce2fe4908108c0000000000000000000000004f698c04d01d9cebcdd9494c189abdd6c5453f8400000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000000077359400
+  9. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b20000000000000000000078ee7ce2fe4908108c0000000000000000000000004f698c04d01d9cebcdd9494c189abdd6c5453f8400000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000
+  10. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000008bc8786b856e61707c0000000000000000000000004752b27dfc1931eb9a5dfefc7fbc9d0af9020dc700000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000000077359400
+  11. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000b2000000000000000000008bc8786b856e61707c0000000000000000000000004752b27dfc1931eb9a5dfefc7fbc9d0af9020dc700000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000
+  12. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cbb7c0000ab88b473b1f5afd9ef808440eed33bf000000000000000000000000663becd10dae6c4a3dcd89f1d76c1174199639b900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad600000000000000000000000000000000000000000000000000000000048c27395000
+  13. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cbb7c0000ab88b473b1f5afd9ef808440eed33bf000000000000000000000000663becd10dae6c4a3dcd89f1d76c1174199639b900000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad60000
+  14. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000005d3a1ff2b6bab83b63cd9ad0787074081a52ef34000000000000000000000000f4b17c79492d68775e22e8dd0a2bb22854a39a4700000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000cb2bba6f17b80000000000000000000000000000000000000000000000000000000048c27395000
+  15. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000005d3a1ff2b6bab83b63cd9ad0787074081a52ef34000000000000000000000000f4b17c79492d68775e22e8dd0a2bb22854a39a4700000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000cb2bba6f17b8000
+  16. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000004200000000000000000000000000000000000006000000000000000000000000fea2d58cefcb9fcb597723c6bae66ffe4193afe400000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad600000000000000000000000000000000000000000000000000000000048c27395000
+  17. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000004200000000000000000000000000000000000006000000000000000000000000fea2d58cefcb9fcb597723c6bae66ffe4193afe400000000000000000000000046415998764c29ab2a25cbea6254146d50d226870000000000000000000000000000000000000000000000000bef55718ad60000
+  18. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x3b24c2bf000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cb585250f852c6c6bf90434ab21a00f02833a4af000000000000000000000000031b2efc8d70042ac8d9f5c793c4149ec4b60fde00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e80000000000000000000000000000000000000000000000000000000048c27395000
+  19. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x6fda3868000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000cb585250f852c6c6bf90434ab21a00f02833a4af000000000000000000000000031b2efc8d70042ac8d9f5c793c4149ec4b60fde00000000000000000000000046415998764c29ab2a25cbea6254146d50d2268700000000000000000000000000000000000000000000000008ac7230489e8000
+  20. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x2acc56f900000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000008ae1a30486234bf7e7ac166c7c03d9bc5f2cd8a39be2c48e73c665ac7148c3c28a3913d896b7e9c0e0a84f1be27d376cf2065616101cb7c44674af8a154e684ccb4b42dd66cef25614b94510a910d54b2c148e7621d22b4271566724beda63d1344b343b5087c0bd34207cb5c199f12030777bf6b8c0a128438246f1212f37ca59103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d31243419183654cf9be57fdfa6457a660991907434ff9d295c465a603a50126ff647d50b73548793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bdad4a903dc6d949519060c7707f9604fdc9772c046e05c2e3a8fce0bd7196e4109
+  21. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x41b678330000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000005000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000070000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003
+  22. to 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+     0x7224a5120000000000000000000000000000000000000000000000000000000000015180
+
+problems: []
+===== END FILE vault/vault-bundle.out.txt =====
+
+===== BEGIN FILE vault/MorphoVaultRehearsal.t.sol | 370 lines | sha256 891dbf95f5ecf40a40e9ee528d4350e70cab968a5f4fbeeac5cc857ea7ffd8d7 =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+struct MarketParams {
+    address loanToken;
+    address collateralToken;
+    address oracle;
+    address irm;
+    uint256 lltv;
+}
+
+interface IMetaMorphoFactory {
+    function createMetaMorpho(
+        address initialOwner,
+        uint256 initialTimelock,
+        address asset,
+        string memory name,
+        string memory symbol,
+        bytes32 salt
+    ) external returns (address);
+}
+
+interface IMetaMorpho {
+    function setCurator(address) external;
+    function setIsAllocator(address, bool) external;
+    function submitCap(MarketParams memory, uint256) external;
+    function submitTimelock(uint256) external;
+    function updateWithdrawQueue(uint256[] calldata) external;
+    function acceptCap(MarketParams memory) external;
+    function setSupplyQueue(bytes32[] calldata) external;
+    function setFeeRecipient(address) external;
+    function setFee(uint256) external;
+    function deposit(uint256 assets, address receiver) external returns (uint256);
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
+    function totalAssets() external view returns (uint256);
+    function balanceOf(address) external view returns (uint256);
+    function maxWithdraw(address) external view returns (uint256);
+    function config(bytes32) external view returns (uint184 cap, bool enabled, uint64 removableAt);
+    function fee() external view returns (uint96);
+    function feeRecipient() external view returns (address);
+    function timelock() external view returns (uint256);
+    function owner() external view returns (address);
+    function asset() external view returns (address);
+}
+
+interface IMorpho {
+    function position(bytes32, address) external view returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral);
+    function market(bytes32) external view returns (uint128, uint128, uint128, uint128, uint128, uint128);
+}
+
+/**
+ * THE CHIPWORKS USDC VAULT, BUILT AND RUN BEFORE IT IS DEPLOYED.
+ *
+ * A Morpho vault ("MetaMorpho") is the supported way for an integrator to earn on
+ * lending: depositors supply USDC, the curator picks which markets it may go to and
+ * how much, and the curator takes a share of the INTEREST as a fee. Live Base vaults
+ * charge 0% to 25% - Steakhouse USDC takes 25% on $130M, Moonwell 15%, Spark 10% -
+ * so 15% to the Chipworks Safe is squarely normal.
+ *
+ * WHAT THIS PROVES, against the live factory and live markets:
+ *   the vault deploys and is owned by the Safe
+ *   the 8 whitelisted markets are accepted and ordered
+ *   a depositor's USDC actually reaches those markets
+ *   it earns, and the Safe's fee accrues out of the interest and nothing else
+ *   the depositor can take it all back out
+ *
+ * THE WHITELIST IS HARDCODED AND THAT IS THE POINT. Base has 4,303 markets and
+ * some of them are pinned at 100% utilisation quoting 297,000% APY, where a
+ * lender cannot withdraw at all. A vault that chose markets by yield would walk
+ * straight into one. These eight were picked by depth (>= $5k) and read off chain
+ * by tools/claim-day/morpho-whitelist.cjs.
+ */
+contract MorphoVaultRehearsalTest is Test {
+    address constant FACTORY = 0xFf62A7c278C62eD665133147129245053Bbf5918; // MetaMorpho v1.1
+    address constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
+    address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    address constant SAFE = 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7;
+    address constant IRM = 0x46415998764C29aB2a25CbeA6254146D50D22687;
+
+    /// @dev 15%, in WAD. The fee is a share of INTEREST, never of principal.
+    uint256 constant FEE = 0.15e18;
+
+    /// @dev Per stock market. Sized to add borrow capacity without drowning the rate.
+    uint256 constant STOCK_CAP = 2_000e6;
+
+    IMetaMorpho vault;
+    address depositor = makeAddr("depositor");
+
+    /// @dev The eight whitelisted markets, deep first for safety, stocks for yield.
+    MarketParams[] markets;
+    bytes32[] ids;
+
+    function setUp() public {
+        string memory rpc = vm.envOr("BASE_RPC_URL", string(""));
+        require(bytes(rpc).length > 0, "BASE_RPC_URL is required");
+        vm.createSelectFork(rpc);
+
+        // --- deep markets: where size can actually go ---
+        _add(0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf, 0x663BECd10daE6C4A3Dcd89F1d76c1174199639B9, 0.86e18); // cbBTC
+        _add(0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34, 0xF4b17C79492d68775e22e8Dd0a2Bb22854A39A47, 0.915e18); // USDe
+        _add(0x4200000000000000000000000000000000000006, 0xFEa2D58cEfCb9fcb597723c6bAE66fFE4193aFE4, 0.86e18); // WETH
+        _add(0xcb585250f852C6c6bf90434AB21A00f02833a4af, 0x031b2EFC8d70042Ac8d9f5c793c4149eC4b60fdE, 0.625e18); // cbXRP
+        // --- Chipworks stock markets: higher yield, thin, so smaller caps ---
+        _add(0xb200000000000000000000C2e324d24d7eEcd1fb, 0xEcC5c9bf18CB2CfC94C2f7EFf8BDd5837A60AB0e, 0.625e18); // AAPL
+        _add(0xb2000000000000000000002D0BA3164cc74f58B7, 0x24DC11055aa5b2C5692E4B77d7285c4f0fd9Cf99, 0.77e18); // GOOGL
+        _add(0xb20000000000000000000078ee7ce2fE4908108C, 0x4F698C04d01d9CebCDd9494c189aBdD6C5453f84, 0.625e18); // NVDA
+        _add(0xb2000000000000000000008bC8786B856E61707C, 0x4752B27dFc1931eb9a5DFEFC7FBC9d0af9020dC7, 0.625e18); // META
+
+        vault = IMetaMorpho(
+            IMetaMorphoFactory(FACTORY).createMetaMorpho(SAFE, 0, USDC, "Chipworks USDC", "cwUSDC", bytes32("chipworks-1"))
+        );
+
+        vm.startPrank(SAFE);
+        vault.setFeeRecipient(SAFE);
+        vault.setFee(FEE);
+        /*
+            CAPS ARE THE CURATOR'S WHOLE JOB. A thin market at 91% utilisation is
+            fine for a slice and wrong for the lot: if every depositor's USDC sat in
+            the NVDA market, a withdrawal larger than its free liquidity would fail.
+            Deep markets take size; the stock markets are capped at STOCK_CAP each.
+        */
+        for (uint256 i; i < markets.length; i++) {
+            uint256 cap = i < 4 ? 5_000_000e6 : STOCK_CAP;
+            vault.submitCap(markets[i], cap);
+            // submitCap only PENDS an increase, even at timelock 0 (validAt = now), so acceptCap is
+            // required - and called strictly, exactly as safecalls-morpho-vault.json does.
+            vault.acceptCap(markets[i]);
+        }
+
+        /*
+            ── THE QUEUE ORDER IS THE WHOLE LENDING/BORROWING LOOP ───────────────
+
+            Deposits fill the supply queue in order, up to each cap. Deep-first put
+            all $50,000 into cbBTC and not one cent into a Chipworks market - money
+            earned, nothing lent against the stocks holders actually hold.
+
+            Stocks first, capped small, makes the two products feed each other: each
+            deposit tops up the markets Chipworks holders borrow from, and the
+            overflow goes to cbBTC and friends.
+
+            THE CAP IS SMALL ON PURPOSE, AND NOT OUT OF TIMIDITY. These markets are
+            ~$5-22k deep at 91% utilisation, which is WHY they pay 5.93%. Dropping
+            $25k into a $22k market halves utilisation and the rate collapses - the
+            vault would be competing its own yield away. $2,000 a market adds real
+            borrow capacity while leaving the rate roughly where it is (measured in the
+            commit that set it: 4.18% net at 2,000 against 3.12% at 5,000).
+        */
+        bytes32[] memory queue = new bytes32[](ids.length);
+        for (uint256 i; i < 4; i++) queue[i] = ids[i + 4]; // the four stock markets
+        for (uint256 i; i < 4; i++) queue[i + 4] = ids[i]; // then the deep ones
+        vault.setSupplyQueue(queue);
+
+        /*
+            Withdrawals drain the withdraw queue in order, and _setCap appends each market as its
+            cap is accepted. HERE the deep markets were accepted first (they are markets[0..3]), so
+            the queue is already deep-first and must NOT be reordered - an (i+4)%8 reorder copied
+            from the bundle turned it stocks-first and test_partialWithdrawal caught it. The bundle
+            accepts STOCKS first, which is why it, and only it, sends [4,5,6,7,0,1,2,3].
+        */
+        vm.stopPrank();
+    }
+
+    function _add(address collateral, address oracle, uint256 lltv) internal {
+        MarketParams memory p =
+            MarketParams({loanToken: USDC, collateralToken: collateral, oracle: oracle, irm: IRM, lltv: lltv});
+        markets.push(p);
+        ids.push(keccak256(abi.encode(p)));
+    }
+
+    // ---- the vault itself -------------------------------------------------
+
+    function test_vaultIsOwnedByTheSafe_andChargesFifteenPercent() public view {
+        assertEq(vault.owner(), SAFE, "the Safe owns it");
+        assertEq(vault.asset(), USDC, "USDC vault");
+        assertEq(vault.fee(), FEE, "15% of interest");
+        assertEq(vault.feeRecipient(), SAFE, "fee goes to the Safe");
+    }
+
+    function test_everyWhitelistedMarketIsEnabledWithACap() public view {
+        for (uint256 i; i < ids.length; i++) {
+            (uint184 cap, bool enabled,) = vault.config(ids[i]);
+            assertTrue(enabled, "market not enabled");
+            assertGt(cap, 0, "market has no cap");
+        }
+    }
+
+    // ---- a deposit, and where it goes -------------------------------------
+
+    function test_depositReachesTheWhitelistedMarkets() public {
+        uint256 amount = 50_000e6;
+        deal(USDC, depositor, amount);
+
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, depositor);
+        vm.stopPrank();
+
+        assertGt(shares, 0, "no shares minted");
+        assertApproxEqAbs(vault.totalAssets(), amount, 1, "vault holds the deposit");
+
+        // It should be IN a market, not sitting in the vault.
+        uint256 placed;
+        for (uint256 i; i < ids.length; i++) {
+            (uint256 supplyShares,,) = IMorpho(MORPHO).position(ids[i], address(vault));
+            if (supplyShares > 0) placed++;
+        }
+        assertGt(placed, 0, "deposit never reached a market");
+        emit log_named_uint("markets the deposit landed in", placed);
+        emit log_named_decimal_uint("vault total assets (USDC)", vault.totalAssets(), 6);
+
+        /*
+            AND THE BORROW SIDE GREW BY IT. This is the claim the two products rest
+            on: a deposit here is borrowable by a Chipworks holder against their
+            stock, without Chipworks putting up a cent.
+        */
+        uint256 stockLiquidityAdded;
+        for (uint256 i = 4; i < ids.length; i++) {
+            (uint256 supplyShares,,) = IMorpho(MORPHO).position(ids[i], address(vault));
+            if (supplyShares > 0) stockLiquidityAdded++;
+        }
+        assertEq(stockLiquidityAdded, 4, "every stock market should have been topped up first");
+        emit log_named_decimal_uint("added to EACH stock market (USDC)", STOCK_CAP, 6);
+    }
+
+    // ---- it earns, and the fee comes out of the interest -------------------
+
+    function test_itEarns_andTheSafeFeeAccruesFromInterestOnly() public {
+        uint256 amount = 50_000e6;
+        deal(USDC, depositor, amount);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        vault.deposit(amount, depositor);
+        vm.stopPrank();
+
+        uint256 safeSharesBefore = vault.balanceOf(SAFE);
+        assertEq(safeSharesBefore, 0, "the Safe starts with nothing");
+
+        skip(365 days);
+
+        // Any interaction accrues: a dust deposit is the cheapest trigger.
+        deal(USDC, depositor, 1e6);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), 1e6);
+        vault.deposit(1e6, depositor);
+        vm.stopPrank();
+
+        uint256 assetsNow = vault.totalAssets();
+        assertGt(assetsNow, amount + 1e6, "a year passed and nothing was earned");
+
+        uint256 safeShares = vault.balanceOf(SAFE);
+        assertGt(safeShares, 0, "the curator fee never accrued");
+
+        uint256 interest = assetsNow - amount - 1e6;
+        uint256 feeValue = vault.maxWithdraw(SAFE);
+        emit log_named_decimal_uint("interest earned in a year (USDC)", interest, 6);
+        emit log_named_decimal_uint("the Safe's 15% cut (USDC)", feeValue, 6);
+        emit log_named_uint("implied net APY for depositors, bps", ((interest - feeValue) * 10_000) / amount);
+
+        // The fee is a share of interest and can never eat principal.
+        assertLt(feeValue, interest, "fee must be less than the interest it is taken from");
+    }
+
+    // ---- and the depositor can leave --------------------------------------
+
+    function test_depositorCanWithdrawEverything() public {
+        uint256 amount = 20_000e6;
+        deal(USDC, depositor, amount);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, depositor);
+
+        skip(30 days);
+
+        uint256 got = vault.redeem(shares, depositor, depositor);
+        vm.stopPrank();
+
+        assertGe(got, amount, "a lender must get back at least what they put in");
+        emit log_named_decimal_uint("out after 30 days (USDC)", got, 6);
+    }
+
+    // ---- the whole cycle, ending with the fee as USDC in the Safe ----------
+
+    /**
+     * Deposit, a year of interest, the depositor leaves with everything, then the Safe
+     * redeems its fee shares. Shares accruing to the Safe prove little on their own;
+     * USDC arriving in the Safe does.
+     */
+    function test_fullCycle_depositAccrueWithdraw_thenTheSafeCashesItsFee() public {
+        uint256 amount = 50_000e6;
+        deal(USDC, depositor, amount);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, depositor);
+        vm.stopPrank();
+
+        skip(365 days);
+
+        vm.prank(depositor);
+        uint256 out = vault.redeem(shares, depositor, depositor);
+        uint256 depositorInterest = out - amount;
+
+        uint256 feeShares = vault.balanceOf(SAFE);
+        assertGt(feeShares, 0, "the curator fee never accrued");
+
+        uint256 safeUsdcBefore = IERC20(USDC).balanceOf(SAFE);
+        vm.prank(SAFE);
+        uint256 fee = vault.redeem(feeShares, SAFE, SAFE);
+        assertEq(IERC20(USDC).balanceOf(SAFE) - safeUsdcBefore, fee, "fee arrived in the Safe as USDC");
+
+        // The cut is 15% of GROSS interest, i.e. fee over fee plus the depositor's interest.
+        uint256 grossInterest = depositorInterest + fee;
+        assertApproxEqRel(fee * 1e18 / grossInterest, FEE, 0.001e18, "fee is 15% of interest, within 0.1%");
+        assertLe(vault.totalAssets(), 2, "vault emptied, nothing stranded");
+
+        emit log_named_decimal_uint("depositor out after a year (USDC)", out, 6);
+        emit log_named_decimal_uint("Safe fee redeemed to USDC", fee, 6);
+        emit log_named_uint("fee share of gross interest, bps", fee * 10_000 / grossInterest);
+    }
+
+    /**
+     * A zero timelock is for setup only: it lets the Safe add markets in the same bundle
+     * that creates the vault. Left at zero, the owner could list a bad market and move
+     * deposits into it in one block. Raising it applies immediately, so the deploy bundle
+     * ends with it and no depositor ever sees a zero-timelock vault.
+     */
+    function test_timelockCanBeRaisedInTheSameBundle_andThenCapsWait() public {
+        vm.prank(SAFE);
+        vault.submitTimelock(1 days);
+        assertEq(vault.timelock(), 1 days, "raising the timelock applies immediately");
+
+        vm.startPrank(SAFE);
+        vault.submitCap(markets[4], STOCK_CAP * 2);
+        vm.expectRevert();
+        vault.acceptCap(markets[4]);
+        vm.stopPrank();
+        (uint184 cap,,) = vault.config(ids[4]);
+        assertEq(cap, STOCK_CAP, "cap unchanged until the timelock passes");
+
+        skip(1 days);
+        vault.acceptCap(markets[4]); // permissionless once matured
+        (cap,,) = vault.config(ids[4]);
+        assertEq(cap, STOCK_CAP * 2);
+    }
+
+    /// @dev A withdrawal is paid from the deep markets and leaves stock-market supply untouched.
+    function test_partialWithdrawal_leavesStockMarketLiquidityAlone() public {
+        uint256 amount = 50_000e6;
+        deal(USDC, depositor, amount);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, depositor);
+
+        uint256[4] memory before;
+        for (uint256 i; i < 4; i++) {
+            (before[i],,) = IMorpho(MORPHO).position(ids[i + 4], address(vault));
+        }
+
+        skip(7 days);
+        vault.redeem(shares / 5, depositor, depositor);
+        vm.stopPrank();
+
+        for (uint256 i; i < 4; i++) {
+            (uint256 afterShares,,) = IMorpho(MORPHO).position(ids[i + 4], address(vault));
+            assertEq(afterShares, before[i], "a withdrawal pulled stock-market liquidity");
+        }
+    }
+}
+===== END FILE vault/MorphoVaultRehearsal.t.sol =====
+
+===== END OF PASTE-3-vault.txt: 4 files. If you can read this line, nothing was cut off. =====
