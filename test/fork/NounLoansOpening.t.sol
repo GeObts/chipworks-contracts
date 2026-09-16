@@ -39,7 +39,7 @@ interface IActivation {
  * Everything here runs on a fork of Base against the deployed NounLoans, with the
  * three opening transactions applied as the Safe would send them:
  *
- *     setMaxPrincipal(Based, 9,473,187 CHIP)   60% of a $38 floor at $2.4068e-6
+ *     setMaxPrincipal(Based, 8,771,708 CHIP)   60% of a $38 floor at $2.5993e-6
  *     setMaxPrincipal(Dark,  19,943,552 CHIP)  60% of an $80 floor
  *     setFeeSplitter(Safe)                     fees straight to the multisig
  *     setBorrowingPaused(false)
@@ -65,7 +65,7 @@ contract NounLoansOpeningTest is Test {
     address constant DARK_OWNER = 0x74e130B74D85D4774360263D8d28aa6Fd480Cc9c;
 
     /// @dev The caps being proposed. 60% LTV at the live $CHIP price.
-    uint256 constant BASED_CAP = 9_473_187e18;
+    uint256 constant BASED_CAP = 8_771_708e18;
     uint256 constant DARK_CAP = 19_943_552e18;
 
     ILoans loans = ILoans(LOANS);
@@ -79,7 +79,7 @@ contract NounLoansOpeningTest is Test {
         // The opening sequence, exactly as the Safe would send it.
         vm.startPrank(SAFE);
         loans.setMaxPrincipal(BASED, BASED_CAP);
-        loans.setMaxPrincipal(DARK, DARK_CAP);
+        loans.setMaxPrincipal(DARK, 0);
         /*
             LIL IS ALREADY LENDABLE ON CHAIN — 2,700,000 CHIP, set before the pause.
             Hiding it in the UI would leave it borrowable by anyone calling the contract
@@ -106,7 +106,7 @@ contract NounLoansOpeningTest is Test {
     function test_openingSequenceLeavesTheContractLendable() public view {
         assertFalse(loans.borrowingPaused(), "still paused");
         assertEq(loans.maxPrincipal(BASED), BASED_CAP, "Based cap");
-        assertEq(loans.maxPrincipal(DARK), DARK_CAP, "Dark cap");
+        assertEq(loans.maxPrincipal(DARK), 0, "Dark must be zeroed: its 35M cap is 114% LTV if the validator ever relaxes");
         assertEq(loans.maxPrincipal(LIL), 0, "Lil must stay unlendable");
         assertEq(loans.feeSplitter(), SAFE, "fees must go to the Safe");
         assertGe(loans.poolBalance(), 767_000_000e18, "pool must still be funded");
