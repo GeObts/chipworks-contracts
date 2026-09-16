@@ -186,6 +186,42 @@ contract ChipBorrowHelperForkTest is Test {
         helper.supplyCollateralAndBorrow(p, COLLATERAL, limit - 2);
     }
 
+    /// @dev The 90% line applies to taking collateral out too, not only to borrowing.
+    function test_refusesToWithdrawCollateralPastNinetyPercentOfLltv() public {
+        _authorizeAndApprove(user);
+        uint256 limit = helper.borrowLimit(p, COLLATERAL);
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit / 2); // 50% of the line
+
+        // Taking out 60% of the collateral would put the debt at 125% of the line.
+        vm.prank(user);
+        vm.expectRevert(); // TooCloseToLiquidation
+        helper.repayAndWithdraw(p, 0, COLLATERAL * 6 / 10);
+
+        // 40% out puts it at ~83% of the line: allowed.
+        vm.prank(user);
+        (, uint256 w) = helper.repayAndWithdraw(p, 0, COLLATERAL * 4 / 10);
+        assertEq(w, COLLATERAL * 4 / 10);
+        assertEq(IERC20(CBBTC).balanceOf(user), COLLATERAL * 4 / 10);
+        _assertHelperEmpty();
+    }
+
+    /// @dev With no debt, withdrawing never reads the oracle: a dead feed cannot trap collateral.
+    function test_debtFreeWithdraw_needsNoOracle() public {
+        _authorizeAndApprove(user);
+        uint256 limit = helper.borrowLimit(p, COLLATERAL);
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, limit / 2);
+        deal(USDC, user, limit);
+        vm.prank(user);
+        helper.repayAndWithdraw(p, type(uint256).max, 0);
+
+        vm.mockCallRevert(p.oracle, abi.encodeWithSignature("price()"), "feed down");
+        vm.prank(user);
+        (, uint256 w) = helper.repayAndWithdraw(p, 0, type(uint256).max);
+        assertEq(w, COLLATERAL, "debt-free collateral came out with the oracle reverting");
+    }
+
     function test_onlyTheOwnerListsMarkets() public {
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));

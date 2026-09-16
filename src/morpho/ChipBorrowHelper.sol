@@ -82,8 +82,10 @@ interface IMorphoOracle {
  *
  * Morpho will let a position be opened at exactly its LLTV, and liquidate it on the
  * next tick. Stock feeds hold Friday's close all weekend and gap on Monday's open. So
- * a borrow through here must leave the position at or under MAX_LLTV_USE of the
- * market's LLTV - 90%, which is 56.25% LTV on a 62.5% stock market. A user who wants
+ * a borrow through here - and a collateral withdrawal through here that leaves debt
+ * behind - must leave the position at or under MAX_LLTV_USE of the market's LLTV:
+ * 90%, which is 56.25% LTV on a 62.5% stock market. A position with no debt is never
+ * checked, so closing out never depends on an oracle. A user who wants
  * to go further can do it on Morpho directly; this contract will not be the screen
  * that walked them into a liquidation.
  *
@@ -233,7 +235,11 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
         if (collateralOut > 0) {
             (,, uint256 collateral) = MORPHO.position(id, msg.sender);
             withdrawn = collateralOut > collateral ? collateral : collateralOut;
-            if (withdrawn > 0) MORPHO.withdrawCollateral(params, withdrawn, msg.sender, msg.sender);
+            if (withdrawn > 0) {
+                MORPHO.withdrawCollateral(params, withdrawn, msg.sender, msg.sender);
+                // Same line as borrowing: taking collateral out may not leave a debt past 90% of LLTV.
+                _requireHeadroom(params, id, msg.sender);
+            }
         }
 
         emit Repaid(msg.sender, id, repaid, withdrawn);
@@ -255,6 +261,8 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
 
     function _requireHeadroom(MarketParams calldata params, bytes32 id, address user) internal view {
         (, uint256 borrowShares, uint256 collateral) = MORPHO.position(id, user);
+        // No debt, nothing to protect - and no oracle read, so a debt-free exit never depends on a feed.
+        if (borrowShares == 0) return;
         (,, uint256 totalBorrowAssets, uint256 totalBorrowShares,,) = MORPHO.market(id);
         uint256 debt = _toAssetsUp(borrowShares, totalBorrowAssets, totalBorrowShares);
         uint256 limit = borrowLimit(params, collateral);

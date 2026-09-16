@@ -28,6 +28,7 @@ interface IMetaMorpho {
     function setIsAllocator(address, bool) external;
     function submitCap(MarketParams memory, uint256) external;
     function submitTimelock(uint256) external;
+    function updateWithdrawQueue(uint256[] calldata) external;
     function acceptCap(MarketParams memory) external;
     function setSupplyQueue(bytes32[] calldata) external;
     function setFeeRecipient(address) external;
@@ -124,9 +125,9 @@ contract MorphoVaultRehearsalTest is Test {
         for (uint256 i; i < markets.length; i++) {
             uint256 cap = i < 4 ? 5_000_000e6 : STOCK_CAP;
             vault.submitCap(markets[i], cap);
-            // With a zero timelock the cap applies immediately; accept is a no-op then.
-            (bool ok,) = address(vault).call(abi.encodeWithSelector(IMetaMorpho.acceptCap.selector, markets[i]));
-            ok;
+            // submitCap only PENDS an increase, even at timelock 0 (validAt = now), so acceptCap is
+            // required - and called strictly, exactly as safecalls-morpho-vault.json does.
+            vault.acceptCap(markets[i]);
         }
 
         /*
@@ -151,6 +152,14 @@ contract MorphoVaultRehearsalTest is Test {
         for (uint256 i; i < 4; i++) queue[i] = ids[i + 4]; // the four stock markets
         for (uint256 i; i < 4; i++) queue[i + 4] = ids[i]; // then the deep ones
         vault.setSupplyQueue(queue);
+
+        /*
+            Withdrawals drain the withdraw queue in order, and _setCap appends each market as its
+            cap is accepted. HERE the deep markets were accepted first (they are markets[0..3]), so
+            the queue is already deep-first and must NOT be reordered - an (i+4)%8 reorder copied
+            from the bundle turned it stocks-first and test_partialWithdrawal caught it. The bundle
+            accepts STOCKS first, which is why it, and only it, sends [4,5,6,7,0,1,2,3].
+        */
         vm.stopPrank();
     }
 
@@ -334,5 +343,28 @@ contract MorphoVaultRehearsalTest is Test {
         vault.acceptCap(markets[4]); // permissionless once matured
         (cap,,) = vault.config(ids[4]);
         assertEq(cap, STOCK_CAP * 2);
+    }
+
+    /// @dev A withdrawal is paid from the deep markets and leaves stock-market supply untouched.
+    function test_partialWithdrawal_leavesStockMarketLiquidityAlone() public {
+        uint256 amount = 50_000e6;
+        deal(USDC, depositor, amount);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, depositor);
+
+        uint256[4] memory before;
+        for (uint256 i; i < 4; i++) {
+            (before[i],,) = IMorpho(MORPHO).position(ids[i + 4], address(vault));
+        }
+
+        skip(7 days);
+        vault.redeem(shares / 5, depositor, depositor);
+        vm.stopPrank();
+
+        for (uint256 i; i < 4; i++) {
+            (uint256 afterShares,,) = IMorpho(MORPHO).position(ids[i + 4], address(vault));
+            assertEq(afterShares, before[i], "a withdrawal pulled stock-market liquidity");
+        }
     }
 }
