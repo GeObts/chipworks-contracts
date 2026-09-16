@@ -27,6 +27,7 @@ interface IMetaMorpho {
     function setCurator(address) external;
     function setIsAllocator(address, bool) external;
     function submitCap(MarketParams memory, uint256) external;
+    function submitTimelock(uint256) external;
     function acceptCap(MarketParams memory) external;
     function setSupplyQueue(bytes32[] calldata) external;
     function setFeeRecipient(address) external;
@@ -142,8 +143,9 @@ contract MorphoVaultRehearsalTest is Test {
             THE CAP IS SMALL ON PURPOSE, AND NOT OUT OF TIMIDITY. These markets are
             ~$5-22k deep at 91% utilisation, which is WHY they pay 5.93%. Dropping
             $25k into a $22k market halves utilisation and the rate collapses - the
-            vault would be competing its own yield away. $5,000 a market adds real
-            borrow capacity while leaving the rate roughly where it is.
+            vault would be competing its own yield away. $2,000 a market adds real
+            borrow capacity while leaving the rate roughly where it is (measured in the
+            commit that set it: 4.18% net at 2,000 against 3.12% at 5,000).
         */
         bytes32[] memory queue = new bytes32[](ids.length);
         for (uint256 i; i < 4; i++) queue[i] = ids[i + 4]; // the four stock markets
@@ -268,5 +270,69 @@ contract MorphoVaultRehearsalTest is Test {
 
         assertGe(got, amount, "a lender must get back at least what they put in");
         emit log_named_decimal_uint("out after 30 days (USDC)", got, 6);
+    }
+
+    // ---- the whole cycle, ending with the fee as USDC in the Safe ----------
+
+    /**
+     * Deposit, a year of interest, the depositor leaves with everything, then the Safe
+     * redeems its fee shares. Shares accruing to the Safe prove little on their own;
+     * USDC arriving in the Safe does.
+     */
+    function test_fullCycle_depositAccrueWithdraw_thenTheSafeCashesItsFee() public {
+        uint256 amount = 50_000e6;
+        deal(USDC, depositor, amount);
+        vm.startPrank(depositor);
+        IERC20(USDC).approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, depositor);
+        vm.stopPrank();
+
+        skip(365 days);
+
+        vm.prank(depositor);
+        uint256 out = vault.redeem(shares, depositor, depositor);
+        uint256 depositorInterest = out - amount;
+
+        uint256 feeShares = vault.balanceOf(SAFE);
+        assertGt(feeShares, 0, "the curator fee never accrued");
+
+        uint256 safeUsdcBefore = IERC20(USDC).balanceOf(SAFE);
+        vm.prank(SAFE);
+        uint256 fee = vault.redeem(feeShares, SAFE, SAFE);
+        assertEq(IERC20(USDC).balanceOf(SAFE) - safeUsdcBefore, fee, "fee arrived in the Safe as USDC");
+
+        // The cut is 15% of GROSS interest, i.e. fee over fee plus the depositor's interest.
+        uint256 grossInterest = depositorInterest + fee;
+        assertApproxEqRel(fee * 1e18 / grossInterest, FEE, 0.001e18, "fee is 15% of interest, within 0.1%");
+        assertLe(vault.totalAssets(), 2, "vault emptied, nothing stranded");
+
+        emit log_named_decimal_uint("depositor out after a year (USDC)", out, 6);
+        emit log_named_decimal_uint("Safe fee redeemed to USDC", fee, 6);
+        emit log_named_uint("fee share of gross interest, bps", fee * 10_000 / grossInterest);
+    }
+
+    /**
+     * A zero timelock is for setup only: it lets the Safe add markets in the same bundle
+     * that creates the vault. Left at zero, the owner could list a bad market and move
+     * deposits into it in one block. Raising it applies immediately, so the deploy bundle
+     * ends with it and no depositor ever sees a zero-timelock vault.
+     */
+    function test_timelockCanBeRaisedInTheSameBundle_andThenCapsWait() public {
+        vm.prank(SAFE);
+        vault.submitTimelock(1 days);
+        assertEq(vault.timelock(), 1 days, "raising the timelock applies immediately");
+
+        vm.startPrank(SAFE);
+        vault.submitCap(markets[4], STOCK_CAP * 2);
+        vm.expectRevert();
+        vault.acceptCap(markets[4]);
+        vm.stopPrank();
+        (uint184 cap,,) = vault.config(ids[4]);
+        assertEq(cap, STOCK_CAP, "cap unchanged until the timelock passes");
+
+        skip(1 days);
+        vault.acceptCap(markets[4]); // permissionless once matured
+        (cap,,) = vault.config(ids[4]);
+        assertEq(cap, STOCK_CAP * 2);
     }
 }
