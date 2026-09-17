@@ -271,6 +271,23 @@ contract ChipBorrowHelperForkTest is Test {
         assertEq(helper.LOAN_TOKEN(), USDC);
     }
 
+    /// Round 2: an LLTV at or above 100% (never valid on Morpho) cannot be listed, so borrowLimit's
+    /// lltv * MAX_LLTV_USE can never overflow on a listed market.
+    function test_grok_setListed_rejectsLltvAtOrAboveOne() public {
+        MarketParams memory bad = p;
+        bad.lltv = 1e18;
+        vm.startPrank(SAFE);
+        vm.expectRevert(abi.encodeWithSelector(ChipBorrowHelper.LltvTooHigh.selector, 1e18));
+        helper.setListed(bad, true);
+        bad.lltv = type(uint256).max; // would overflow lltv * 0.9e18
+        vm.expectRevert(abi.encodeWithSelector(ChipBorrowHelper.LltvTooHigh.selector, type(uint256).max));
+        helper.setListed(bad, true);
+        // the highest real LLTV still lists
+        bad.lltv = 0.999999999999999999e18;
+        helper.setListed(bad, true);
+        vm.stopPrank();
+    }
+
     /**
      * M-01: if the amount that arrives is not the amount Morpho booked as debt, the borrow reverts
      * rather than charging the user for money they never received. Unreachable with USDC, so this

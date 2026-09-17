@@ -1,23 +1,23 @@
-block 51428813, helper would deploy at 0x6eAF2D3e4c304dDd86832421cFcee23133D528F5
+block 51430549, helper would deploy at 0x6eAF2D3e4c304dDd86832421cFcee23133D528F5
 
 AAPLc  holder 0xcd2f7B2272f860A7a60e25ff6cdd0BdD0A9FCEFa
-  collateral 8806897 raw   market free liquidity 2205.651346   helper limit 16.526637   borrowing 8.263318 USDC
-  borrow ok, gas 239158: user +8.180685  Safe +0.082633  position collateral 8806897 borrowShares 8246956334980
-  +7d repay-all ok, gas 188877: repaid 8.274367 USDC, collateral back 8806897 raw, position now [0, 0, 0]
+  collateral 8806897 raw   market free liquidity 2232.735069   helper limit 16.526637   borrowing 8.263318 USDC
+  borrow ok, gas 239158: user +8.180685  Safe +0.082633  position collateral 8806897 borrowShares 8246897149666
+  +7d repay-all ok, gas 188877: repaid 8.274063 USDC, collateral back 8806897 raw, position now [0, 0, 0]
 
 GOOGLc  holder 0xcd2f7B2272f860A7a60e25ff6cdd0BdD0A9FCEFa
-  collateral 15493565 raw   market free liquidity 1799.826892   helper limit 37.253857   borrowing 18.626928 USDC
-  borrow ok, gas 239158: user +18.440659  Safe +0.186269  position collateral 15493565 borrowShares 18589917293863
-  +7d repay-all ok, gas 188868: repaid 18.652256 USDC, collateral back 15493565 raw, position now [0, 0, 0]
+  collateral 15493565 raw   market free liquidity 1821.972871   helper limit 37.253857   borrowing 18.626928 USDC
+  borrow ok, gas 239158: user +18.440659  Safe +0.186269  position collateral 15493565 borrowShares 18589783889380
+  +7d repay-all ok, gas 188868: repaid 18.651565 USDC, collateral back 15493565 raw, position now [0, 0, 0]
 
 NVDAc  holder 0x6AB880AFd1E0C7786cc5D05F4FD9b17761768da8
-  collateral 4306896 raw   market free liquidity 716.387478   helper limit 5.268028   borrowing 2.634014 USDC
-  borrow ok, gas 239158: user +2.607674  Safe +0.02634  position collateral 4306896 borrowShares 2628781259424
-  +7d repay-all ok, gas 188877: repaid 2.637536 USDC, collateral back 4306896 raw, position now [0, 0, 0]
+  collateral 4306896 raw   market free liquidity 725.18577   helper limit 5.297461   borrowing 2.64873 USDC
+  borrow ok, gas 239158: user +2.622243  Safe +0.026487  position collateral 4306896 borrowShares 2643449053609
+  +7d repay-all ok, gas 188877: repaid 2.652174 USDC, collateral back 4306896 raw, position now [0, 0, 0]
 
 METAc  holder 0x6AB880AFd1E0C7786cc5D05F4FD9b17761768da8
-  collateral 976840 raw   market free liquidity 516.899102   helper limit 3.740561   borrowing 1.87028 USDC
-  borrow ok, gas 239158: user +1.851578  Safe +0.018702  position collateral 976840 borrowShares 1866572017290
-  +7d repay-all ok, gas 188877: repaid 1.872781 USDC, collateral back 976840 raw, position now [0, 0, 0]
+  collateral 976840 raw   market free liquidity 523.253551   helper limit 3.740561   borrowing 1.87028 USDC
+  borrow ok, gas 239158: user +1.851578  Safe +0.018702  position collateral 976840 borrowShares 1866558622292
+  +7d repay-all ok, gas 188877: repaid 1.872712 USDC, collateral back 976840 raw, position now [0, 0, 0]
 
 problems: []

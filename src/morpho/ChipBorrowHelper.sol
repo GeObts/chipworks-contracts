@@ -136,6 +136,7 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
     error CollateralAccountingMismatch(uint256 expected, uint256 received);
     error ZeroAddress();
     error WrongLoanToken(address loanToken);
+    error LltvTooHigh(uint256 lltv);
     error LoanAccountingMismatch(uint256 expected, uint256 received);
 
     constructor(address morpho, address loanToken, address feeRecipient, address initialOwner) Ownable(initialOwner) {
@@ -149,6 +150,9 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
 
     function setListed(MarketParams calldata params, bool listed) external onlyOwner {
         if (params.loanToken != LOAN_TOKEN) revert WrongLoanToken(params.loanToken);
+        // Morpho's own rule (enableLltv requires lltv < WAD), so no listing can overflow
+        // lltv * MAX_LLTV_USE in borrowLimit. (Audit round 2, Grok.)
+        if (params.lltv >= WAD) revert LltvTooHigh(params.lltv);
         bytes32 id = marketId(params);
         isListed[id] = listed;
         emit MarketListed(id, params, listed);
@@ -263,14 +267,18 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
         return keccak256(abi.encode(params));
     }
 
-    /// @notice The most a position may owe after borrowing through here:
-    ///         floor(collateral * price / 1e36 * lltv * 0.9), with a single rounding.
+    /// @notice The most a position may owe after borrowing through here, in loan-token base units:
+    ///         floor(collateral * price * (lltv * MAX_LLTV_USE / WAD) / (ORACLE_PRICE_SCALE * WAD)).
+    ///         That is collateral valued at the oracle price (price is scaled by 1e36), times the
+    ///         market's LLTV (1e18-scaled), times 90% (1e18-scaled), rounded down once at the end.
+    ///         The inner lltv * MAX_LLTV_USE / WAD is exact for every LLTV Morpho has enabled (all are
+    ///         multiples of 10 wei); an LLTV that were not would round the limit down, never up.
     /// @dev    AUDIT ROUND 1, Bankr M-01. The original divided three times, losing up to 3 base units
     ///         (0.000003 USDC), which made a borrow within a unit of the line falsely revert. The fix
     ///         as proposed - multiply all four factors, then divide - overflows uint256 once collateral
     ///         is worth ~$0.15-$0.21 at live prices, bricking every real borrow. So: one division, in
-    ///         OpenZeppelin's 512-bit mulDiv. lltv * 0.9 is exact for every Morpho LLTV (all multiples
-    ///         of 0.1e16), and price * that fits 256 bits for any price below ~1e59 (live max ~7.6e38).
+    ///         OpenZeppelin's 512-bit mulDiv. Listed LLTVs are < WAD (setListed), so the inner factor is
+    ///         < 0.9e18 and price * it fits 256 bits for any price below ~1.2e59 (live max ~7.6e38).
     function borrowLimit(MarketParams calldata params, uint256 collateral) public view returns (uint256) {
         uint256 price = IMorphoOracle(params.oracle).price();
         return Math.mulDiv(collateral, price * (params.lltv * MAX_LLTV_USE / WAD), ORACLE_PRICE_SCALE * WAD);
