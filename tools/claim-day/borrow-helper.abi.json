@@ -8,6 +8,11 @@
         "internalType": "address"
       },
       {
+        "name": "loanToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
         "name": "feeRecipient",
         "type": "address",
         "internalType": "address"
@@ -36,6 +41,19 @@
   {
     "type": "function",
     "name": "FEE_RECIPIENT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "LOAN_TOKEN",
     "inputs": [],
     "outputs": [
       {
@@ -585,6 +603,22 @@
   },
   {
     "type": "error",
+    "name": "LoanAccountingMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "received",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "MarketNotListed",
     "inputs": [
       {
@@ -655,6 +689,17 @@
         "name": "limit",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "WrongLoanToken",
+    "inputs": [
+      {
+        "name": "loanToken",
+        "type": "address",
+        "internalType": "address"
       }
     ]
   },
