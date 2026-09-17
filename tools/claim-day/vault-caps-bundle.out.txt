@@ -1,0 +1,21 @@
+ON TOP OF THE REVIEWED VAULT BUNDLE, simulated from the Safe:
+  1. OK   vault.submitCap(cbBTC, 50,000 USDC)  (was 5,000,000; a decrease applies immediately)
+  2. OK   vault.submitCap(USDe, 50,000 USDC)  (was 5,000,000; a decrease applies immediately)
+  3. OK   vault.submitCap(WETH, 50,000 USDC)  (was 5,000,000; a decrease applies immediately)
+  4. OK   vault.submitCap(cbXRP, 50,000 USDC)  (was 5,000,000; a decrease applies immediately)
+
+CAPS AFTERWARDS:
+  ok  AAPLc       2,000 USDC
+  ok  GOOGLc      2,000 USDC
+  ok  NVDAc       2,000 USDC
+  ok  METAc       2,000 USDC
+  ok  cbBTC      50,000 USDC
+  ok  USDe       50,000 USDC
+  ok  WETH       50,000 USDC
+  ok  cbXRP      50,000 USDC
+
+the most the vault will accept in total: 208,000 USDC (caps sum 208,000)
+
+written: safecalls-vault-caps-conservative.json
+
+problems: []

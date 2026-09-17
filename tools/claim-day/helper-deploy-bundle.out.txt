@@ -1,0 +1,36 @@
+block 51431169
+helper will deploy at 0x36C7f9Ed1ffF7FD6305874837b257C3Bfa8FDff6
+
+BYTECODE: forge artifact, 7620 bytes of creation code
+  source sha256 d6f2f9f80289009201da0f1d95946566231de1d8b8d3fc4d51c1419d10a1a3e8 (LF-independent check below)
+  standalone solc 0.8.24 build of verify-json/ChipBorrowHelper.json reproduces it byte for byte: true
+
+THE BUNDLE (5 calls, all from the Safe), simulated:
+  1. OK   CREATE2 deployer: ChipBorrowHelper(morpho=Morpho, loanToken=USDC, feeRecipient=Safe, owner=Safe), salt "chipworks-borrow-helper-1" -> 0x36C7f9Ed1ffF7FD6305874837b257C3Bfa8FDff6
+  2. OK   helper.setListed(AAPLc @ 62.5% LLTV, true)
+  3. OK   helper.setListed(GOOGLc @ 77% LLTV, true)
+  4. OK   helper.setListed(NVDAc @ 62.5% LLTV, true)
+  5. OK   helper.setListed(METAc @ 62.5% LLTV, true)
+
+STATE AFTER THE BUNDLE:
+  ok  owner            0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  pendingOwner     0x0000000000000000000000000000000000000000
+  ok  MORPHO           0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
+  ok  LOAN_TOKEN       0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  ok  FEE_RECIPIENT    0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  FEE_BPS          100
+  ok  MAX_LLTV_USE     900000000000000000
+  ok  isListed AAPLc   true
+  ok  isListed GOOGLc  true
+  ok  isListed NVDAc   true
+  ok  isListed METAc   true
+  ok  stranger setListed reverts
+
+A REAL AAPL HOLDER THROUGH THE BUNDLE-DEPLOYED HELPER:
+  borrow 8.263318 USDC: ok, Safe +0.082633 (1%)
+  3 days later repay all + withdraw all: ok, AAPL back 8806897 of 8806897
+
+written: safecalls-borrow-helper.json, verify-json/ChipBorrowHelper.json
+constructor args (for verification): 000000000000000000000000bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c7000000000000000000000000e1096b727499a3f70fad8bc0267f5e69d01373c7
+
+problems: []
