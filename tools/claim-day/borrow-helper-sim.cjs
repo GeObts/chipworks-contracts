@@ -60,7 +60,7 @@ const errName = (data) => {
   const block = BigInt(await rpc('eth_blockNumber', []));
   const now = BigInt((await rpc('eth_getBlockByNumber', [hex(block), false])).timestamp);
   const helper = getContractAddress({ from: DEPLOYER, nonce: 0n });
-  const deployData = encodeDeployData({ abi: H, bytecode: art.bytecode.object, args: [MORPHO, SAFE, SAFE] });
+  const deployData = encodeDeployData({ abi: H, bytecode: art.bytecode.object, args: [MORPHO, USDC, SAFE, SAFE] });
   const owners = [...new Set(S.positions.map((p) => getAddress(p.owner)))];
   const problems = [];
 
@@ -90,11 +90,16 @@ const errName = (data) => {
   const b1 = [{ from: DEPLOYER, data: deployData, gas: GAS }];
   for (const pl of plans) b1.push({ from: SAFE, to: helper, data: encodeFunctionData({ abi: H, functionName: 'setListed', args: [pl.mp, true] }), gas: GAS });
   const idx = {};
+  const authorized = new Set(); // Morpho reverts "already set" on a repeat, and one wallet can hold two stocks
   for (const pl of plans) {
     idx[pl.sym] = { safeBefore: b1.length };
     b1.push({ from: SAFE, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [SAFE] }) });
     b1.push({ from: pl.holder, to: USDC, data: encodeFunctionData({ abi: ERC20, functionName: 'balanceOf', args: [pl.holder] }) });
-    b1.push({ from: pl.holder, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'setAuthorization', args: [helper, true] }), gas: GAS });
+    // a wallet already authorized earlier in this block re-reads isAuthorized instead (same slot count)
+    b1.push(authorized.has(pl.holder)
+      ? { from: pl.holder, to: MORPHO, data: encodeFunctionData({ abi: parseAbi(['function isAuthorized(address,address) view returns (bool)']), functionName: 'isAuthorized', args: [pl.holder, helper] }) }
+      : { from: pl.holder, to: MORPHO, data: encodeFunctionData({ abi: MB, functionName: 'setAuthorization', args: [helper, true] }), gas: GAS });
+    authorized.add(pl.holder);
     b1.push({ from: pl.holder, to: pl.stock, data: encodeFunctionData({ abi: ERC20, functionName: 'approve', args: [helper, pl.bal] }), gas: GAS });
     idx[pl.sym].borrow = b1.length;
     b1.push({ from: pl.holder, to: helper, data: encodeFunctionData({ abi: H, functionName: 'supplyCollateralAndBorrow', args: [pl.mp, pl.bal, pl.borrow] }), gas: GAS });

@@ -1,108 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+// THE PRE-FIX HELPER, kept to reproduce audit finding M-01 (Bankr).
+// Test-only. Byte-for-byte the ChipBorrowHelper contract body at commit a0d533d, except where noted.
+
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {MarketParams, IMorphoBlue, IMorphoOracle} from "../../../src/morpho/ChipBorrowHelper.sol";
 
-struct MarketParams {
-    address loanToken;
-    address collateralToken;
-    address oracle;
-    address irm;
-    uint256 lltv;
-}
-
-interface IMorphoBlue {
-    function supplyCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, bytes memory data)
-        external;
-    function withdrawCollateral(MarketParams memory marketParams, uint256 assets, address onBehalf, address receiver)
-        external;
-    function borrow(MarketParams memory marketParams, uint256 assets, uint256 shares, address onBehalf, address receiver)
-        external
-        returns (uint256 assetsBorrowed, uint256 sharesBorrowed);
-    function repay(MarketParams memory marketParams, uint256 assets, uint256 shares, address onBehalf, bytes memory data)
-        external
-        returns (uint256 assetsRepaid, uint256 sharesRepaid);
-    function accrueInterest(MarketParams memory marketParams) external;
-    function isAuthorized(address authorizer, address authorized) external view returns (bool);
-    function position(bytes32 id, address user)
-        external
-        view
-        returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral);
-    function market(bytes32 id)
-        external
-        view
-        returns (
-            uint128 totalSupplyAssets,
-            uint128 totalSupplyShares,
-            uint128 totalBorrowAssets,
-            uint128 totalBorrowShares,
-            uint128 lastUpdate,
-            uint128 fee
-        );
-}
-
-interface IMorphoOracle {
-    function price() external view returns (uint256);
-}
-
-/**
- * BORROW USDC AGAINST A TOKENIZED STOCK, ON MORPHO, IN ONE CALL - FOR 1%.
- *
- * -- THE POSITION IS THE USER'S, NOT OURS ---------------------------------
- *
- * Every Morpho call here names `onBehalf = msg.sender`. The collateral and the debt
- * sit in the user's OWN Morpho position, exactly as if they had gone to the Morpho
- * app themselves. They can repay, top up or withdraw there directly, with or without
- * this contract, forever. If this contract vanished nothing would be stuck.
- *
- * That is why the user has to call `Morpho.setAuthorization(helper, true)` once:
- * Morpho only lets a third party borrow against a position its owner authorised.
- *
- * -- AN AUTHORISATION IS A LOADED GUN, SO THIS CONTRACT CANNOT AIM IT ------
- *
- * Morpho authorisation is ALL-MARKET: an authorised address may borrow against, and
- * withdraw collateral from, every position the user has. So the one invariant this
- * contract exists to keep is that it only ever acts for the CALLER. There is no
- * function taking a user address, no owner path that touches positions, no upgrade,
- * no arbitrary call. The owner can do exactly two things: choose which markets are
- * offered for NEW borrowing (and only markets lending LOAN_TOKEN), and hand ownership on.
- * The fee, its recipient and the loan token are immutable.
- *
- * -- THE FEE ---------------------------------------------------------------
- *
- * 1% of what is borrowed, taken once, at origination, sent straight to FEE_RECIPIENT.
- * The debt is the full amount: borrow 1,000 and 990 arrives, 1,000 is owed. Repaying
- * and withdrawing through here is free.
- *
- * -- WHY IT REFUSES TO BORROW RIGHT UP TO THE LIMIT ------------------------
- *
- * Morpho will let a position be opened at exactly its LLTV, and liquidate it on the
- * next tick. Stock feeds hold Friday's close all weekend and gap on Monday's open. So
- * a borrow through here - and a collateral withdrawal through here that leaves debt
- * behind - must leave the position at or under MAX_LLTV_USE of the market's LLTV:
- * 90%, which is 56.25% LTV on a 62.5% stock market. A position with no debt is never
- * checked, so closing out never depends on an oracle. A user who wants
- * to go further can do it on Morpho directly; this contract will not be the screen
- * that walked them into a liquidation.
- *
- * -- NOTHING IS HELD BETWEEN TRANSACTIONS ----------------------------------
- *
- * Collateral passes through for the length of one call (Morpho pulls it from
- * msg.sender, so it must be here to be supplied); USDC likewise. Every path ends with
- * this contract holding what it started with.
- */
-contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
+contract ChipBorrowHelperPreM01 is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IMorphoBlue public immutable MORPHO;
-    /// @notice The only loan token any listed market may use (USDC). Immutable, so a fee-on-transfer
-    ///         or otherwise non-standard loan token can never be listed (audit round 1, Grok M-01/M-02).
-    address public immutable LOAN_TOKEN;
     /// @notice Where the 1% goes. Immutable: nobody can redirect it after deployment.
     address public immutable FEE_RECIPIENT;
 
@@ -135,20 +47,16 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
     error TooCloseToLiquidation(uint256 borrowed, uint256 limit);
     error CollateralAccountingMismatch(uint256 expected, uint256 received);
     error ZeroAddress();
-    error WrongLoanToken(address loanToken);
-    error LoanAccountingMismatch(uint256 expected, uint256 received);
 
-    constructor(address morpho, address loanToken, address feeRecipient, address initialOwner) Ownable(initialOwner) {
-        if (morpho == address(0) || loanToken == address(0) || feeRecipient == address(0)) revert ZeroAddress();
+    constructor(address morpho, address feeRecipient, address initialOwner) Ownable(initialOwner) {
+        if (morpho == address(0) || feeRecipient == address(0)) revert ZeroAddress();
         MORPHO = IMorphoBlue(morpho);
-        LOAN_TOKEN = loanToken;
         FEE_RECIPIENT = feeRecipient;
     }
 
     // ---------------------------------------------------------------- owner
 
     function setListed(MarketParams calldata params, bool listed) external onlyOwner {
-        if (params.loanToken != LOAN_TOKEN) revert WrongLoanToken(params.loanToken);
         bytes32 id = marketId(params);
         isListed[id] = listed;
         emit MarketListed(id, params, listed);
@@ -188,9 +96,6 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
         uint256 loanBefore = loan.balanceOf(address(this));
         MORPHO.borrow(params, borrowAssets, 0, msg.sender, address(this));
         uint256 borrowed = loan.balanceOf(address(this)) - loanBefore;
-        // Morpho booked borrowAssets of debt; anything less arriving would charge the user for money
-        // they never received. Unreachable with USDC, enforced anyway (audit round 1, Grok M-01).
-        if (borrowed != borrowAssets) revert LoanAccountingMismatch(borrowAssets, borrowed);
 
         _requireHeadroom(params, id, msg.sender);
 
@@ -244,7 +149,6 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
         }
 
         if (collateralOut > 0) {
-            if (!MORPHO.isAuthorized(msg.sender, address(this))) revert NotAuthorized();
             (,, uint256 collateral) = MORPHO.position(id, msg.sender);
             withdrawn = collateralOut > collateral ? collateral : collateralOut;
             if (withdrawn > 0) {
@@ -263,17 +167,10 @@ contract ChipBorrowHelper is Ownable2Step, ReentrancyGuard {
         return keccak256(abi.encode(params));
     }
 
-    /// @notice The most a position may owe after borrowing through here:
-    ///         floor(collateral * price / 1e36 * lltv * 0.9), with a single rounding.
-    /// @dev    AUDIT ROUND 1, Bankr M-01. The original divided three times, losing up to 3 base units
-    ///         (0.000003 USDC), which made a borrow within a unit of the line falsely revert. The fix
-    ///         as proposed - multiply all four factors, then divide - overflows uint256 once collateral
-    ///         is worth ~$0.15-$0.21 at live prices, bricking every real borrow. So: one division, in
-    ///         OpenZeppelin's 512-bit mulDiv. lltv * 0.9 is exact for every Morpho LLTV (all multiples
-    ///         of 0.1e16), and price * that fits 256 bits for any price below ~1e59 (live max ~7.6e38).
+    /// @notice The most a position may owe after borrowing through here.
     function borrowLimit(MarketParams calldata params, uint256 collateral) public view returns (uint256) {
         uint256 price = IMorphoOracle(params.oracle).price();
-        return Math.mulDiv(collateral, price * (params.lltv * MAX_LLTV_USE / WAD), ORACLE_PRICE_SCALE * WAD);
+        return collateral * price / ORACLE_PRICE_SCALE * params.lltv / WAD * MAX_LLTV_USE / WAD;
     }
 
     // ---------------------------------------------------------------- internal

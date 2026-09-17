@@ -4,10 +4,47 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ChipBorrowHelper, MarketParams, IMorphoBlue} from "../../src/morpho/ChipBorrowHelper.sol";
 
 interface IMorphoAuth {
     function setAuthorization(address authorized, bool newIsAuthorized) external;
+    function createMarket(MarketParams memory marketParams) external;
+    function supply(MarketParams memory marketParams, uint256 assets, uint256 shares, address onBehalf, bytes memory data)
+        external
+        returns (uint256, uint256);
+}
+
+/// @dev A loan token that burns 1% of every transfer, for Grok M-01.
+contract FeeOnTransferToken is ERC20 {
+    constructor() ERC20("Fee On Transfer", "FOT") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != address(0) && to != address(0)) {
+            uint256 burn = value / 100;
+            super._update(from, address(0), burn);
+            value -= burn;
+        }
+        super._update(from, to, value);
+    }
+}
+
+contract PlainToken is ERC20 {
+    constructor() ERC20("Plain", "PLN") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
+contract OneToOneOracle {
+    function price() external pure returns (uint256) {
+        return 1e36; // same decimals, 1:1
+    }
 }
 
 /**
@@ -45,7 +82,7 @@ contract ChipBorrowHelperForkTest is Test {
             irm: IRM,
             lltv: 0.86e18
         });
-        helper = new ChipBorrowHelper(MORPHO, SAFE, SAFE);
+        helper = new ChipBorrowHelper(MORPHO, USDC, SAFE, SAFE);
         id = helper.marketId(p);
         vm.prank(SAFE);
         helper.setListed(p, true);
@@ -220,6 +257,74 @@ contract ChipBorrowHelperForkTest is Test {
         vm.prank(user);
         (, uint256 w) = helper.repayAndWithdraw(p, 0, type(uint256).max);
         assertEq(w, COLLATERAL, "debt-free collateral came out with the oracle reverting");
+    }
+
+    // ---- audit round 1 (Grok) -------------------------------------------------
+
+    /// M-01/M-02: only markets lending the immutable LOAN_TOKEN (USDC) can ever be listed.
+    function test_grok_setListed_rejectsAnyOtherLoanToken() public {
+        MarketParams memory weth = p;
+        weth.loanToken = 0x4200000000000000000000000000000000000006;
+        vm.prank(SAFE);
+        vm.expectRevert(abi.encodeWithSelector(ChipBorrowHelper.WrongLoanToken.selector, weth.loanToken));
+        helper.setListed(weth, true);
+        assertEq(helper.LOAN_TOKEN(), USDC);
+    }
+
+    /**
+     * M-01: if the amount that arrives is not the amount Morpho booked as debt, the borrow reverts
+     * rather than charging the user for money they never received. Unreachable with USDC, so this
+     * builds a real Morpho market in the fork around a 1%-fee-on-transfer loan token and a helper
+     * deployed for it.
+     */
+    function test_grok_borrowRevertsWhenLessArrivesThanMorphoBooked() public {
+        FeeOnTransferToken fot = new FeeOnTransferToken();
+        PlainToken col = new PlainToken();
+        MarketParams memory m = MarketParams({
+            loanToken: address(fot),
+            collateralToken: address(col),
+            oracle: address(new OneToOneOracle()),
+            irm: IRM,
+            lltv: 0.86e18
+        });
+        IMorphoAuth(MORPHO).createMarket(m);
+
+        address lender = makeAddr("lender");
+        fot.mint(lender, 1_000e18);
+        vm.startPrank(lender);
+        fot.approve(MORPHO, type(uint256).max);
+        IMorphoAuth(MORPHO).supply(m, 1_000e18, 0, lender, "");
+        vm.stopPrank();
+
+        ChipBorrowHelper fotHelper = new ChipBorrowHelper(MORPHO, address(fot), SAFE, SAFE);
+        vm.prank(SAFE);
+        fotHelper.setListed(m, true);
+
+        col.mint(user, 1_000e18);
+        vm.startPrank(user);
+        IMorphoAuth(MORPHO).setAuthorization(address(fotHelper), true);
+        col.approve(address(fotHelper), type(uint256).max);
+        vm.expectRevert(abi.encodeWithSelector(ChipBorrowHelper.LoanAccountingMismatch.selector, 100e18, 99e18));
+        fotHelper.supplyCollateralAndBorrow(m, 1_000e18, 100e18);
+        vm.stopPrank();
+    }
+
+    /// L-02: withdrawing collateral without authorization fails with the helper's own clear error.
+    function test_grok_withdrawWithoutAuthorization_revertsNotAuthorized() public {
+        _authorizeAndApprove(user);
+        uint256 amount = helper.borrowLimit(p, COLLATERAL) / 2;
+        vm.prank(user);
+        helper.supplyCollateralAndBorrow(p, COLLATERAL, amount);
+        deal(USDC, user, amount * 2);
+        vm.startPrank(user);
+        helper.repayAndWithdraw(p, type(uint256).max, 0);
+        IMorphoAuth(MORPHO).setAuthorization(address(helper), false);
+
+        vm.expectRevert(ChipBorrowHelper.NotAuthorized.selector);
+        helper.repayAndWithdraw(p, 0, type(uint256).max);
+
+        // repaying needs no authorization (Morpho allows anyone to repay for anyone)
+        vm.stopPrank();
     }
 
     function test_onlyTheOwnerListsMarkets() public {
