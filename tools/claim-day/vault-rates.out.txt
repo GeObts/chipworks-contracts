@@ -1,0 +1,41 @@
+block 51437344   vault totalAssets $5
+
+LIVE, PER MARKET (supply APY = what lenders earn before the vault's 15%)
+  market   supplied        util   borrow APY  supply APY  net to depositor | +$1k lands: net | cap        vault has  whole cap lands: net
+  AAPL           $24,603   90.28%      5.70%      5.14%      4.37%        |    3.76%        |   $2,000        $5      3.52%
+  GOOGL          $20,093   90.30%      5.73%      5.17%      4.40%        |    3.70%        |   $2,000        $0      3.41%
+  NVDA            $8,087   90.30%      5.73%      5.17%      4.40%        |    3.29%        |   $2,000        $0      2.74%
+  META            $5,767   90.30%      5.73%      5.17%      4.40%        |    3.05%        |   $2,000        $0      2.40%
+  cbBTC   $1,571,931,173   90.13%      4.97%      4.48%      3.81%        |    3.81%        |  $50,000        $0      3.80%
+  USDe      $366,679,682   90.06%      4.11%      3.71%      3.15%        |    3.15%        |  $50,000        $0      3.14%
+  WETH       $92,466,462   90.32%      5.27%      4.76%      4.04%        |    4.04%        |  $50,000        $0      3.99%
+  cbXRP      $52,703,622   90.28%      6.66%      6.01%      5.11%        |    5.11%        |  $50,000        $0      4.98%
+
+LAST 7 DAYS, SUPPLY APY EVERY 12h (oldest -> now; before the 15% fee)
+  AAPL   avg   8.16%  min   4.41%  max  18.15%     4.4  16.8  17.5  18.1   6.1   6.0   6.0   6.1   6.0   6.1   6.1   6.0   6.0   6.1   5.1
+  GOOGL  avg   8.15%  min   4.30%  max  18.09%     4.3  16.8  17.4  18.1   6.1   6.0   6.1   6.1   6.0   6.1   6.1   6.0   6.0   6.1   5.2
+  NVDA   avg   8.16%  min   4.41%  max  18.15%     4.4  16.8  17.5  18.1   6.0   6.0   6.0   6.1   6.0   6.1   6.1   6.0   6.0   6.1   5.2
+  META   avg   8.16%  min   4.41%  max  18.15%     4.4  16.8  17.5  18.1   6.1   6.0   6.0   6.1   6.0   6.1   6.1   6.0   6.0   6.1   5.2
+  cbBTC  avg   4.33%  min   4.24%  max   4.48%     4.3   4.3   4.4   4.3   4.4   4.3   4.3   4.3   4.2   4.3   4.3   4.4   4.3   4.4   4.5
+  USDe   avg   3.68%  min   3.61%  max   4.00%     3.6   3.6   3.7   3.6   3.7   3.6   3.6   3.6   3.6   3.6   3.6   4.0   3.6   3.7   3.7
+  WETH   avg   4.38%  min   4.25%  max   4.76%     4.3   4.3   4.5   4.4   4.4   4.3   4.3   4.3   4.2   4.4   4.3   4.4   4.3   4.5   4.8
+  cbXRP  avg   5.51%  min   5.39%  max   6.01%     5.4   5.4   5.6   5.4   5.6   5.5   5.4   5.4   5.4   5.5   5.4   5.6   5.4   5.6   6.0
+
+SUPPLY-QUEUE ORDERS COMPARED: blended net APY to a depositor (after the 15% fee)
+  order                                           $2,000    $8,000   $25,000   $58,000  $108,000  $208,000
+  current (stocks, cbBTC, USDe, WETH, cbXRP)       3.52%     3.02%     3.55%     3.70%     3.44%     3.94%
+  proposed (stocks, then deep by 7d rate)          3.52%     3.02%     4.41%     4.71%     4.37%     3.94%
+      AAPL > GOOGL > NVDA > META > cbXRP > WETH > cbBTC > USDe
+  deep by 7d rate only, stocks last                5.11%     5.09%     5.05%     4.85%     4.43%     3.94%
+      cbXRP > WETH > cbBTC > USDe > AAPL > GOOGL > NVDA > META
+
+BLENDED NET APY TO A DEPOSITOR (after the 15% fee), current queue vs best possible allocation, same caps
+  deposit    $2,000:  queue 3.52%   best 5.11%   gap 159 bps   [queue puts it in: AAPL $1,995, GOOGL $5]
+                        best puts it in: cbXRP $2,000
+  deposit    $8,000:  queue 3.02%   best 5.09%   gap 207 bps   [queue puts it in: AAPL $1,995, GOOGL $2,000, NVDA $2,000, META $2,000, cbBTC $5]
+                        best puts it in: cbXRP $8,000
+  deposit   $25,000:  queue 3.55%   best 5.05%   gap 149 bps   [queue puts it in: AAPL $1,995, GOOGL $2,000, NVDA $2,000, META $2,000, cbBTC $17,005]
+                        best puts it in: cbXRP $25,000
+  deposit   $58,000:  queue 3.70%   best 4.85%   gap 116 bps   [queue puts it in: AAPL $1,995, GOOGL $2,000, NVDA $2,000, META $2,000, cbBTC $50,000, USDe $5]
+                        best puts it in: WETH $8,000, cbXRP $50,000
+  deposit  $208,000:  queue 3.94%   [queue puts it in: AAPL $1,995, GOOGL $2,000, NVDA $2,000, META $2,000, cbBTC $50,000, USDe $50,000, WETH $50,000, cbXRP $50,000]

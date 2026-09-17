@@ -1,0 +1,16 @@
+live supply queue:   AAPL > GOOGL > NVDA > META > cbBTC > USDe > WETH > cbXRP
+live withdraw queue: cbBTC > USDe > WETH > cbXRP > AAPL > GOOGL > NVDA > META
+
+THE BUNDLE (2 calls from the Safe), simulated:
+  1. OK   vault.setSupplyQueue([AAPL, GOOGL, NVDA, META, cbXRP, WETH, cbBTC, USDe])
+  2. OK   vault.updateWithdrawQueue([1,0,2,3,4,5,6,7]) = USDe > cbBTC > WETH > cbXRP > AAPL > GOOGL > NVDA > META
+  supply queue after:   AAPL > GOOGL > NVDA > META > cbXRP > WETH > cbBTC > USDe
+  withdraw queue after: USDe > cbBTC > WETH > cbXRP > AAPL > GOOGL > NVDA > META
+  ok  a stranger cannot change the queue
+
+A 25,000 USDC DEPOSIT lands in: AAPL, GOOGL, NVDA, META, cbXRP
+A 5,000 USDC WITHDRAWAL comes out of: cbXRP
+
+written: safecalls-vault-queues-by-rate.json
+
+problems: []
