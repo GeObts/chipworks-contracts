@@ -1,0 +1,54 @@
+RECEIPTS
+  0x960bbe0affb1b9a1cb44fbcb609dfd0386938f2f569196b8c09510bc81fd52fa
+    block 51431576  receipt=success  Safe=ExecutionSuccess  logs=51  -> vault create + configure
+  0xbf7f454a513dfb3ad91cf6340682568074e794d806c6dcff1e005b7984433c2e
+    block 51431618  receipt=success  Safe=ExecutionSuccess  logs=7  -> helper deploy + listings
+  0xbe43f838a42cfbfbef380eed9bae655a35f576aad99281ff7c6167a714e43f59
+    block 51431659  receipt=success  Safe=ExecutionSuccess  logs=6  -> vault caps change
+
+VAULT 0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6
+  ok  has code                       true
+  ok  Morpho factory's isMetaMorpho  true
+  ok  owner                          0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  curator                        0x0000000000000000000000000000000000000000
+  ok  guardian                       0x0000000000000000000000000000000000000000
+  ok  asset                          0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  ok  name                           Chipworks USDC
+  ok  symbol                         cwUSDC
+  ok  fee                            150000000000000000
+  ok  feeRecipient                   0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  timelock                       86400
+  ok  cap AAPLc                      2000 enabled=true removable=0
+  ok  cap GOOGLc                     2000 enabled=true removable=0
+  ok  cap NVDAc                      2000 enabled=true removable=0
+  ok  cap METAc                      2000 enabled=true removable=0
+  ok  cap cbBTC                      50000 enabled=true removable=0
+  ok  cap USDe                       50000 enabled=true removable=0
+  ok  cap WETH                       50000 enabled=true removable=0
+  ok  cap cbXRP                      50000 enabled=true removable=0
+  ok  supplyQueueLength              8
+  ok  withdrawQueueLength            8
+  ok  supply queue (stocks first)    AAPLc,GOOGLc,NVDAc,METAc,cbBTC,USDe,WETH,cbXRP
+  ok  withdraw queue (deep first)    cbBTC,USDe,WETH,cbXRP,AAPLc,GOOGLc,NVDAc,METAc
+  deep-market caps: 50,000 each (conservative bundle executed), vault max 208,000 USDC
+  totalAssets: 0 USDC
+
+BORROW HELPER 0x36C7f9Ed1ffF7FD6305874837b257C3Bfa8FDff6
+  ok  runtime code == audited build  true
+  ok  owner                          0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  pendingOwner                   0x0000000000000000000000000000000000000000
+  ok  MORPHO                         0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
+  ok  LOAN_TOKEN                     0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  ok  FEE_RECIPIENT                  0xe1096B727499a3f70FaD8bc0267F5e69d01373C7
+  ok  FEE_BPS                        100
+  ok  MAX_LLTV_USE                   900000000000000000
+  ok  isListed AAPLc                 true
+  ok  isListed GOOGLc                true
+  ok  isListed NVDAc                 true
+  ok  isListed METAc                 true
+  ok  isListed cbBTC (not offered)   false
+  ok  isListed USDe (not offered)    false
+  ok  isListed WETH (not offered)    false
+  ok  isListed cbXRP (not offered)   false
+
+problems: []

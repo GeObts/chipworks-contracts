@@ -8,9 +8,11 @@ Two pages. Both are **non-custodial and powered by Morpho**. Chipworks holds nob
   `ChipBorrowHelper`, which takes 1% of what is borrowed. The position lives in Morpho under the
   user's own address.
 
-> **DEPLOYMENT STATUS (2026-09-16): NOTHING IS LIVE.** Both are waiting on two independent
-> audits (`audit/morpho-2026-09-16/`). Build behind address checks: render each page only when its
-> address is set. **Never ship Borrow before the helper address exists on chain.**
+> **DEPLOYMENT STATUS (2026-09-17): BOTH LIVE.** The helper was audited twice (Bankr, Grok; round 2 confirmed).
+> The Safe executed the vault bundle, the helper deploy + listing bundle and the conservative-caps
+> bundle (blocks 51431576 / 51431618 / 51431659); every setting was checked on chain by
+> `tools/claim-day/post-deploy-check.cjs`. Both contracts are verified on Basescan and Blockscout
+> (helper also on Sourcify, exact match).
 
 Viem is assumed. Every write must `await waitForTransactionReceipt` and check
 `receipt.status === 'success'` before any success copy. A revert surfaces as a failure with the tx
@@ -24,8 +26,8 @@ hash. (This rule exists because the GET CHIPPED dialog once reported success ove
 |---|---|---|
 | Morpho (Blue) | `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb` | live, Morpho's |
 | USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | live |
-| Chipworks USDC vault (`cwUSDC`) | `0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6` | **not deployed.** This is the CREATE2 address `safecalls-morpho-vault.json` will produce. Check `getCode` before use |
-| ChipBorrowHelper | **TBD** | not deployed; address known only after deploy |
+| Chipworks USDC vault (`cwUSDC`) | `0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6` | **LIVE** (MetaMorpho V1.1, owner Safe, 15% fee, 1-day timelock) |
+| ChipBorrowHelper | `0x36C7f9Ed1ffF7FD6305874837b257C3Bfa8FDff6` | **LIVE** (owner + fee recipient Safe, LOAN_TOKEN USDC, AAPL/GOOGL/NVDA/META listed) |
 
 ### The four borrow markets (and the vault's stock markets)
 
@@ -67,6 +69,9 @@ function fee() view returns (uint96);                                  // 0.15e1
 
 **Supply:** `USDC.approve(vault, amount)`, then `vault.deposit(amount, user)`. If
 `amount > maxDeposit(user)`, cap it and say why ("the vault is full").
+**Launch caps are deliberately small:** 2,000 USDC per stock market and 50,000 per deep market, so the
+vault takes at most **208,000 USDC** in total until the caps are raised. Hitting that limit is expected; always
+read `maxDeposit`, never assume.
 
 **Withdraw all:** `vault.redeem(vault.maxRedeem(user), user, user)`. Use redeem-by-shares for "max",
 never `withdraw(balanceInAssets)`: interest accrues between read and send, so a stale amount reverts or leaves dust.
