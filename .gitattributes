@@ -1,0 +1,4 @@
+# Safe bundles are signed by hash: never let autocrlf rewrite their bytes.
+safecalls-*.json text eol=lf
+tools/claim-day/*.safe.json text eol=lf
+verify-json/*.json text eol=lf
