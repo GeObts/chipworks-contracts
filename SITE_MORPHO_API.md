@@ -182,6 +182,7 @@ the real limit on borrowing, not the collateral.
 | `TooCloseToLiquidation(debt, limit)` | "That would put the loan too close to liquidation. Borrow less, or add collateral." |
 | `NothingToDo()` | form bug: nothing was requested |
 | `CollateralAccountingMismatch` | "The stock transfer didn't arrive in full." (a B20 policy or pause issue) |
+| `LoanAccountingMismatch` | "The USDC transfer didn't arrive in full. Nothing was borrowed." (should be unreachable with USDC) |
 | Morpho `"insufficient liquidity"` | "Not enough USDC in this market right now." |
 | Morpho `"insufficient collateral"` | position unhealthy; should be unreachable through the helper |
 | Morpho `"already set"` | the authorization was already on; re-read and continue |
