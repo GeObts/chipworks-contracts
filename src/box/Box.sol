@@ -37,7 +37,7 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      RANDOMNESS IS PYTH ENTROPY V2. {open} is payable. It reads {getFeeV2} for the
 ///      configured callback gas limit, forwards that exact fee, and refunds any excess
 ///      ETH (M-08). {open}/{retryOpen} revert unless {IPrizeVault.box} == this (H-04).
-///      The Entropy contract later calls {_entropyCallback}. That callback must not
+///      The Entropy contract later calls {entropyCallback}. That callback must not
 ///      revert: a failing {IPrizeVault.settle} is recorded as {SettleFailed} and the
 ///      NFT is left intact (no silent burn). Basescan sees {BoxOpeningRequested} then
 ///      {BoxOpened} only after a successful settle call (shortfall-with-payout still
@@ -47,16 +47,17 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      EV at mint. {executeSku}/{executeOdds} cannot rewrite a sealed ticket. Retiring
 ///      a SKU ({exists: false}) while {sealedSupply} > 0 reverts (H-03).
 ///
-///      $CHIP is a constructor argument until the live token is known. `chip == address(0)`
-///      or a SKU `chipPrice == 0` disables the CHIP path without affecting USDC. The 5%
-///      recipient defaults to {DEFAULT_FEE_RECIPIENT} in scripts and tests.
+///      $CHIP AND USDC ARE BOTH LIVE PAYMENT ASSETS. Launch token is {DEFAULT_CHIP} on Base.
+///      `chip == address(0)` or a SKU `chipPrice == 0` still disables the CHIP path (tests /
+///      a future USDC-only deploy) without affecting USDC. CHIP is never a prize stock (H-01).
+///      The 5% recipient defaults to {DEFAULT_FEE_RECIPIENT} in scripts and tests.
 contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Strings for uint256;
 
     uint16 public constant override FEE_BPS = 500;
     uint16 public constant override WEIGHT_DENOM = 10_000;
-    uint8 public constant MAX_SKUS = 4;
+    uint8 public constant MAX_SKUS = 3;
     uint8 public constant MAX_TIERS = 8;
     uint8 public constant STATE_SEALED = 1;
     uint8 public constant STATE_OPENING = 2;
@@ -68,14 +69,19 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     uint32 public constant MAX_CALLBACK_GAS = 2_000_000;
 
     uint8 public constant SKU_ONE_USD = 0;
-    uint8 public constant SKU_FIVE_USD = 1;
-    uint8 public constant SKU_TEN_USD = 2;
-    uint8 public constant SKU_TWENTY_FIVE_USD = 3;
+    uint8 public constant SKU_TEN_USD = 1;
+    uint8 public constant SKU_TWENTY_FIVE_USD = 2;
 
     /// @notice Default 5% fee recipient: Goyabean's Safe on Base.
     /// @dev Constructor still takes `treasury_` so a deploy can override. Scripts and tests
     ///      pass this unless `BOX_TREASURY` is set. Changing a live recipient is {queueTreasury}.
     address public constant DEFAULT_FEE_RECIPIENT = 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7;
+
+    /// @notice $CHIP on Base. Scripts default the constructor `chip_` to this.
+    address public constant DEFAULT_CHIP = 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3;
+
+    /// @notice USDC on Base (6 decimals). Scripts default `usdc_` to this.
+    address public constant DEFAULT_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
     address public immutable override usdc;
     address public immutable override chip;
@@ -198,15 +204,16 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     error TimelockExpired(uint64 nowTs, uint64 expiredAt);
 
     /// @param multisig       Owner. Two-step.
-    /// @param usdc_          USDC on Base. 6 decimals.
-    /// @param chip_          $CHIP token. TODO: pass the live address at deploy; `address(0)`
-    ///                       disables {buyWithChip} until a new deployment.
+    /// @param usdc_          USDC on Base. 6 decimals. Launch default {DEFAULT_USDC}.
+    /// @param chip_          $CHIP token. Launch default {DEFAULT_CHIP}. `address(0)`
+    ///                       disables {buyWithChip} without affecting USDC.
     /// @param treasury_      5% recipient ({feeRecipient}). Launch default is
     ///                       {DEFAULT_FEE_RECIPIENT} (Goyabean's Safe). Retarget is 48h-timelocked.
     /// @param vault_         PrizeVault. 95% of payment and all B20 payouts.
     /// @param entropy_       Pyth Entropy v2. Base: 0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb.
     /// @param chipPrice1     $CHIP charged for the $1 SKU. 0 disables CHIP on that SKU.
-    /// @param chipPrice5     $CHIP charged for the $5 SKU. 0 disables CHIP on that SKU.
+    /// @param chipPrice10    $CHIP charged for the $10 SKU. 0 disables CHIP on that SKU.
+    /// @param chipPrice25    $CHIP charged for the $25 SKU. 0 disables CHIP on that SKU.
     constructor(
         address multisig,
         address usdc_,
@@ -215,12 +222,14 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         address vault_,
         address entropy_,
         uint128 chipPrice1,
-        uint128 chipPrice5
+        uint128 chipPrice10,
+        uint128 chipPrice25
     ) ERC721("ChipWorks Box", "CBOX") Ownable(multisig) {
         if (multisig == address(0) || usdc_ == address(0) || treasury_ == address(0)) {
             revert ZeroAddress();
         }
         if (vault_ == address(0) || entropy_ == address(0)) revert ZeroAddress();
+        if (chip_ == usdc_) revert BadConfig();
         usdc = usdc_;
         chip = chip_;
         treasury = treasury_;
@@ -228,13 +237,14 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         entropy = entropy_;
 
         _skus[SKU_ONE_USD] = Sku({exists: true, paused: false, usdcPrice: 1_000_000, chipPrice: chipPrice1});
-        _skus[SKU_FIVE_USD] = Sku({exists: true, paused: false, usdcPrice: 5_000_000, chipPrice: chipPrice5});
-        // $10 / $25 slots exist as ids 2 and 3 but start `exists = false`. Enable via {queueSku}.
+        _skus[SKU_TEN_USD] = Sku({exists: true, paused: false, usdcPrice: 10_000_000, chipPrice: chipPrice10});
+        _skus[SKU_TWENTY_FIVE_USD] = Sku({exists: true, paused: false, usdcPrice: 25_000_000, chipPrice: chipPrice25});
 
         _loadLaunchOdds();
         emit TreasurySet(address(0), treasury_);
         emit SkuExecuted(SKU_ONE_USD, 1_000_000, chipPrice1);
-        emit SkuExecuted(SKU_FIVE_USD, 5_000_000, chipPrice5);
+        emit SkuExecuted(SKU_TEN_USD, 10_000_000, chipPrice10);
+        emit SkuExecuted(SKU_TWENTY_FIVE_USD, 25_000_000, chipPrice25);
         emit OddsExecuted(_oddsSnapshots[0].count, rtpBps());
     }
 
@@ -312,11 +322,16 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         _requestEntropy(tokenId, b);
     }
 
-    /// @notice Pyth Entropy v2 callback. ABI-compatible with IEntropyConsumer._entropyCallback.
+    /// @notice Pyth Entropy v2 callback. This is the selector Entropy actually calls.
     /// @dev Never reverts on a failed payout. A revert here would stall the keeper.
-    function _entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) external {
+    function entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) public {
         if (msg.sender != entropy) revert OnlyEntropy();
         _fulfill(sequence, provider, randomNumber);
+    }
+
+    /// @dev Alias kept for the in-repo mock / older ABI. Pyth v2 calls {entropyCallback}.
+    function _entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) external {
+        entropyCallback(sequence, provider, randomNumber);
     }
 
     /* ------------------------------------------------------------------ */
@@ -441,7 +456,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     /*                       ADMIN: SKUS / ODDS                             */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Queue a SKU price (and whether it exists). Use this to turn on $10 / $25.
+    /// @notice Queue a SKU price (and whether it exists). Launch SKUs are $1 / $10 / $25.
     function queueSku(uint8 id, bool exists, uint96 usdcPrice, uint128 chipPrice) external onlyOwner {
         if (id >= MAX_SKUS) revert UnknownSku(id);
         if (exists && usdcPrice == 0) revert BadConfig();

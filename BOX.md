@@ -29,30 +29,32 @@ Deploy order: `PrizeVault` → `Box(vault)` → `PrizeVault.setBox(box)` once. S
 
 Constructor args filled at deploy, not in bytecode:
 
-- `$CHIP` token — pass the live address, or `address(0)` to disable `{buyWithChip}` until a new deployment. **Deploy default stays `CHIP=0`.**
+- `$CHIP` token — **deploy default is the live Base token** `0x75Af968d2e58749FDA1b42C58186B76f5E511bA3` (`Box.DEFAULT_CHIP`). Pass `address(0)` only to disable `{buyWithChip}`. USDC and `$CHIP` are both live payment assets.
 - 5% fee recipient (`treasury` / `feeRecipient`) — **default is Goyabean's Safe** `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). Constructor still takes the address so a deploy can override; a live change is 48h-timelocked with a 14-day grace window.
 
-`PrizeVault` takes the same `$CHIP` address so `{rescue}` cannot drain working capital before `{setBox}`.
+`PrizeVault` takes the same `$CHIP` address. `{rescue}`, `{addStock}` and surplus withdraw all refuse CHIP — it is payment working capital, never prize inventory (H-01). The live Base CHIP address is protected even if the constructor was passed `address(0)`.
 
-USDC on Base is `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 dp). Pyth Entropy v2 on Base is `0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb`.
+USDC on Base is `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (`Box.DEFAULT_USDC`, 6 dp). Pyth Entropy v2 on Base is `0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb`.
+
+Launch SKUs (all `exists = true`): **$1** (id 0), **$10** (id 1), **$25** (id 2). There is no $5 SKU.
 
 ---
 
 ## Odds table (launch, 91.00% RTP)
 
-Weights sum to `10_000`. Prize is `sku.usdcPrice * prizeBps / 10_000`, so the same table serves $1, $5, and later $10 / $25.
+Weights sum to `10_000`. Prize is `sku.usdcPrice * prizeBps / 10_000`, so the same table serves $1, $10, and $25.
 
-| Tier | Weight | Prob | Prize (× face) | $1 box | $5 box | EV contribution |
-|---|---|---|---|---|---|---|
-| Dust | 4,500 | 45.00% | 0.20× | $0.20 | $1.00 | 9.00¢ |
-| Common | 3,000 | 30.00% | 0.50× | $0.50 | $2.50 | 15.00¢ |
-| Uncommon | 1,500 | 15.00% | 1.00× | $1.00 | $5.00 | 15.00¢ |
-| Rare | 700 | 7.00% | 2.00× | $2.00 | $10.00 | 14.00¢ |
-| Epic | 250 | 2.50% | 8.00× | $8.00 | $40.00 | 20.00¢ |
-| Jackpot | 50 | 0.50% | 36.00× | $36.00 | $180.00 | 18.00¢ |
-| **Total** | **10,000** | **100%** | | | | **$0.9100 (91.00%)** |
+| Tier | Weight | Prob | Prize (× face) | $1 box | $10 box | $25 box | EV contribution ($1) |
+|---|---|---|---|---|---|---|---|
+| Dust | 4,500 | 45.00% | 0.20× | $0.20 | $2.00 | $5.00 | 9.00¢ |
+| Common | 3,000 | 30.00% | 0.50× | $0.50 | $5.00 | $12.50 | 15.00¢ |
+| Uncommon | 1,500 | 15.00% | 1.00× | $1.00 | $10.00 | $25.00 | 15.00¢ |
+| Rare | 700 | 7.00% | 2.00× | $2.00 | $20.00 | $50.00 | 14.00¢ |
+| Epic | 250 | 2.50% | 8.00× | $8.00 | $80.00 | $200.00 | 20.00¢ |
+| Jackpot | 50 | 0.50% | 36.00× | $36.00 | $360.00 | $900.00 | 18.00¢ |
+| **Total** | **10,000** | **100%** | | | | | **$0.9100 (91.00%)** |
 
-`Box.rtpBps()` returns `9100`. Changing the table is timelocked. $10 / $25 SKUs are ids `2` and `3`, `exists = false` until `{queueSku}`.
+`Box.rtpBps()` returns `9100`. Changing the table is timelocked. SKU ids: `$1=0`, `$10=1`, `$25=2`.
 
 ### Draw rule the UI must copy
 
@@ -73,7 +75,7 @@ Call `previewDraw(randomNumber, skuId)` rather than reimplementing it. `test_eve
 | H-04 | `open` with `vault.box` unset → Entropy callback `settle` reverts → silent burn | `open`/`retryOpen` revert unless `vault.box()==this`. Failed settle emits `SettleFailed`, does not burn. |
 | H-03 | `outstandingLiabilityUsd` revert (retired SKU) zeroed the surplus floor | Surplus fail-closes on a failed liability call. `executeSku` cannot set `exists=false` while `sealedSupply>0`. Liability is the mint-EV running total. |
 | H-02 | Fake/owner-set stock feed inflated `inventoryUsd`, surplus drained USDC | Surplus leftover floor is **USDC only**. |
-| H-01 | `rescue(CHIP)` drained working capital | CHIP is a protected asset (constructor and/or `Box.chip()`). Deploy default remains `CHIP=0`. |
+| H-01 | `rescue(CHIP)` / `addStock(CHIP)` / surplus-as-inventory drained working capital | CHIP is a payment asset: constructor `chip`, `{Box.chip()}`, and `{DEFAULT_CHIP}` are refused by `{rescue}`, `{addStock}`, and surplus withdraw. `{setBox}` reverts if CHIP is already registered as stock. Deploy default is live CHIP. |
 | H-05 | Live SKU/odds rewrote sealed tickets (`$1` paid `$25`-tier) | Each box snapshots `faceUsd`, `oddsVersion`, `mintEvUsd` at mint. Launch table stays 6-tier. |
 | M-08 | Entropy fee | `{open}` forwards `getFeeV2` exactly and refunds excess (unit test + optional Base fork). |
 
@@ -90,7 +92,7 @@ user ──100%──► Box ──5%──► feeRecipient / treasury (Goyabean
 
 Default recipient: `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). `FEE_BPS = 500`. Rounding dust (`price - fee`) stays with the vault, not the treasury. Box holds no ERC-20 between calls. Override at construct with a different `treasury_`, or later via `{queueTreasury}` / `{executeTreasury}`.
 
-`$CHIP` in the vault is **working capital** to acquire B20 off-cycle. It is not priced into `{inventoryUsd}` and is not a prize asset. `{rescue}` cannot drain it (H-01). A CHIP-funded vault with no B20/USDC will pay a shortfall (see below) rather than pretend.
+`$CHIP` in the vault is **working capital** to acquire B20 off-cycle. It is not priced into `{inventoryUsd}` and is not a prize asset. `{rescue(CHIP)}`, `{addStock(CHIP)}`, and surplus withdraw of CHIP all revert (H-01). A CHIP-funded vault with no B20/USDC will pay a shortfall (see below) rather than pretend.
 
 ---
 
@@ -99,7 +101,7 @@ Default recipient: `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FE
 1. UI calls `quoteOpenFee()` → `entropy.getFeeV2(callbackGasLimit)`.
 2. Owner of a **sealed** box calls `open{value: fee}(tokenId)`. Excess ETH is refunded; Entropy does not refund. `{open}` / `{retryOpen}` revert unless `PrizeVault.box() == address(Box)` (H-04).
 3. Box stores the sequence, locks the NFT (not transferable, still owned).
-4. Entropy later calls `_entropyCallback(sequence, provider, randomNumber)` — ABI-compatible with `IEntropyConsumer`.
+4. Entropy later calls `entropyCallback(sequence, provider, randomNumber)` — the Pyth v2 consumer selector (`_entropyCallback` is an alias).
 5. Callback **must not revert**. A failing vault settle emits `{SettleFailed}` and **does not burn** the NFT (ownerOf unchanged). An honest shortfall (empty inventory) is still a successful settle call and burns as before.
 6. If the callback never arrives — or settle failed — the opener may `retryOpen` after `REVEAL_TIMEOUT` (3 days), paying a new fee. A late original callback is ignored (`OrphanCallback`) unless the box is still `OPENING` on that sequence (failed settle leaves it opening so a late retry of the same callback can still pay).
 
@@ -117,7 +119,7 @@ Default `callbackGasLimit` is 500,000 (stock loop + transfers). Owner can retune
 - B20 tokens are identified **by address**, never by ticker. Feeds may hold last close over the weekend; a bad feed skips that stock instead of bricking the callback.
 - `{open}` uses the **mint snapshot** of face USDC and odds version (H-05). `{executeSku}` / `{executeOdds}` cannot rewrite a sealed ticket. `{executeSku}` cannot set `exists = false` while `sealedSupply[id] > 0` (H-03).
 
-Surplus withdraw of USDC / registered B20: 48h queue, then leftover **USDC** (not stock MTM) must still cover `{Box.outstandingLiabilityUsd} * 110%`. A reverting liability query fails closed (H-03). `$CHIP` is working capital: `{rescue(CHIP)}` reverts (H-01). Stray tokens (not USDC, not CHIP, not a registered prize stock) can be rescued immediately.
+Surplus withdraw of USDC / registered B20: 48h queue, then leftover **USDC** (not stock MTM) must still cover `{Box.outstandingLiabilityUsd} * 110%`. A reverting liability query fails closed (H-03). `$CHIP` is working capital: `{rescue(CHIP)}`, `{addStock(CHIP)}`, and surplus withdraw of CHIP revert (H-01). Stray tokens (not USDC, not CHIP, not a registered prize stock) can be rescued immediately.
 
 ---
 
@@ -150,7 +152,7 @@ Metadata: `setBaseURI` + `tokenURI = baseURI + tokenId`. Index `Transfer` events
 forge test --match-path 'test/box/*' -vv
 ```
 
-No RPC required. The suite covers odds math (including the 10,000-roll histogram), 5/95 fee split on both USDC and CHIP (recipient = Goyabean's Safe), Entropy fee pass-through and callback mock, gift/lock, vault cap, empty/thin/blacklisted stock, USDC fallback, CHIP-buy shortfall, surplus-withdraw accounting, and PoCs for H-01–H-05 / M-08 (`test/box/BoxAuditPoC.t.sol`).
+No RPC required. The suite covers odds math (including the 10,000-roll histogram), 5/95 fee split on both USDC and CHIP for **$1 / $10 / $25**, Entropy fee pass-through and callback mock, gift/lock, vault cap, empty/thin/blacklisted stock, USDC fallback, CHIP-buy shortfall, surplus-withdraw accounting, and PoCs for H-01–H-05 / M-08 (`test/box/BoxAuditPoC.t.sol`) including addStock/surplus CHIP drains.
 
 An optional Base-fork assertion for M-08 (`test_M08_OpenForwardsExactEntropyFee_RefundsExcess_BaseFork`) runs only when `BASE_RPC_URL` is set; it never broadcasts.
 

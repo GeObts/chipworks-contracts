@@ -37,8 +37,7 @@ contract BoxAuditPoCTest is BoxTestBase {
 
     function test_H04_OpenRevertsIfVaultBoxUnset_NoSilentBurn() public {
         PrizeVault unwired = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
-        Box b =
-            new Box(multisig, address(usdc), address(chip), treasury, address(unwired), address(entropy), CHIP1, CHIP5);
+        Box b = _newBox(address(unwired), address(chip), CHIP1, CHIP10, CHIP25);
         assertEq(unwired.box(), address(0));
 
         vm.startPrank(alice);
@@ -58,8 +57,7 @@ contract BoxAuditPoCTest is BoxTestBase {
 
         // Failed settle after a wired-but-reverting vault: callback must not silently burn.
         SettleReverter hostile = new SettleReverter();
-        Box b2 =
-            new Box(multisig, address(usdc), address(chip), treasury, address(hostile), address(entropy), CHIP1, CHIP5);
+        Box b2 = _newBox(address(hostile), address(chip), CHIP1, CHIP10, CHIP25);
         hostile.setBox(address(b2));
         vm.startPrank(alice);
         usdc.approve(address(b2), type(uint256).max);
@@ -141,7 +139,7 @@ contract BoxAuditPoCTest is BoxTestBase {
     }
 
     /* ------------------------------------------------------------------ */
-    /*  H-01  rescue cannot drain CHIP working capital                      */
+    /*  H-01  rescue / addStock / surplus cannot drain CHIP working capital */
     /* ------------------------------------------------------------------ */
 
     function test_H01_RescueCannotDrainChipWorkingCapital() public {
@@ -157,7 +155,7 @@ contract BoxAuditPoCTest is BoxTestBase {
 
         // Constructor CHIP=0, Box later wired with CHIP: still protected via Box.chip().
         PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
-        Box b = new Box(multisig, address(usdc), address(chip), treasury, address(v0), address(entropy), CHIP1, CHIP5);
+        Box b = _newBox(address(v0), address(chip), CHIP1, CHIP10, CHIP25);
         vm.prank(multisig);
         v0.setBox(address(b));
         chip.mint(address(v0), 7 ether);
@@ -165,6 +163,70 @@ contract BoxAuditPoCTest is BoxTestBase {
         vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
         v0.rescue(address(chip), alice, 7 ether);
         assertEq(chip.balanceOf(address(v0)), 7 ether);
+    }
+
+    function test_H01_AddStockChipForbidden() public {
+        MockAggregatorV3 chipFeed = new MockAggregatorV3(8, int256(1e8), "CHIP");
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        vault.addStock(address(chip), address(chipFeed), 18);
+        assertEq(vault.stockCount(), 2, "CHIP never entered the prize catalog");
+
+        // Live Base CHIP address is always refused, even on a vault constructed with chip=0.
+        PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
+        address liveChip = v0.DEFAULT_CHIP();
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        v0.addStock(liveChip, address(chipFeed), 18);
+        assertEq(v0.stockCount(), 0);
+    }
+
+    function test_H01_SurplusWithdrawChipForbidden() public {
+        vm.prank(alice);
+        boxes.buyWithChip(SKU25, alice);
+        uint256 chip0 = chip.balanceOf(address(vault));
+        assertGt(chip0, 0);
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        vault.queueSurplusWithdraw(address(chip), alice, chip0);
+        assertEq(chip.balanceOf(address(vault)), chip0, "CHIP not queued as surplus");
+
+        // Constructor CHIP=0 + Box.chip() after wire: surplus still refuses CHIP.
+        PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
+        Box b = _newBox(address(v0), address(chip), CHIP1, CHIP10, CHIP25);
+        vm.prank(multisig);
+        v0.setBox(address(b));
+        chip.mint(address(v0), 11 ether);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        v0.queueSurplusWithdraw(address(chip), alice, 11 ether);
+        assertEq(chip.balanceOf(address(v0)), 11 ether);
+    }
+
+    function test_H01_CannotRegisterChipThenWireBox() public {
+        PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
+        MockAggregatorV3 chipFeed = new MockAggregatorV3(8, int256(1e8), "CHIP");
+        vm.prank(multisig);
+        v0.addStock(address(chip), address(chipFeed), 18);
+        assertEq(v0.stockCount(), 1);
+
+        Box b = _newBox(address(v0), address(chip), CHIP1, CHIP10, CHIP25);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        v0.setBox(address(b));
+        assertEq(v0.box(), address(0), "Box not wired when CHIP is already prize stock");
+    }
+
+    function test_H01_LiveChipAddressCannotBeRescuedOrSurplused() public {
+        address liveChip = boxes.DEFAULT_CHIP();
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        vault.rescue(liveChip, alice, 1);
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        vault.queueSurplusWithdraw(liveChip, alice, 1);
     }
 
     /* ------------------------------------------------------------------ */
@@ -259,7 +321,15 @@ contract BoxAuditPoCTest is BoxTestBase {
         MockERC20 forkChip = new MockERC20("Chipworks", "CHIP", 18);
         PrizeVault forkVault = new PrizeVault(multisig, address(forkUsdc), address(forkChip), 2_500);
         Box forkBox = new Box(
-            multisig, address(forkUsdc), address(forkChip), treasury, address(forkVault), realEntropy, CHIP1, CHIP5
+            multisig,
+            address(forkUsdc),
+            address(forkChip),
+            treasury,
+            address(forkVault),
+            realEntropy,
+            CHIP1,
+            CHIP10,
+            CHIP25
         );
         vm.prank(multisig);
         forkVault.setBox(address(forkBox));

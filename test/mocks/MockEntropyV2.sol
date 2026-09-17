@@ -48,7 +48,7 @@ contract MockEntropyV2 {
 
     function fulfill(uint64 sequence, bytes32 randomNumber) external {
         address target = requester[sequence];
-        IEntropyCallback(target)._entropyCallback(sequence, address(this), randomNumber);
+        IEntropyCallback(target).entropyCallback(sequence, address(this), randomNumber);
     }
 
     function _request(uint32 gasLimit) internal returns (uint64 seq) {
@@ -60,5 +60,5 @@ contract MockEntropyV2 {
 }
 
 interface IEntropyCallback {
-    function _entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) external;
+    function entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) external;
 }

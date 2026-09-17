@@ -22,7 +22,7 @@ interface IPrizeVault {
     }
 
     function usdc() external view returns (address);
-    /// @notice $CHIP working capital. `address(0)` if the CHIP path is disabled. Not a prize asset.
+    /// @notice $CHIP payment / working capital. Never a prize asset (H-01).
     function chip() external view returns (address);
     function box() external view returns (address);
     function maxPrizeBps() external view returns (uint32);

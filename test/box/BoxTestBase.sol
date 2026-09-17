@@ -28,11 +28,14 @@ contract BoxTestBase is Test {
     address internal bob = makeAddr("bob");
 
     uint8 internal constant SKU1 = 0;
-    uint8 internal constant SKU5 = 1;
+    uint8 internal constant SKU10 = 1;
+    uint8 internal constant SKU25 = 2;
     uint256 internal constant USD1 = 1_000_000;
-    uint256 internal constant USD5 = 5_000_000;
+    uint256 internal constant USD10 = 10_000_000;
+    uint256 internal constant USD25 = 25_000_000;
     uint128 internal constant CHIP1 = 100 ether;
-    uint128 internal constant CHIP5 = 500 ether;
+    uint128 internal constant CHIP10 = 1_000 ether;
+    uint128 internal constant CHIP25 = 2_500 ether;
     uint256 internal constant NVDA_PRICE = 100e8; // $100, 8 dp feed
     uint256 internal constant TSLA_PRICE = 200e8; // $200
 
@@ -48,8 +51,7 @@ contract BoxTestBase is Test {
         entropy = new MockEntropyV2();
 
         vault = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
-        boxes =
-            new Box(multisig, address(usdc), address(chip), treasury, address(vault), address(entropy), CHIP1, CHIP5);
+        boxes = _newBox(address(vault), address(chip), CHIP1, CHIP10, CHIP25);
 
         vm.startPrank(multisig);
         vault.setBox(address(boxes));
@@ -60,6 +62,10 @@ contract BoxTestBase is Test {
         _fundVault();
         _fundBuyer(alice);
         _fundBuyer(bob);
+    }
+
+    function _newBox(address vault_, address chip_, uint128 p1, uint128 p10, uint128 p25) internal returns (Box) {
+        return new Box(multisig, address(usdc), chip_, treasury, vault_, address(entropy), p1, p10, p25);
     }
 
     function _fundVault() internal {
@@ -102,5 +108,19 @@ contract BoxTestBase is Test {
             acc += tiers[i].weight;
         }
         return bytes32(acc);
+    }
+
+    function _skuUsd(uint8 skuId) internal pure returns (uint256) {
+        if (skuId == SKU1) return USD1;
+        if (skuId == SKU10) return USD10;
+        if (skuId == SKU25) return USD25;
+        revert("unknown sku");
+    }
+
+    function _skuChip(uint8 skuId) internal pure returns (uint128) {
+        if (skuId == SKU1) return CHIP1;
+        if (skuId == SKU10) return CHIP10;
+        if (skuId == SKU25) return CHIP25;
+        revert("unknown sku");
     }
 }

@@ -31,8 +31,9 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      refused. Prize assets (USDC and registered B20) leave through {settle} or through
 ///      a 48-hour surplus withdraw that still leaves enough **USDC** to cover outstanding
 ///      Box EV × 110%. Stock MTM is ignored for that floor — feeds are owner-settable
-///      (H-02). Stray tokens that are not prize assets can be rescued immediately, except
-///      $CHIP working capital (H-01). Surplus fail-closes if the Box liability query
+///      (H-02). Stray tokens that are not prize assets can be rescued immediately.
+///      $CHIP is a payment asset, never prize stock (H-01): {rescue}, {addStock} and
+///      surplus withdraw all refuse it. Surplus fail-closes if the Box liability query
 ///      reverts or Box is unwired (H-03).
 ///
 ///      FEEDS ARE BEST-EFFORT IN THE CALLBACK. B20 USD feeds hold last close over the
@@ -52,7 +53,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /// @notice Quote token prizes can fall back to. USDC on Base, 6 decimals.
     address public immutable override usdc;
 
-    /// @notice $CHIP working capital. `address(0)` disables CHIP protection until Box is wired.
+    /// @notice $CHIP on Base. Always treated as a payment asset, never as prize stock (H-01).
+    address public constant DEFAULT_CHIP = 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3;
+
+    /// @notice $CHIP working capital. `address(0)` still protects {DEFAULT_CHIP} and {Box.chip}.
     address public immutable override chip;
 
     /// @notice Cached USDC decimals. Expected 6; stored so we never assume a literal.
@@ -137,11 +141,13 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     /// @param multisig      Owner. Two-step.
     /// @param usdc_         USDC on Base. 6 decimals.
-    /// @param chip_         $CHIP token. `address(0)` if CHIP buys are disabled at deploy.
+    /// @param chip_         $CHIP token. Launch default {DEFAULT_CHIP}. `address(0)` still
+    ///                      protects {DEFAULT_CHIP} and, after {setBox}, {Box.chip}.
     /// @param maxPrizeBps_  Single-prize cap vs inventory. Launch at 2_500 (25%).
     constructor(address multisig, address usdc_, address chip_, uint32 maxPrizeBps_) Ownable(multisig) {
         if (multisig == address(0) || usdc_ == address(0)) revert ZeroAddress();
         if (maxPrizeBps_ == 0 || maxPrizeBps_ > MAX_PRIZE_BPS_CEILING) revert BadConfig();
+        if (chip_ == usdc_) revert BadConfig();
         usdc = usdc_;
         chip = chip_;
         usdcDecimals = IERC20Metadata(usdc_).decimals();
@@ -159,6 +165,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     function setBox(address v) external onlyOwner {
         if (v == address(0)) revert ZeroAddress();
         if (box != address(0)) revert AlreadyWired();
+        address boxChip = IBox(v).chip();
+        if (chip != address(0) && boxChip != address(0) && boxChip != chip) revert BadConfig();
+        // H-01: refuse to wire a Box whose CHIP was already registered as prize stock.
+        if (boxChip != address(0) && _stocks[boxChip].registered) revert ProtectedAsset(boxChip);
         box = v;
         emit BoxSet(v);
     }
@@ -320,6 +330,8 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     function addStock(address token, address feed, uint8 tokenDecimals_) external onlyOwner {
         if (token == address(0) || feed == address(0)) revert ZeroAddress();
         if (token == usdc) revert BadConfig();
+        // H-01: CHIP is a payment asset. Never a B20 prize stock.
+        if (_isChip(token)) revert ProtectedAsset(token);
         if (_stocks[token].registered) revert AlreadyRegistered(token);
         if (_stockList.length >= MAX_STOCKS) revert TooManyStocks();
         if (tokenDecimals_ == 0 || tokenDecimals_ > 18) revert BadConfig();
@@ -399,6 +411,8 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     ///      query reverts the withdraw (H-03); stock feeds cannot pad the floor (H-02).
     function queueSurplusWithdraw(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0) || token == address(0) || amount == 0) revert BadConfig();
+        // H-01: CHIP working capital is not surplus inventory.
+        if (_isChip(token)) revert ProtectedAsset(token);
         if (token != usdc && !_stocks[token].registered) revert NotRegistered(token);
         uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
         _pendingSurplus =
@@ -412,6 +426,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         _requireInWindow(p.executableAt);
         delete _pendingSurplus;
 
+        if (_isChip(p.token)) revert ProtectedAsset(p.token);
         uint256 required = _requiredInventoryUsd();
         IERC20(p.token).safeTransfer(p.to, p.amount);
         // H-02: leftover floor is USDC only. Owner-settable stock feeds cannot inflate
@@ -427,7 +442,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         emit SurplusCancelled();
     }
 
-    /// @notice Rescue a token that is NOT USDC, NOT $CHIP working capital, and NOT a registered prize stock.
+    /// @notice Rescue a token that is NOT USDC, NOT $CHIP (payment / working capital), and NOT a registered prize stock.
     function rescue(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0) || token == address(0)) revert ZeroAddress();
         if (_isProtectedAsset(token)) revert ProtectedAsset(token);
@@ -451,12 +466,19 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         return liability * SURPLUS_BUFFER_BPS / BPS;
     }
 
-    /// @dev H-01: $CHIP in the vault is working capital, not a stray token. Protected even
-    ///      if the constructor was deployed with `chip == 0` and Box was later wired with CHIP.
+    /// @dev H-01: $CHIP is payment working capital, never a stray token or prize stock.
+    ///      Protected via constructor `chip`, {DEFAULT_CHIP}, and {Box.chip} after wiring.
     function _isProtectedAsset(address token) internal view returns (bool) {
         if (token == usdc) return true;
-        if (chip != address(0) && token == chip) return true;
+        if (_isChip(token)) return true;
         if (_stocks[token].registered) return true;
+        return false;
+    }
+
+    function _isChip(address token) internal view returns (bool) {
+        if (token == address(0)) return false;
+        if (token == DEFAULT_CHIP) return true;
+        if (chip != address(0) && token == chip) return true;
         address box_ = box;
         if (box_ != address(0)) {
             address boxChip = IBox(box_).chip();
@@ -466,6 +488,11 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     }
 
     function _canPayStock(address token, uint256 prizeUsd) internal returns (bool ok, uint256 amount) {
+        // H-01 defense-in-depth: never pay a prize in CHIP even if it were listed.
+        if (_isChip(token)) {
+            emit StockSkipped(token, bytes32("chip"));
+            return (false, 0);
+        }
         PrizeStock memory st = _stocks[token];
         if (!st.enabled) {
             emit StockSkipped(token, bytes32("disabled"));

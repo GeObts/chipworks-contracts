@@ -132,6 +132,7 @@ contract CodeSizeTest is Test {
                     prizeVault,
                     _factory(),
                     0,
+                    0,
                     0
                 )
             )
