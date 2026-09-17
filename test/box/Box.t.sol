@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
 import {IPrizeVault} from "../../src/interfaces/IPrizeVault.sol";
 import {BoxTestBase} from "./BoxTestBase.sol";
@@ -41,7 +42,8 @@ contract BoxTest is BoxTestBase {
     function test_rtpIs9100Bps() public view {
         assertEq(boxes.rtpBps(), 9_100, "launch table is 91.00% RTP");
         assertEq(boxes.expectedValueUsd(SKU1), 910_000);
-        assertEq(boxes.expectedValueUsd(SKU5), 4_550_000);
+        assertEq(boxes.expectedValueUsd(SKU10), 9_100_000);
+        assertEq(boxes.expectedValueUsd(SKU25), 22_750_000);
     }
 
     function test_oddsWeightsSumToDenom() public view {
@@ -72,15 +74,20 @@ contract BoxTest is BoxTestBase {
     function test_prizeScalesWithSkuPrice() public view {
         bytes32 dust = bytes32(uint256(0));
         (,, uint32 prizeBps, uint256 prize1) = boxes.previewDraw(dust, SKU1);
-        (,, uint32 prizeBps5, uint256 prize5) = boxes.previewDraw(dust, SKU5);
-        assertEq(prizeBps, prizeBps5);
+        (,, uint32 prizeBps10, uint256 prize10) = boxes.previewDraw(dust, SKU10);
+        (,, uint32 prizeBps25, uint256 prize25) = boxes.previewDraw(dust, SKU25);
+        assertEq(prizeBps, prizeBps10);
+        assertEq(prizeBps, prizeBps25);
         assertEq(prize1, USD1 * prizeBps / 10_000);
-        assertEq(prize5, USD5 * prizeBps / 10_000);
-        assertEq(prize5, prize1 * 5);
+        assertEq(prize10, USD10 * prizeBps / 10_000);
+        assertEq(prize25, USD25 * prizeBps / 10_000);
+        assertEq(prize10, prize1 * 10);
+        assertEq(prize25, prize1 * 25);
     }
 
-    function testFuzz_previewDrawIsDeterministic(bytes32 rand, bool five) public view {
-        uint8 skuId = five ? SKU5 : SKU1;
+    function testFuzz_previewDrawIsDeterministic(bytes32 rand, uint8 skuPick) public view {
+        uint8 skuId = skuPick % 3;
+        uint256 price = _skuUsd(skuId);
         (uint8 a, uint16 w, uint32 bps, uint256 usd) = boxes.previewDraw(rand, skuId);
         (uint8 a2, uint16 w2, uint32 bps2, uint256 usd2) = boxes.previewDraw(rand, skuId);
         assertEq(a, a2);
@@ -88,7 +95,6 @@ contract BoxTest is BoxTestBase {
         assertEq(bps, bps2);
         assertEq(usd, usd2);
         assertLt(a, 6);
-        uint256 price = five ? USD5 : USD1;
         assertEq(usd, price * bps / 10_000);
     }
 
@@ -128,15 +134,40 @@ contract BoxTest is BoxTestBase {
         assertEq(chip.balanceOf(address(boxes)), 0);
     }
 
-    function test_buyFiveDollarUsdcAndChip() public {
-        vm.prank(alice);
-        uint256 a = boxes.buyWithUsdc(SKU5, alice);
-        vm.prank(alice);
-        uint256 b = boxes.buyWithChip(SKU5, alice);
-        assertEq(boxes.boxInfo(a).skuId, SKU5);
-        assertEq(boxes.boxInfo(b).skuId, SKU5);
-        assertEq(usdc.balanceOf(treasury), 250_000);
-        assertEq(chip.balanceOf(treasury), uint256(CHIP5) * 500 / 10_000);
+    function test_buyOneTenTwentyFiveUsdcAndChip() public {
+        uint256 treUsdc0 = usdc.balanceOf(treasury);
+        uint256 treChip0 = chip.balanceOf(treasury);
+        uint256 vaultUsdc0 = usdc.balanceOf(address(vault));
+        uint256 vaultChip0 = chip.balanceOf(address(vault));
+
+        uint8[3] memory skus = [SKU1, SKU10, SKU25];
+        for (uint256 i; i < skus.length; ++i) {
+            uint8 skuId = skus[i];
+            vm.prank(alice);
+            uint256 usdcId = boxes.buyWithUsdc(skuId, alice);
+            vm.prank(alice);
+            uint256 chipId = boxes.buyWithChip(skuId, alice);
+            assertEq(boxes.boxInfo(usdcId).skuId, skuId);
+            assertEq(boxes.boxInfo(chipId).skuId, skuId);
+            assertEq(boxes.boxInfo(usdcId).faceUsd, _skuUsd(skuId));
+            assertEq(boxes.boxInfo(chipId).faceUsd, _skuUsd(skuId));
+            assertEq(boxes.sku(skuId).usdcPrice, _skuUsd(skuId));
+            assertEq(boxes.sku(skuId).chipPrice, _skuChip(skuId));
+        }
+
+        uint256 usdcPaid = USD1 + USD10 + USD25;
+        uint256 chipPaid = uint256(CHIP1) + uint256(CHIP10) + uint256(CHIP25);
+        uint256 usdcFee = usdcPaid * 500 / 10_000;
+        uint256 chipFee = chipPaid * 500 / 10_000;
+        assertEq(usdc.balanceOf(treasury) - treUsdc0, usdcFee);
+        assertEq(chip.balanceOf(treasury) - treChip0, chipFee);
+        assertEq(usdc.balanceOf(address(vault)) - vaultUsdc0, usdcPaid - usdcFee);
+        assertEq(chip.balanceOf(address(vault)) - vaultChip0, chipPaid - chipFee);
+        assertEq(usdc.balanceOf(address(boxes)), 0);
+        assertEq(chip.balanceOf(address(boxes)), 0);
+        assertEq(boxes.sealedSupply(SKU1), 2);
+        assertEq(boxes.sealedSupply(SKU10), 2);
+        assertEq(boxes.sealedSupply(SKU25), 2);
     }
 
     function test_buyAsGift_mintsToRecipient() public {
@@ -172,7 +203,11 @@ contract BoxTest is BoxTestBase {
     }
 
     function test_chipDisabledWhenPriceZero() public {
-        Box bare = new Box(multisig, address(usdc), address(chip), treasury, address(vault), address(entropy), 0, CHIP5);
+        PrizeVault v = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
+        Box bare = _newBox(address(v), address(chip), 0, CHIP10, CHIP25);
+        vm.prank(multisig);
+        v.setBox(address(bare));
+
         vm.prank(alice);
         usdc.approve(address(bare), type(uint256).max);
         vm.prank(alice);
@@ -228,6 +263,8 @@ contract BoxTest is BoxTestBase {
         boxes.open{value: fee}(id);
         vm.expectRevert(Box.OnlyEntropy.selector);
         boxes._entropyCallback(1, address(this), bytes32(uint256(1)));
+        vm.expectRevert(Box.OnlyEntropy.selector);
+        boxes.entropyCallback(1, address(this), bytes32(uint256(1)));
     }
 
     function test_fulfillBurnsAndPaysMatchingPreview() public {
@@ -314,8 +351,9 @@ contract BoxTest is BoxTestBase {
     }
 
     function test_constructorCanOverrideFeeRecipient() public {
-        Box other =
-            new Box(multisig, address(usdc), address(chip), alice, address(vault), address(entropy), CHIP1, CHIP5);
+        Box other = new Box(
+            multisig, address(usdc), address(chip), alice, address(vault), address(entropy), CHIP1, CHIP10, CHIP25
+        );
         assertEq(other.feeRecipient(), alice);
         assertTrue(other.feeRecipient() != other.DEFAULT_FEE_RECIPIENT());
     }
@@ -335,10 +373,28 @@ contract BoxTest is BoxTestBase {
         assertEq(boxes.feeRecipient(), nextSafe);
     }
 
-    function test_tenAndTwentyFiveSkusStartDisabled() public view {
-        assertFalse(boxes.sku(boxes.SKU_TEN_USD()).exists);
-        assertFalse(boxes.sku(boxes.SKU_TWENTY_FIVE_USD()).exists);
+    function test_launchSkusAreOneTenTwentyFive() public view {
+        assertEq(boxes.MAX_SKUS(), 3);
         assertTrue(boxes.sku(SKU1).exists);
-        assertTrue(boxes.sku(SKU5).exists);
+        assertTrue(boxes.sku(SKU10).exists);
+        assertTrue(boxes.sku(SKU25).exists);
+        assertEq(boxes.sku(SKU1).usdcPrice, USD1);
+        assertEq(boxes.sku(SKU10).usdcPrice, USD10);
+        assertEq(boxes.sku(SKU25).usdcPrice, USD25);
+        assertEq(boxes.sku(SKU1).chipPrice, CHIP1);
+        assertEq(boxes.sku(SKU10).chipPrice, CHIP10);
+        assertEq(boxes.sku(SKU25).chipPrice, CHIP25);
+        assertFalse(boxes.sku(3).exists, "$5 slot removed; id 3 is unused");
+        assertEq(boxes.DEFAULT_CHIP(), 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3);
+        assertEq(boxes.DEFAULT_USDC(), 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
+    }
+
+    function test_buyUnknownSkuReverts() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(3)));
+        boxes.buyWithUsdc(3, alice);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(3)));
+        boxes.buyWithChip(3, alice);
     }
 }

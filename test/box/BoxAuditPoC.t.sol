@@ -37,29 +37,31 @@ contract BoxAuditPoCTest is BoxTestBase {
 
     function test_H04_OpenRevertsIfVaultBoxUnset_NoSilentBurn() public {
         PrizeVault unwired = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
-        Box b =
-            new Box(multisig, address(usdc), address(chip), treasury, address(unwired), address(entropy), CHIP1, CHIP5);
+        Box b = _newBox(address(unwired), address(chip), CHIP1, CHIP10, CHIP25);
         assertEq(unwired.box(), address(0));
+
+        uint256 usdc0 = usdc.balanceOf(alice);
+        uint256 chip0 = chip.balanceOf(alice);
+        uint256 vaultChip0 = chip.balanceOf(address(unwired));
 
         vm.startPrank(alice);
         usdc.approve(address(b), type(uint256).max);
-        uint256 id = b.buyWithUsdc(SKU1, alice);
-        vm.stopPrank();
-        assertEq(b.ownerOf(id), alice);
-        assertEq(b.boxInfo(id).state, b.STATE_SEALED());
-
-        uint128 fee = b.quoteOpenFee();
-        vm.prank(alice);
+        chip.approve(address(b), type(uint256).max);
         vm.expectRevert(Box.VaultNotWired.selector);
-        b.open{value: fee}(id);
+        b.buyWithUsdc(SKU1, alice);
+        vm.expectRevert(Box.VaultNotWired.selector);
+        b.buyWithChip(SKU25, alice);
+        vm.stopPrank();
 
-        assertEq(b.ownerOf(id), alice, "open revert: ownerOf unchanged");
-        assertEq(b.sealedSupply(SKU1), 1);
+        assertEq(usdc.balanceOf(alice), usdc0, "unwired buy: USDC not taken");
+        assertEq(chip.balanceOf(alice), chip0, "unwired buy: CHIP not taken");
+        assertEq(chip.balanceOf(address(unwired)), vaultChip0, "unwired buy: vault CHIP unchanged");
+        assertEq(b.nextId(), 1);
 
         // Failed settle after a wired-but-reverting vault: callback must not silently burn.
         SettleReverter hostile = new SettleReverter();
-        Box b2 =
-            new Box(multisig, address(usdc), address(chip), treasury, address(hostile), address(entropy), CHIP1, CHIP5);
+        hostile.setTokens(address(usdc), address(chip));
+        Box b2 = _newBox(address(hostile), address(chip), CHIP1, CHIP10, CHIP25);
         hostile.setBox(address(b2));
         vm.startPrank(alice);
         usdc.approve(address(b2), type(uint256).max);
@@ -94,7 +96,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertEq(boxes.sealedSupply(SKU1), 1);
         assertGt(boxes.outstandingLiabilityUsd(), 0);
 
-        PrizeVault v = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
+        PrizeVault v = new PrizeVault(multisig, address(usdc), address(0), 2_500);
         LiabilityReverter hostile = new LiabilityReverter();
         vm.prank(multisig);
         v.setBox(address(hostile));
@@ -141,7 +143,7 @@ contract BoxAuditPoCTest is BoxTestBase {
     }
 
     /* ------------------------------------------------------------------ */
-    /*  H-01  rescue cannot drain CHIP working capital                      */
+    /*  H-01  CLOSED: no rescue / addStock / surplus / settle / unwired-buy */
     /* ------------------------------------------------------------------ */
 
     function test_H01_RescueCannotDrainChipWorkingCapital() public {
@@ -155,16 +157,104 @@ contract BoxAuditPoCTest is BoxTestBase {
         vault.rescue(address(chip), alice, chip0);
         assertEq(chip.balanceOf(address(vault)), chip0, "CHIP balance unchanged");
 
-        // Constructor CHIP=0, Box later wired with CHIP: still protected via Box.chip().
-        PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
-        Box b = new Box(multisig, address(usdc), address(chip), treasury, address(v0), address(entropy), CHIP1, CHIP5);
-        vm.prank(multisig);
-        v0.setBox(address(b));
-        chip.mint(address(v0), 7 ether);
+        // Matched constructor CHIP is protected from vault birth, before setBox.
+        PrizeVault v = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
+        Box b = _newBox(address(v), address(chip), CHIP1, CHIP10, CHIP25);
+        assertEq(v.box(), address(0));
+        chip.mint(address(v), 7 ether);
         vm.prank(multisig);
         vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
-        v0.rescue(address(chip), alice, 7 ether);
-        assertEq(chip.balanceOf(address(v0)), 7 ether);
+        v.rescue(address(chip), alice, 7 ether);
+        assertEq(chip.balanceOf(address(v)), 7 ether);
+
+        vm.startPrank(alice);
+        chip.approve(address(b), type(uint256).max);
+        vm.expectRevert(Box.VaultNotWired.selector);
+        b.buyWithChip(SKU10, alice);
+        vm.stopPrank();
+        assertEq(chip.balanceOf(address(v)), 7 ether, "unwired buy did not move CHIP");
+    }
+
+    function test_H01_ChipSymmetryRequired_MismatchCannotLeaveChipUnprotected() public {
+        PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
+        vm.expectRevert(Box.BadConfig.selector);
+        _newBox(address(v0), address(chip), CHIP1, CHIP10, CHIP25);
+
+        PrizeVault v1 = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
+        MockERC20 other = new MockERC20("OtherChip", "OCHP", 18);
+        vm.expectRevert(Box.BadConfig.selector);
+        _newBox(address(v1), address(other), CHIP1, CHIP10, CHIP25);
+
+        // setBox refuses a Box-shaped contract whose chip() differs from vault.chip.
+        vm.prank(multisig);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        v1.setBox(address(new LiabilityReverter()));
+        assertEq(v1.box(), address(0));
+    }
+
+    function test_H01_AddStockChipForbidden() public {
+        MockAggregatorV3 chipFeed = new MockAggregatorV3(8, int256(1e8), "CHIP");
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        vault.addStock(address(chip), address(chipFeed), 18);
+        assertEq(vault.stockCount(), 2, "CHIP never entered the prize catalog");
+
+        // Live Base CHIP address is always refused, even on a vault constructed with chip=0.
+        PrizeVault v0 = new PrizeVault(multisig, address(usdc), address(0), 2_500);
+        address liveChip = v0.DEFAULT_CHIP();
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        v0.addStock(liveChip, address(chipFeed), 18);
+        assertEq(v0.stockCount(), 0);
+    }
+
+    function test_H01_SurplusWithdrawChipForbidden() public {
+        vm.prank(alice);
+        boxes.buyWithChip(SKU25, alice);
+        uint256 chip0 = chip.balanceOf(address(vault));
+        assertGt(chip0, 0);
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        vault.queueSurplusWithdraw(address(chip), alice, chip0);
+        assertEq(chip.balanceOf(address(vault)), chip0, "CHIP not queued as surplus");
+
+        PrizeVault v = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
+        Box b = _newBox(address(v), address(chip), CHIP1, CHIP10, CHIP25);
+        vm.prank(multisig);
+        v.setBox(address(b));
+        chip.mint(address(v), 11 ether);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        v.queueSurplusWithdraw(address(chip), alice, 11 ether);
+        assertEq(chip.balanceOf(address(v)), 11 ether);
+    }
+
+    function test_H01_SettleDoesNotPayChip() public {
+        vm.prank(alice);
+        uint256 id = boxes.buyWithChip(SKU10, alice);
+        uint256 chip0 = chip.balanceOf(address(vault));
+        assertGt(chip0, 0);
+
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false);
+        vm.stopPrank();
+
+        _openAndFulfill(alice, id, _rollForTier(2)); // 1.00× of $10 → $10 USDC
+        assertEq(chip.balanceOf(address(vault)), chip0, "settle must not spend CHIP working capital");
+        assertEq(vault.inventoryUsd(), usdc.balanceOf(address(vault)), "CHIP is not prize inventory");
+    }
+
+    function test_H01_LiveChipAddressCannotBeRescuedOrSurplused() public {
+        address liveChip = boxes.DEFAULT_CHIP();
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        vault.rescue(liveChip, alice, 1);
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        vault.queueSurplusWithdraw(liveChip, alice, 1);
     }
 
     /* ------------------------------------------------------------------ */
@@ -223,6 +313,93 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertTrue(paid != livePrize, "$1 ticket never pays $25-tier for the same roll");
     }
 
+    function test_H05_TenAndTwentyFiveOpenUsesMintSnapshot() public {
+        vm.startPrank(alice);
+        uint256 id10 = boxes.buyWithUsdc(SKU10, alice);
+        uint256 id25 = boxes.buyWithChip(SKU25, alice);
+        vm.stopPrank();
+
+        IBox.BoxView memory m10 = boxes.boxInfo(id10);
+        IBox.BoxView memory m25 = boxes.boxInfo(id25);
+        assertEq(m10.faceUsd, USD10);
+        assertEq(m25.faceUsd, USD25);
+        assertEq(m10.mintEvUsd, 9_100_000);
+        assertEq(m25.mintEvUsd, 22_750_000);
+        assertEq(boxes.outstandingLiabilityUsd(), m10.mintEvUsd + m25.mintEvUsd);
+
+        bytes32 roll0 = bytes32(uint256(0));
+        uint256 dust10 = USD10 * 2_000 / 10_000; // $2.00
+        uint256 dust25 = USD25 * 2_000 / 10_000; // $5.00
+
+        IBox.PrizeTier[] memory inverted = new IBox.PrizeTier[](6);
+        inverted[0] = IBox.PrizeTier({weight: 4_500, prizeBps: 360_000});
+        inverted[1] = IBox.PrizeTier({weight: 3_000, prizeBps: 80_000});
+        inverted[2] = IBox.PrizeTier({weight: 1_500, prizeBps: 20_000});
+        inverted[3] = IBox.PrizeTier({weight: 700, prizeBps: 10_000});
+        inverted[4] = IBox.PrizeTier({weight: 250, prizeBps: 5_000});
+        inverted[5] = IBox.PrizeTier({weight: 50, prizeBps: 2_000});
+
+        vm.startPrank(multisig);
+        boxes.queueSku(SKU10, true, uint96(USD1), CHIP1);
+        boxes.queueOdds(inverted);
+        vm.stopPrank();
+        vm.warp(block.timestamp + 48 hours);
+        vm.startPrank(multisig);
+        boxes.executeSku();
+        boxes.executeOdds();
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false);
+        vm.stopPrank();
+
+        uint256 live10Jackpot = USD1 * 360_000 / 10_000;
+        (,,, uint256 livePreview) = boxes.previewDraw(roll0, SKU10);
+        assertEq(livePreview, live10Jackpot);
+        assertEq(boxes.outstandingLiabilityUsd(), m10.mintEvUsd + m25.mintEvUsd, "SKU rewrite does not move mint EV");
+
+        uint256 usdc0 = usdc.balanceOf(alice);
+        _openAndFulfill(alice, id10, roll0);
+        uint256 paid10 = usdc.balanceOf(alice) - usdc0;
+        assertEq(paid10, dust10, "$10 ticket pays mint 0.20x ($2), not live $1 jackpot");
+        assertTrue(paid10 != live10Jackpot);
+
+        uint256 usdc1 = usdc.balanceOf(alice);
+        _openAndFulfill(alice, id25, roll0);
+        uint256 paid25 = usdc.balanceOf(alice) - usdc1;
+        assertEq(paid25, dust25, "$25 ticket pays mint 0.20x ($5), not inverted live table");
+        assertLt(paid25, 25_000_000 * 360_000 / 10_000);
+        assertEq(boxes.outstandingLiabilityUsd(), 0);
+    }
+
+    function test_H05_VaultCannotOverpaySnapshotPrize_AllSkus() public {
+        uint8[3] memory skus = [SKU1, SKU10, SKU25];
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false);
+        vm.stopPrank();
+
+        bytes32 par = _rollForTier(2); // 1.00×
+        uint256 chip0 = chip.balanceOf(address(vault));
+
+        for (uint256 i; i < skus.length; ++i) {
+            uint8 skuId = skus[i];
+            uint256 face = _skuUsd(skuId);
+            vm.prank(alice);
+            uint256 id = boxes.buyWithUsdc(skuId, alice);
+            IBox.BoxView memory minted = boxes.boxInfo(id);
+            assertEq(minted.faceUsd, face);
+            assertEq(minted.mintEvUsd, face * 9_100 / 10_000);
+
+            uint256 aliceUsdc = usdc.balanceOf(alice);
+            uint256 vaultUsdc = usdc.balanceOf(address(vault));
+            _openAndFulfill(alice, id, par);
+            uint256 paid = usdc.balanceOf(alice) - aliceUsdc;
+            assertEq(paid, face, "par tier pays exactly mint face, never more");
+            assertEq(vaultUsdc - usdc.balanceOf(address(vault)), face);
+            assertLe(paid, minted.faceUsd);
+            assertEq(chip.balanceOf(address(vault)), chip0, "CHIP working capital untouched");
+        }
+    }
+
     /* ------------------------------------------------------------------ */
     /*  M-08  open forwards exact Entropy fee and refunds excess            */
     /* ------------------------------------------------------------------ */
@@ -259,7 +436,15 @@ contract BoxAuditPoCTest is BoxTestBase {
         MockERC20 forkChip = new MockERC20("Chipworks", "CHIP", 18);
         PrizeVault forkVault = new PrizeVault(multisig, address(forkUsdc), address(forkChip), 2_500);
         Box forkBox = new Box(
-            multisig, address(forkUsdc), address(forkChip), treasury, address(forkVault), realEntropy, CHIP1, CHIP5
+            multisig,
+            address(forkUsdc),
+            address(forkChip),
+            treasury,
+            address(forkVault),
+            realEntropy,
+            CHIP1,
+            CHIP10,
+            CHIP25
         );
         vm.prank(multisig);
         forkVault.setBox(address(forkBox));
@@ -283,9 +468,16 @@ contract BoxAuditPoCTest is BoxTestBase {
 /// @dev Vault double: reports the Box as wired, then reverts on settle (H-04).
 contract SettleReverter {
     address public box;
+    address public usdc;
+    address public chip;
 
     function setBox(address v) external {
         box = v;
+    }
+
+    function setTokens(address usdc_, address chip_) external {
+        usdc = usdc_;
+        chip = chip_;
     }
 
     function settle(address, uint256, bytes32) external pure returns (IPrizeVault.Payout memory) {

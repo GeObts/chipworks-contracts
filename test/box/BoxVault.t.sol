@@ -204,8 +204,6 @@ contract BoxVaultTest is BoxTestBase {
 
     function _newPair() internal returns (Box thinBox, PrizeVault thinVault) {
         thinVault = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
-        thinBox = new Box(
-            multisig, address(usdc), address(chip), treasury, address(thinVault), address(entropy), CHIP1, CHIP5
-        );
+        thinBox = _newBox(address(thinVault), address(chip), CHIP1, CHIP10, CHIP25);
     }
 }
