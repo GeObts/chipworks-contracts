@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
 import {IPrizeVault} from "../../src/interfaces/IPrizeVault.sol";
 import {BoxTestBase} from "./BoxTestBase.sol";
@@ -202,7 +203,11 @@ contract BoxTest is BoxTestBase {
     }
 
     function test_chipDisabledWhenPriceZero() public {
-        Box bare = _newBox(address(vault), address(chip), 0, CHIP10, CHIP25);
+        PrizeVault v = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
+        Box bare = _newBox(address(v), address(chip), 0, CHIP10, CHIP25);
+        vm.prank(multisig);
+        v.setBox(address(bare));
+
         vm.prank(alice);
         usdc.approve(address(bare), type(uint256).max);
         vm.prank(alice);

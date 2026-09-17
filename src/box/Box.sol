@@ -36,7 +36,8 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///
 ///      RANDOMNESS IS PYTH ENTROPY V2. {open} is payable. It reads {getFeeV2} for the
 ///      configured callback gas limit, forwards that exact fee, and refunds any excess
-///      ETH (M-08). {open}/{retryOpen} revert unless {IPrizeVault.box} == this (H-04).
+///      ETH (M-08). {buy*}/{open}/{retryOpen} revert unless {IPrizeVault.box} == this
+///      (H-04 / H-01: no payment into an unwired vault).
 ///      The Entropy contract later calls {entropyCallback}. That callback must not
 ///      revert: a failing {IPrizeVault.settle} is recorded as {SettleFailed} and the
 ///      NFT is left intact (no silent burn). Basescan sees {BoxOpeningRequested} then
@@ -48,9 +49,10 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      a SKU ({exists: false}) while {sealedSupply} > 0 reverts (H-03).
 ///
 ///      $CHIP AND USDC ARE BOTH LIVE PAYMENT ASSETS. Launch token is {DEFAULT_CHIP} on Base.
-///      `chip == address(0)` or a SKU `chipPrice == 0` still disables the CHIP path (tests /
-///      a future USDC-only deploy) without affecting USDC. CHIP is never a prize stock (H-01).
-///      The 5% recipient defaults to {DEFAULT_FEE_RECIPIENT} in scripts and tests.
+///      {IPrizeVault.chip} MUST equal {chip} at construct (H-01 symmetry). `chip == address(0)`
+///      (with a matching vault) or a SKU `chipPrice == 0` still disables the CHIP path without
+///      affecting USDC. {buyWithUsdc}/{buyWithChip} revert unless {IPrizeVault.box} == this, so
+///      an unwired vault cannot receive payment working capital. CHIP is never a prize stock.
 contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Strings for uint256;
@@ -230,6 +232,10 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         }
         if (vault_ == address(0) || entropy_ == address(0)) revert ZeroAddress();
         if (chip_ == usdc_) revert BadConfig();
+        // H-01: vault.chip and Box.chip must match. A chip=0 vault with a CHIP Box would
+        // leave buy-funded working capital rescueable until {setBox}.
+        if (IPrizeVault(vault_).chip() != chip_) revert BadConfig();
+        if (IPrizeVault(vault_).usdc() != usdc_) revert BadConfig();
         usdc = usdc_;
         chip = chip_;
         treasury = treasury_;
@@ -544,6 +550,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     function _buy(uint8 skuId, address to, address token, uint256 price) internal returns (uint256 tokenId) {
         if (to == address(0)) revert ZeroAddress();
         if (price == 0) revert BadConfig();
+        // H-01 / H-04: do not take payment (especially CHIP) until this Box can settle.
+        if (IPrizeVault(vault).box() != address(this)) revert VaultNotWired();
 
         uint256 fee = price * FEE_BPS / WEIGHT_DENOM;
         uint256 toVault = price - fee;

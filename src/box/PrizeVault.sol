@@ -141,8 +141,8 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     /// @param multisig      Owner. Two-step.
     /// @param usdc_         USDC on Base. 6 decimals.
-    /// @param chip_         $CHIP token. Launch default {DEFAULT_CHIP}. `address(0)` still
-    ///                      protects {DEFAULT_CHIP} and, after {setBox}, {Box.chip}.
+    /// @param chip_         $CHIP token. Launch default {DEFAULT_CHIP}. Must match {Box.chip}.
+    ///                      `address(0)` is USDC-only and still protects {DEFAULT_CHIP}.
     /// @param maxPrizeBps_  Single-prize cap vs inventory. Launch at 2_500 (25%).
     constructor(address multisig, address usdc_, address chip_, uint32 maxPrizeBps_) Ownable(multisig) {
         if (multisig == address(0) || usdc_ == address(0)) revert ZeroAddress();
@@ -166,7 +166,8 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         if (v == address(0)) revert ZeroAddress();
         if (box != address(0)) revert AlreadyWired();
         address boxChip = IBox(v).chip();
-        if (chip != address(0) && boxChip != address(0) && boxChip != chip) revert BadConfig();
+        // H-01: constructor chip and Box.chip must be the same token (including both zero).
+        if (boxChip != chip) revert BadConfig();
         // H-01: refuse to wire a Box whose CHIP was already registered as prize stock.
         if (boxChip != address(0) && _stocks[boxChip].registered) revert ProtectedAsset(boxChip);
         box = v;

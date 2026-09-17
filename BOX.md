@@ -32,7 +32,7 @@ Constructor args filled at deploy, not in bytecode:
 - `$CHIP` token — **deploy default is the live Base token** `0x75Af968d2e58749FDA1b42C58186B76f5E511bA3` (`Box.DEFAULT_CHIP`). Pass `address(0)` only to disable `{buyWithChip}`. USDC and `$CHIP` are both live payment assets.
 - 5% fee recipient (`treasury` / `feeRecipient`) — **default is Goyabean's Safe** `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). Constructor still takes the address so a deploy can override; a live change is 48h-timelocked with a 14-day grace window.
 
-`PrizeVault` takes the same `$CHIP` address. `{rescue}`, `{addStock}` and surplus withdraw all refuse CHIP — it is payment working capital, never prize inventory (H-01). The live Base CHIP address is protected even if the constructor was passed `address(0)`.
+`PrizeVault` takes the same `$CHIP` address. `{Box}` construction reverts unless `vault.chip == Box.chip` (and matching USDC). `{buy*}` revert unless `vault.box == this`. `{rescue}`, `{addStock}` and surplus withdraw all refuse CHIP — it is payment working capital, never prize inventory (H-01). `{settle}` will not pay CHIP. The live Base CHIP address is protected even if the constructor was passed `address(0)`.
 
 USDC on Base is `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (`Box.DEFAULT_USDC`, 6 dp). Pyth Entropy v2 on Base is `0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb`.
 
@@ -75,7 +75,7 @@ Call `previewDraw(randomNumber, skuId)` rather than reimplementing it. `test_eve
 | H-04 | `open` with `vault.box` unset → Entropy callback `settle` reverts → silent burn | `open`/`retryOpen` revert unless `vault.box()==this`. Failed settle emits `SettleFailed`, does not burn. |
 | H-03 | `outstandingLiabilityUsd` revert (retired SKU) zeroed the surplus floor | Surplus fail-closes on a failed liability call. `executeSku` cannot set `exists=false` while `sealedSupply>0`. Liability is the mint-EV running total. |
 | H-02 | Fake/owner-set stock feed inflated `inventoryUsd`, surplus drained USDC | Surplus leftover floor is **USDC only**. |
-| H-01 | `rescue(CHIP)` / `addStock(CHIP)` / surplus-as-inventory drained working capital | CHIP is a payment asset: constructor `chip`, `{Box.chip()}`, and `{DEFAULT_CHIP}` are refused by `{rescue}`, `{addStock}`, and surplus withdraw. `{setBox}` reverts if CHIP is already registered as stock. Deploy default is live CHIP. |
+| H-01 | `rescue(CHIP)` / `addStock(CHIP)` / surplus / settle / unwired-buy drained working capital | **CLOSED.** `Box` constructor requires `vault.chip == Box.chip` (and matching USDC). `{buy*}` revert unless `vault.box == this`, so CHIP cannot land in an unwired vault. `{rescue}`, `{addStock}`, surplus withdraw, and `{settle}` all refuse CHIP (constructor chip, `{Box.chip}` after wire, and `{DEFAULT_CHIP}`). |
 | H-05 | Live SKU/odds rewrote sealed tickets (`$1` paid `$25`-tier) | Each box snapshots `faceUsd`, `oddsVersion`, `mintEvUsd` at mint. Launch table stays 6-tier. |
 | M-08 | Entropy fee | `{open}` forwards `getFeeV2` exactly and refunds excess (unit test + optional Base fork). |
 
@@ -99,7 +99,7 @@ Default recipient: `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FE
 ## Entropy (Pyth v2)
 
 1. UI calls `quoteOpenFee()` → `entropy.getFeeV2(callbackGasLimit)`.
-2. Owner of a **sealed** box calls `open{value: fee}(tokenId)`. Excess ETH is refunded; Entropy does not refund. `{open}` / `{retryOpen}` revert unless `PrizeVault.box() == address(Box)` (H-04).
+2. Owner of a **sealed** box calls `open{value: fee}(tokenId)`. Excess ETH is refunded; Entropy does not refund. `{buy*}` / `{open}` / `{retryOpen}` revert unless `PrizeVault.box() == address(Box)` (H-04 / H-01: payment cannot hit an unwired vault).
 3. Box stores the sequence, locks the NFT (not transferable, still owned).
 4. Entropy later calls `entropyCallback(sequence, provider, randomNumber)` — the Pyth v2 consumer selector (`_entropyCallback` is an alias).
 5. Callback **must not revert**. A failing vault settle emits `{SettleFailed}` and **does not burn** the NFT (ownerOf unchanged). An honest shortfall (empty inventory) is still a successful settle call and burns as before.
@@ -114,7 +114,7 @@ Default `callbackGasLimit` is 500,000 (stock loop + transfers). Owner can retune
 - Never transfer more of a token than `balanceOf(this)`.
 - Single prize capped at `maxPrizeBps` of live USD inventory (launch 2,500 = 25%; ceiling 50%). Lowering the cap is immediate; raising it is timelocked.
 - Stock pick: `uint256(entropy) % n`, then walk the list. Empty, thin, disabled, dead-feed, or reverting-transfer stocks are skipped (`StockSkipped`) and the next one is tried.
-- If no B20 can fill the (capped) prize, pay USDC.
+- If no B20 can fill the (capped) prize, pay USDC. Never pay `$CHIP`.
 - If USDC cannot fill it either, pay what is there and set `shortfall`. The open still completes.
 - B20 tokens are identified **by address**, never by ticker. Feeds may hold last close over the weekend; a bad feed skips that stock instead of bricking the callback.
 - `{open}` uses the **mint snapshot** of face USDC and odds version (H-05). `{executeSku}` / `{executeOdds}` cannot rewrite a sealed ticket. `{executeSku}` cannot set `exists = false` while `sealedSupply[id] > 0` (H-03).
