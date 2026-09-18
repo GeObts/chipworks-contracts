@@ -820,7 +820,7 @@ Needs: `MULTISIG`, `ChipClaims`.
 
 **One leg now.** The router used to make a second claim against a Clutch vault. That leg is
 gone: Clutch's `claim` is permissioned to the owner of record and reverts `NotOwner()` for
-any other caller, so a router could never have used it (CLUTCH_RECON section 4), and
+any other caller, so a router could never have used it ([docs/archive/CLUTCH_RECON.md](docs/archive/CLUTCH_RECON.md) section 4), and
 Chipworks' own activation vault has nothing to claim — activation is a burned cost, not a
 position that accrues. There is no vault registry argument any more and no `sweepTokens`
 parameter on the claim.

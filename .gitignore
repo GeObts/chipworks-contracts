@@ -2,7 +2,16 @@ out/
 cache/
 broadcast/
 .env
-docs/
+.env.*
+!.env.example
+*.pem
+id_rsa
+id_rsa.pub
+*.keystore
+
+# local scratch only — tracked docs live in docs/archive/
+docs/local/
+
 feeds.tmp.json
 safecalls-phase1-DRAFT.txt
 safecalls-phase1.json

@@ -1,5 +1,8 @@
 # CLUTCH_RECON.md
 
+> **Archived.** ChipWorks does not use Clutch. This is a historical recon file, not a product
+> surface. Production activation is `src/activation/ChipActivation.sol`.
+
 On-chain reconnaissance of the Clutch Anvil protocol, run 2026-08-30 because the Discord is
 gated. Settles the seven Clutch assumptions in `ASSUMPTIONS.md` against **deployed, live
 contracts** rather than documentation prose.

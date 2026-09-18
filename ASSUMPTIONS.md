@@ -38,7 +38,7 @@ our own design decisions, none of which involved Clutch.
 
 ## Part 0 — SETTLED ON CHAIN, 2026-08-30
 
-**Full report: `CLUTCH_RECON.md`.** Since the Discord is gated, the seven Clutch assumptions
+**Full report: [`docs/archive/CLUTCH_RECON.md`](docs/archive/CLUTCH_RECON.md).** Since the Discord is gated, the seven Clutch assumptions
 were tested against deployed contracts instead. Summary:
 
 - **No Clutch deployment exists on Base.** All four known factory/router addresses are empty
@@ -49,10 +49,10 @@ were tested against deployed contracts instead. Summary:
   the V2 generation ships `NFTStakingVault` (deposit-based) while non-custodial soft staking
   appears only in V3. The docs misled me; spec section 2 had it correct all along.
 - **A-2 detail:** `AMMFactoryV3` + `SoftStakingVaultV3` are deployed on
-  Robinhood Chain. See `CLUTCH_LICENSES.md` §4a.
+  Robinhood Chain. See [`docs/archive/CLUTCH_LICENSES.md`](docs/archive/CLUTCH_LICENSES.md) §4a.
 - **LICENCE BLOCKER: the V3 code is BUSL-1.1**, not open source. Forking it for production
   needs a licence from Clutch unless their Additional Use Grant covers us. The older ApeChain
-  v2 code is MIT. See `CLUTCH_LICENSES.md`.
+  v2 code is MIT. See [`docs/archive/CLUTCH_LICENSES.md`](docs/archive/CLUTCH_LICENSES.md).
 - **A-8 IS NOW IN DOUBT** — V3's natspec says voiding is atomic on transfer, which
   contradicts the finding below. Needs re-verification before anything depends on it.
 - ~~**A-8 CONFIRMED, and observed live.**~~ A scan of one Robinhood vault found 14 activations,
@@ -65,7 +65,7 @@ were tested against deployed contracts instead. Summary:
   live NFT owner.
 - **A-9 CONFIRMED and then some.** `claim()` reverts `NotOwner()` for any caller who is not
   the owner of record — which means ClaimRouter's Clutch leg cannot work as designed. See
-  CLUTCH_RECON §4 for the three options.
+  [`docs/archive/CLUTCH_RECON.md`](docs/archive/CLUTCH_RECON.md) §4 for the three options.
 
 Caveat that matters: this is **v2 on Robinhood**, and the Base target is nominally "V3", so
 the interface could differ again. Nothing has been changed in the code on the strength of it.
