@@ -596,7 +596,7 @@ against the real factory; `ClaimRouter` leg isolation and the sweep.
 
 **`ClaimRouter` lost its second leg.** It used to claim against a Clutch vault as well. That
 call was permissioned to the owner of record and would have reverted for a router on every
-invocation (CLUTCH_RECON section 4), and there is no second reward stream now in any case —
+invocation ([docs/archive/CLUTCH_RECON.md](docs/archive/CLUTCH_RECON.md) section 4), and there is no second reward stream now in any case —
 activation is a burned cost, not a position that accrues. The router is a batch of
 `ChipClaims.claimFor` calls and nothing else: no vault registry, no `sweepTokens` argument,
 4,213 bytes down to 3,149. The properties that were never about Clutch all still hold and
@@ -874,7 +874,7 @@ removed, not deferred, and `ClutchVaultAdapter` is retired in place: it still co
 still has tests, it implements the same `IActivationSource`, and it **is not deployed**. If
 you want to skip it, skip it; nothing on Base will point at it.
 
-Three things settled it, all of them recorded in `CLUTCH_RECON.md` and `CLUTCH_LICENSES.md`:
+Three things settled it, all of them recorded in [`docs/archive/CLUTCH_RECON.md`](docs/archive/CLUTCH_RECON.md) and [`docs/archive/CLUTCH_LICENSES.md`](docs/archive/CLUTCH_LICENSES.md):
 
 1. **No Base deployment, and no reply.** Clutch ships on ApeChain (33139) and Robinhood
    (4663) only. All four known factory and router addresses are empty on Base. Deploying

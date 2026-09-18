@@ -1,45 +1,67 @@
-# Chipworks contracts
+# ChipWorks contracts
 
-> ## 🔍 Reviewing this code? Start at **[REVIEW_PACKAGE.md](REVIEW_PACKAGE.md)**.
->
-> It is the self-contained reviewer entry point: how to build and run the 593 tests (553 need
-> no RPC), the eleven-contract inventory grouped by blast radius, the 22 invariants we claim,
-> which open items are accepted-by-design versus genuinely open, and how we would like
-> severity judged against the launch caps currently in effect.
->
-> Check out the **`review-1`** tag — identical contracts to `launch-candidate-1`, plus the
-> review package. Findings are processed per **[TRIAGE.md](TRIAGE.md)**.
->
-> **Not audited. Not deployed.** Launch caps are in effect until independent review completes.
+ChipWorks on Base lets holders of Lil Based Nouns, Based Nouns, DarkNOUNs, and Chiplets earn Coinbase B20 tokenized stocks. Burn `$CHIP` to activate a Noun without moving it; activation dies the moment the Noun is sold (a Noun locked as loan collateral is the deliberate exception and keeps earning for the borrower). Protocol fee streams fund permissionless 24-hour rounds. Around that core: Box gacha, Noun-backed `$CHIP` loans, a Morpho helper to borrow USDC against tokenized stocks, Anvil (FIFO Noun sales), the Chiplet Furnace, and a `$CHIP` lottery wrapper.
 
-Lil Based Nouns, Based Nouns and DarkNOUNs earn Coinbase B20 tokenized stocks on Base, funded
-by protocol fee streams, in permissionless 24-hour rounds.
+**This repo is the contracts.** The product site is [getchipped.xyz](https://getchipped.xyz); its app source is [`GeObts/chipworks`](https://github.com/GeObts/chipworks) (may be private). Contracts live here. The site lives there.
 
-Holders opt in by burning $CHIP to activate a Noun at a tier. Activation is non-custodial —
-the Noun never leaves the wallet — and it is void the moment the Noun changes hands, computed
-on every read rather than stored, so a sold Noun stops earning in the same block with no
-keeper involved. A Noun locked as loan collateral is the deliberate exception: it keeps
-earning for its borrower.
+## Start here for judges
 
-Start here:
+1. [Live site](https://getchipped.xyz) — what users actually see
+2. [REVIEW_PACKAGE.md](REVIEW_PACKAGE.md) — how to build, what’s in scope, how to judge findings
+3. [SITE_MORPHO_API.md](SITE_MORPHO_API.md) — Morpho vault + stock-borrow helper (**live** on Base)
+4. [BOX.md](BOX.md) — sealed-box gacha (**unaudited, not deployed**)
+5. [Frontend repo](https://github.com/GeObts/chipworks) — sister app for getchipped.xyz
 
-| Document | What it is |
-|---|---|
-| [AUDIT_BRIEF.md](AUDIT_BRIEF.md) | Contract list, dependencies, claimed invariants, what to attack first |
-| [ASSUMPTIONS.md](ASSUMPTIONS.md) | Every guess about a contract we do not control, and every decision you can overrule |
-| [OPEN_ITEMS.md](OPEN_ITEMS.md) | What is still unresolved |
-| [LAUNCH_CONFIG.md](LAUNCH_CONFIG.md) | **The runbook.** Locked launch parameters merged with the deploy sequence — start here on the day |
-| [DEPLOY.md](DEPLOY.md) | Deploy order, constructor arguments, verified addresses, and why each is wired that way |
-| [RESCAN_NOTE.md](RESCAN_NOTE.md) | What changed since the audit closed, and what to re-scan |
-| [BURN_VISIBILITY.md](BURN_VISIBILITY.md) | What is destroyed and how. **Both Chiplets and $CHIP are now real burns** — the `ChipBurner` owns the token — and the aggregator filing this file used to require is no longer needed |
-| [SITE_CLAIM_API.md](SITE_CLAIM_API.md) · [SITE_LOAN_API.md](SITE_LOAN_API.md) | What the site must get right: the claim-batch gas formula, and the loan deadline UX |
-| [B20_DOCS.md](B20_DOCS.md) | Base's tokenized-stock documentation, filed verbatim — the source the B20 reconciliation in ASSUMPTIONS is checked against |
-| [CLUTCH_RECON.md](CLUTCH_RECON.md) · [CLUTCH_LICENSES.md](CLUTCH_LICENSES.md) | Why Chipworks runs its own activation vault instead of depending on Clutch |
+## Status (honest)
+
+ChipWorks contracts are **not a completed independent audit.** Do not quote this repo as “audited” or “fully audited.”
+
+| Surface | Deploy | Review |
+|---|---|---|
+| Earn / activation / rounds / claims, Noun loans, Anvil, Furnace, POL | Deployed and verified on Base — addresses in [`verify-json/`](verify-json/_initcode_index.json) | Iterative **external review** through tag `launch-candidate-22`. Named gaps remain: `StockRegistry` never had its own review batch; `ChipClaims` lows were never received. See [REVIEW_PACKAGE.md](REVIEW_PACKAGE.md) and [TRIAGE.md](TRIAGE.md). |
+| Morpho `ChipBorrowHelper` + Chipworks USDC vault (`cwUSDC`) | **Live** (2026-09-17). Helper `0x36C7f9Ed1ffF7FD6305874837b257C3Bfa8FDff6`, vault `0x6B0EF5dd1cED6E26c384E4CcAf72f9dC0A1093d6` | Two targeted review rounds (Bankr, Grok) before deploy — not a public audit report. |
+| Box gacha (`src/box/`) | **Not deployed** | Unaudited. Highs H-01–H-05 from the Box review are closed; that is not a completed audit. |
+
+`$CHIP` itself is Bankr/Doppler infrastructure. ChipWorks’ own contracts are a separate surface.
+
+## Build and test
+
+Foundry · Solidity **0.8.24** · EVM **cancun** · OpenZeppelin **v5.1.0** · optimizer 200 runs · no `via_ir`. Pinned in [`foundry.toml`](foundry.toml).
 
 ```bash
-cp .env.example .env      # add a Base archive RPC
-forge test                # everything
-forge test --no-match-contract Fork   # no RPC needed
+git submodule update --init --recursive
+cp .env.example .env          # set BASE_RPC_URL for fork tests (archive node; public Base RPC will rate-limit)
+forge test --no-match-contract Fork   # unit / fuzz / invariant — no RPC
+forge test                            # full suite, including Base-fork tests
 ```
 
-Phase 1 is feature-complete and no longer blocked on anyone. Not audited. Not deployed.
+Deploy keys: there is no `PRIVATE_KEY` in `.env.example`. Use an encrypted Foundry keystore (`cast wallet import`) and pass `--account`.
+
+## Docs
+
+### Product
+
+- [BOX.md](BOX.md) — Box gacha brief (SKUs, odds, vault rules)
+- [BURN_VISIBILITY.md](BURN_VISIBILITY.md) — what is actually burned vs sent to `0xdead`
+- [B20_DOCS.md](B20_DOCS.md) — Base tokenized-stock docs, filed verbatim
+
+### Security review
+
+- [REVIEW_PACKAGE.md](REVIEW_PACKAGE.md) — reviewer entry point
+- [AUDIT_BRIEF.md](AUDIT_BRIEF.md) — contract inventory, claimed invariants, what to attack first
+- [TRIAGE.md](TRIAGE.md) — every finding, including disputed ones
+- [OPEN_ITEMS.md](OPEN_ITEMS.md) · [ASSUMPTIONS.md](ASSUMPTIONS.md) · [RESCAN_NOTE.md](RESCAN_NOTE.md)
+
+### Deploy
+
+- [DEPLOY.md](DEPLOY.md) — order, constructor args, why each wire exists
+- [DEPLOY_CHECKLIST.md](DEPLOY_CHECKLIST.md) — live run sheet
+- [LAUNCH_CONFIG.md](LAUNCH_CONFIG.md) — locked launch parameters + sequence
+
+### Site integration
+
+- [SITE_CLAIM_API.md](SITE_CLAIM_API.md) — `ClaimRouter` batching and gas
+- [SITE_LOAN_API.md](SITE_LOAN_API.md) — Noun loan deadlines and grace
+- [SITE_MORPHO_API.md](SITE_MORPHO_API.md) — lend/borrow on Morpho as the contracts expose it
+
+Historical recon (Clutch, log dumps) lives under [`docs/archive/`](docs/archive/) — not part of the current product.

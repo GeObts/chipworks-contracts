@@ -1,5 +1,8 @@
 # CLUTCH_LICENSES.md
 
+> **Archived.** ChipWorks does not use Clutch. Legal check of contracts we never copied.
+> Not a product surface.
+
 Licence audit of every Clutch contract read during `CLUTCH_RECON.md`. **Legal check only —
 no Clutch code has been copied, adapted, or referenced in our source.**
 

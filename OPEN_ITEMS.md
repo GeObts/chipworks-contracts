@@ -25,10 +25,10 @@ tests, and it is not deployed.
 Three things settled it, in increasing order of how decisive they were:
 
 1. **No Base deployment, and no reply.** Four known Clutch factory/router addresses, all
-   empty on Base (`CLUTCH_RECON.md` §1).
+   empty on Base ([`docs/archive/CLUTCH_RECON.md`](docs/archive/CLUTCH_RECON.md) §1).
 2. **BUSL-1.1.** The V3 generation that has non-custodial soft staking is source-available,
    not open source. The MIT generation on ApeChain has no soft-staking vault at all — it
-   ships `NFTStakingVault`, custodial deposit (`CLUTCH_LICENSES.md`).
+   ships `NFTStakingVault`, custodial deposit ([`docs/archive/CLUTCH_LICENSES.md`](docs/archive/CLUTCH_LICENSES.md)).
 3. **Their custody semantics cannot express ours**, and this one would have decided it even
    with a Base deployment and a licence. Clutch voids an activation when the NFT moves, full
    stop. Chipworks needs a Noun locked as loan collateral to keep earning **for the
@@ -64,7 +64,7 @@ whose failure would misallocate rewards.
 
 ### 0b. CANCELLED: the `VerifyClutchV3` script
 
-Was to re-verify A-8 against `SoftStakingVaultV3`'s real logic, because `CLUTCH_LICENSES.md`
+Was to re-verify A-8 against `SoftStakingVaultV3`'s real logic, because [`docs/archive/CLUTCH_LICENSES.md`](docs/archive/CLUTCH_LICENSES.md)
 §4b found V3's natspec claiming atomic voiding while the recon observed five stale records
 live. **Moot.** We do not call Clutch, the question only affected a vault we no longer use,
 and the BUSL licence made reading that code for anything beyond comprehension awkward anyway.
