@@ -1,0 +1,11 @@
+setMinLiquidityUsd
+├── given the stock is enabled
+│   ├── when measured liquidity is below the new minimum
+│   │   └── it disables the stock and emits EnabledUpdated
+│   ├── when measured liquidity equals or exceeds the new minimum
+│   │   └── it keeps the stock enabled
+│   └── when liquidity cannot be read
+│       └── it stores the new minimum and disables the stock
+└── given the stock is disabled
+    └── when the updated gate passes
+        └── it remains disabled until explicitly enabled
