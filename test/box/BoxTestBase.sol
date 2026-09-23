@@ -177,6 +177,35 @@ contract BoxTestBase is Test {
         return bytes32(acc);
     }
 
+    /// @dev A second, UNWIRED vault on the same mocks, plus (for a CHIP box) a second converter.
+    function _freshVaultAndConverter(address chip_) internal returns (PrizeVault v, ChipConverter c) {
+        v = new PrizeVault(multisig, address(usdc), chip_, address(registry), address(router), address(router), 2_500);
+        if (chip_ != address(0)) {
+            c = new ChipConverter(
+                multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), address(ethFeed), 500, _key()
+            );
+        }
+    }
+
+    /// @dev A second fully wired Box/vault/converter (CHIP enabled), vault seeded with `seedUsdc`,
+    ///      alice and bob approved. No stocks listed.
+    function _newWiredPair(uint256 seedUsdc) internal returns (Box b, PrizeVault v, ChipConverter c) {
+        (v, c) = _freshVaultAndConverter(address(chip));
+        b = _newBox(address(v), address(chip), address(c));
+        vm.startPrank(multisig);
+        v.setBox(address(b));
+        c.setBox(address(b));
+        vm.stopPrank();
+        if (seedUsdc != 0) usdc.mint(address(v), seedUsdc);
+        address[2] memory who = [alice, bob];
+        for (uint256 i; i < 2; ++i) {
+            vm.startPrank(who[i]);
+            usdc.approve(address(b), type(uint256).max);
+            chip.approve(address(b), type(uint256).max);
+            vm.stopPrank();
+        }
+    }
+
     function _skuUsd(uint8 skuId) internal pure returns (uint256) {
         if (skuId == SKU1) return USD1;
         if (skuId == SKU10) return USD10;
