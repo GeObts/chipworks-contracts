@@ -434,7 +434,9 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         uint32 top = _maxTierBpsAt(oddsVersion);
         for (uint8 i; i < MAX_SKUS; ++i) {
             Sku memory s = _skus[i];
-            if (!s.exists || s.paused) continue;
+            // A paused SKU still counts while any of its boxes are out: otherwise pausing the
+            // $25 SKU would shrink the sweep's reserve under jackpots already sold.
+            if (!s.exists || (s.paused && sealedSupply[i] == 0)) continue;
             uint256 p = uint256(s.usdcPrice) * top / WEIGHT_DENOM;
             if (p > m) m = p;
         }

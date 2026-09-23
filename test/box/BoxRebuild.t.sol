@@ -372,6 +372,22 @@ contract BoxRebuildTest is BoxTestBase {
         assertEq(vault.sweepableUsdc(), usdcNow - 3_600e6, "reserve floor binds when stock is gone");
     }
 
+    function test_sweep_pausingASkuDoesNotReleaseItsJackpotReserve() public {
+        vm.prank(alice);
+        boxes.buyWithUsdc(SKU25, alice); // one $25 box outstanding: a $900 jackpot is live
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU25, true);
+        assertEq(boxes.maxLivePrizeUsd(), 900e6, "still reserved while a sealed $25 box exists");
+        assertEq(vault.jackpotReserveUsd(), 3_600e6);
+
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU10, true);
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU1, true);
+        // Unsold, paused SKUs release nothing they were not holding.
+        assertEq(boxes.maxLivePrizeUsd(), 900e6);
+    }
+
     /* ------------------------------------------------------------------ */
     /*                   6. CHIP is never inventory                         */
     /* ------------------------------------------------------------------ */

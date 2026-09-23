@@ -59,7 +59,7 @@ interface IBox {
     function expectedValueUsd(uint8 skuId) external view returns (uint256);
     /// @notice Largest single prize a box of `skuId` can win under the current table.
     function maxPrizeUsd(uint8 skuId) external view returns (uint256);
-    /// @notice Largest single prize across every SKU currently on sale.
+    /// @notice Largest single prize across every SKU on sale or with boxes still outstanding.
     function maxLivePrizeUsd() external view returns (uint256);
     /// @notice True when the vault can pay this SKU's top prize in full right now.
     function isSkuCovered(uint8 skuId) external view returns (bool);
