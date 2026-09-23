@@ -46,9 +46,10 @@ import {ISlipstreamSwapRouter, IUniswapV3SwapRouter} from "../interfaces/ISwapRo
 ///      the USDC fallback are paid in USDC. The keeper cannot withdraw anything.
 ///
 ///      HOUSE TAKE -> FEE RECIPIENT. {sweepSurplus} is permissionless and pays only the Box's
-///      fee recipient (the FeeSplitter at launch: 80% Pot / 20% ops). It sends USDC above the
-///      HIGHER of two floors: USDC >= 110% of outstanding liability, and inventory >= the
-///      size needed to pay the largest prize on sale in full ({jackpotReserveUsd}).
+///      fee recipient (the FeeSplitter at launch: 80% Pot / 20% ops). It sends only USDC that
+///      clears ALL THREE floors: USDC >= 110% of outstanding liability; inventory >= the size
+///      needed to pay the largest prize on sale in full ({jackpotReserveUsd}); and USDC >=
+///      {minUsdcBps} of what remains (the share CHIP-tier prizes and the fallback draw on).
 contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -59,6 +60,8 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     uint32 public constant MAX_PRIZE_BPS_CEILING = 5_000;
     uint32 public constant SURPLUS_BUFFER_BPS = 11_000;
     uint32 public constant MAX_RESTOCK_SLIPPAGE_BPS = 500;
+    /// @notice The kept USDC share must leave room for stock, or restock could never run.
+    uint32 public constant MAX_MIN_USDC_BPS = 9_000;
     /// @notice Floor on {maxFeedAge}. B20 feeds hold the last close over a weekend.
     uint64 public constant MIN_FEED_AGE = 1 hours;
 
@@ -223,7 +226,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         external
         onlyOwner
     {
-        if (slippageBps > MAX_RESTOCK_SLIPPAGE_BPS || minUsdcBps_ > BPS) revert BadConfig();
+        if (slippageBps > MAX_RESTOCK_SLIPPAGE_BPS || minUsdcBps_ > MAX_MIN_USDC_BPS) revert BadConfig();
         maxRestockPerCall = perCall;
         maxRestockPerDay = perDay;
         restockSlippageBps = slippageBps;
@@ -461,7 +464,14 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         if (inv <= reserve) return 0;
         uint256 byReserve = inv - reserve;
 
-        return _usdToUsdc(byLiability < byReserve ? byLiability : byReserve);
+        // Keep the same USDC share {restock} keeps: CHIP-tier prizes and the fallback pay
+        // USDC. Solve usdc - x >= m * (inv - x) for x, with m = minUsdcBps / BPS < 1.
+        uint256 m = minUsdcBps;
+        if (usdcUsd * BPS <= m * inv) return 0;
+        uint256 byShare = (usdcUsd * BPS - m * inv) / (BPS - m);
+
+        uint256 x = byLiability < byReserve ? byLiability : byReserve;
+        return _usdToUsdc(x < byShare ? x : byShare);
     }
 
     /// @notice Send the pool's surplus USDC to the Box's fee recipient. Permissionless: the
