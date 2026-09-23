@@ -15,8 +15,6 @@ interface IPrizeVault {
         address stock;
         uint256 stockAmount;
         uint256 usdcAmount;
-        /// @notice Non-zero when the prize was handed to the ChipConverter to be delivered as CHIP.
-        uint256 chipPrizeId;
         bool capped;
         bool fallbackStock;
         bool usdcFallback;
@@ -31,5 +29,5 @@ interface IPrizeVault {
     function prizeCapUsd() external view returns (uint256);
     function stockCount() external view returns (uint256);
     function stockAt(uint256 index) external view returns (address);
-    function settle(address to, uint256 prizeUsd, bytes32 entropy, bool payInChip) external returns (Payout memory);
+    function settle(address to, uint256 prizeUsd, bytes32 entropy) external returns (Payout memory);
 }

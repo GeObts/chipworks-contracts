@@ -5,7 +5,6 @@ import {Box} from "../../src/box/Box.sol";
 import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
-import {IChipConverter} from "../../src/interfaces/IChipConverter.sol";
 import {BoxTestBase} from "./BoxTestBase.sol";
 
 contract BoxTest is BoxTestBase {
@@ -31,7 +30,6 @@ contract BoxTest is BoxTestBase {
         address stock,
         uint256 stockAmount,
         uint256 usdcAmount,
-        uint256 chipPrizeId,
         bool fallbackStock,
         bool usdcFallback
     );
@@ -61,20 +59,11 @@ contract BoxTest is BoxTestBase {
         assertEq(ev / boxes.WEIGHT_DENOM(), 9_100);
     }
 
-    function test_launchTableChipTiersAreDustAndCommonOnly() public view {
-        IBox.PrizeTier[] memory tiers = boxes.oddsTable();
-        assertTrue(tiers[0].payInChip, "Dust pays CHIP");
-        assertTrue(tiers[1].payInChip, "Common pays CHIP");
-        for (uint256 i = 2; i < tiers.length; ++i) {
-            assertFalse(tiers[i].payInChip, "Uncommon and up pay a stock");
-        }
-    }
-
     function test_everyRollMapsToATier() public view {
         uint16[6] memory weights = [uint16(4_500), 3_000, 1_500, 700, 250, 50];
         uint256[6] memory hits;
         for (uint256 roll; roll < 10_000; ++roll) {
-            (uint8 tierId,,,,) = boxes.previewDraw(bytes32(roll), SKU1);
+            (uint8 tierId,,,) = boxes.previewDraw(bytes32(roll), SKU1);
             hits[tierId] += 1;
         }
         for (uint256 i; i < 6; ++i) {
@@ -84,9 +73,9 @@ contract BoxTest is BoxTestBase {
 
     function test_prizeScalesWithSkuPrice() public view {
         bytes32 dust = bytes32(uint256(0));
-        (,, uint32 prizeBps, uint256 prize1,) = boxes.previewDraw(dust, SKU1);
-        (,, uint32 prizeBps10, uint256 prize10,) = boxes.previewDraw(dust, SKU10);
-        (,, uint32 prizeBps25, uint256 prize25,) = boxes.previewDraw(dust, SKU25);
+        (,, uint32 prizeBps, uint256 prize1) = boxes.previewDraw(dust, SKU1);
+        (,, uint32 prizeBps10, uint256 prize10) = boxes.previewDraw(dust, SKU10);
+        (,, uint32 prizeBps25, uint256 prize25) = boxes.previewDraw(dust, SKU25);
         assertEq(prizeBps, prizeBps10);
         assertEq(prizeBps, prizeBps25);
         assertEq(prize1, USD1 * prizeBps / 10_000);
@@ -110,16 +99,14 @@ contract BoxTest is BoxTestBase {
     function testFuzz_previewDrawIsDeterministic(bytes32 rand, uint8 skuPick) public view {
         uint8 skuId = skuPick % 3;
         uint256 price = _skuUsd(skuId);
-        (uint8 a, uint16 w, uint32 bps, uint256 usd, bool inChip) = boxes.previewDraw(rand, skuId);
-        (uint8 a2, uint16 w2, uint32 bps2, uint256 usd2, bool inChip2) = boxes.previewDraw(rand, skuId);
+        (uint8 a, uint16 w, uint32 bps, uint256 usd) = boxes.previewDraw(rand, skuId);
+        (uint8 a2, uint16 w2, uint32 bps2, uint256 usd2) = boxes.previewDraw(rand, skuId);
         assertEq(a, a2);
         assertEq(w, w2);
         assertEq(bps, bps2);
         assertEq(usd, usd2);
-        assertEq(inChip, inChip2);
         assertLt(a, 6);
         assertEq(usd, price * bps / 10_000);
-        assertEq(inChip, a < 2, "only Dust/Common pay CHIP");
     }
 
     /* ------------------------------------------------------------------ */
@@ -327,7 +314,7 @@ contract BoxTest is BoxTestBase {
         assertEq(id, 1);
     }
 
-    function test_noChipBoxDisablesChipPathAndChipTiers() public {
+    function test_noChipBoxDisablesChipPath() public {
         (PrizeVault v,) = _freshVaultAndConverter(address(0));
         Box bare = new Box(
             multisig, address(usdc), address(0), treasury, address(v), address(0), address(entropy), CHIP1, CHIP10, CHIP25
@@ -336,11 +323,7 @@ contract BoxTest is BoxTestBase {
         v.setBox(address(bare));
         usdc.mint(address(v), 200e6);
 
-        IBox.PrizeTier[] memory tiers = bare.oddsTable();
-        for (uint256 i; i < tiers.length; ++i) {
-            assertFalse(tiers[i].payInChip, "no converter, no CHIP tiers");
-        }
-        assertEq(bare.rtpBps(), 9_100, "same RTP either way");
+        assertEq(bare.rtpBps(), 9_100, "same table with or without a CHIP path");
 
         vm.startPrank(alice);
         usdc.approve(address(bare), type(uint256).max);
@@ -406,11 +389,10 @@ contract BoxTest is BoxTestBase {
     function test_fulfillBurnsAndPaysMatchingPreview() public {
         uint256 id = _buy1(alice);
         bytes32 rand = _rollForTier(2); // 1.00x -> $1, a stock tier
-        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd, bool inChip) = boxes.previewDraw(rand, SKU1);
+        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = boxes.previewDraw(rand, SKU1);
         assertEq(tierId, 2);
         assertEq(prizeUsd, USD1);
         assertEq(prizeBps, 10_000);
-        assertFalse(inChip);
 
         _openAndFulfill(alice, id, rand);
 
@@ -422,28 +404,36 @@ contract BoxTest is BoxTestBase {
         assertEq(nvda.balanceOf(alice), 1e6);
     }
 
-    function test_chipTierPrizeIsEscrowedOnConverter() public {
-        uint256 id = _buy1(alice);
-        bytes32 rand = _rollForTier(1); // Common, 0.50x -> $0.50 in CHIP
-        (uint8 tierId,,, uint256 prizeUsd, bool inChip) = boxes.previewDraw(rand, SKU1);
-        assertEq(tierId, 1);
-        assertTrue(inChip);
-        assertEq(prizeUsd, 500_000);
+    /// @notice Was `test_chipTierPrizeIsEscrowedOnConverter`. Dust and Common now pay a stock
+    ///         like every other tier: exact USD value, no $CHIP, nothing parked on the converter.
+    function test_dustAndCommonTiersPayStockNotChip() public {
+        uint256 aliceChip0 = chip.balanceOf(alice);
 
-        uint256 vault0 = usdc.balanceOf(address(vault));
-        uint256 prizeId = converter.nextPrizeId();
-        _openAndFulfill(alice, id, rand);
+        // Common, 0.50x -> $0.50. Roll 4500 is even -> NVDA first. $0.50 at $100 = 0.005 NVDA.
+        uint256 id = _buy1(alice);
+        bytes32 rand = _rollForTier(1);
+        (uint8 tierId,,, uint256 prizeUsd) = boxes.previewDraw(rand, SKU1);
+        assertEq(tierId, 1);
+        assertEq(prizeUsd, 500_000);
+        uint64 seq = _open(alice, id);
+        vm.expectEmit(true, true, true, true);
+        emit BoxOpened(alice, id, seq, SKU1, 1, 5_000, 500_000, address(nvda), 5e5, 0, false, false);
+        entropy.fulfill(seq, rand);
+        assertEq(nvda.balanceOf(alice), 5e5);
+
+        // Dust, 0.20x -> $0.20. Roll 0 -> NVDA first. $0.20 at $100 = 0.002 NVDA.
+        uint256 id2 = _buy1(alice);
+        _openAndFulfill(alice, id2, _rollForTier(0));
+        assertEq(nvda.balanceOf(alice), 5e5 + 2e5);
 
         vm.expectRevert();
         boxes.ownerOf(id);
-        assertEq(vault0 - usdc.balanceOf(address(vault)), prizeUsd, "vault paid the USD prize in USDC");
-        assertEq(converter.escrowedUsdc(), prizeUsd);
-        assertEq(usdc.balanceOf(address(converter)), prizeUsd);
-        IChipConverter.ChipPrize memory p = converter.chipPrize(prizeId);
-        assertEq(p.winner, alice);
-        assertEq(p.usdcAmount, prizeUsd);
-        assertFalse(p.settled);
-        assertEq(chip.balanceOf(alice), 100 * uint256(CHIP_PER_USD) * 100, "CHIP arrives later, from the converter");
+        vm.expectRevert();
+        boxes.ownerOf(id2);
+        assertEq(chip.balanceOf(alice), aliceChip0, "no prize is ever paid in CHIP");
+        assertEq(usdc.balanceOf(address(converter)), 0, "nothing escrowed on the converter");
+        assertEq(chip.balanceOf(address(converter)), 0);
+        assertEq(boxes.outstandingLiabilityUsd(), 0);
     }
 
     function test_gifteeOpensNotBuyer() public {
@@ -454,21 +444,21 @@ contract BoxTest is BoxTestBase {
         vm.expectRevert(Box.NotOwner.selector);
         boxes.open{value: fee}(id);
 
-        uint256 prizeId = converter.nextPrizeId();
         _openAndFulfill(bob, id, _rollForTier(0));
         vm.expectRevert();
         boxes.ownerOf(id);
-        assertEq(converter.chipPrize(prizeId).winner, bob, "Dust prize is escrowed for the giftee");
+        assertEq(nvda.balanceOf(bob), 2e5, "Dust ($0.20) paid to the giftee in NVDA");
+        assertEq(nvda.balanceOf(alice), 0);
     }
 
     function test_openEmitsDrawAndPrizeFields() public {
         uint256 id = _buy1(alice);
         bytes32 rand = _rollForTier(3); // 2.00x -> $2; roll 9000 even -> NVDA
-        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd,) = boxes.previewDraw(rand, SKU1);
+        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = boxes.previewDraw(rand, SKU1);
         uint64 seq = _open(alice, id);
 
         vm.expectEmit(true, true, true, true);
-        emit BoxOpened(alice, id, seq, SKU1, tierId, prizeBps, prizeUsd, address(nvda), 2e6, 0, 0, false, false);
+        emit BoxOpened(alice, id, seq, SKU1, tierId, prizeBps, prizeUsd, address(nvda), 2e6, 0, false, false);
         entropy.fulfill(seq, rand);
     }
 
@@ -566,7 +556,7 @@ contract BoxTest is BoxTestBase {
 
     function test_skuAndOddsChangesAreTimelocked() public {
         IBox.PrizeTier[] memory flat = new IBox.PrizeTier[](1);
-        flat[0] = IBox.PrizeTier({weight: 10_000, prizeBps: 9_000, payInChip: false});
+        flat[0] = IBox.PrizeTier({weight: 10_000, prizeBps: 9_000});
 
         vm.startPrank(multisig);
         boxes.queueSku(SKU1, true, uint96(2 * USD1), CHIP1);
@@ -589,10 +579,10 @@ contract BoxTest is BoxTestBase {
 
     function test_queueOddsRejectsBadTables() public {
         IBox.PrizeTier[] memory shortW = new IBox.PrizeTier[](1);
-        shortW[0] = IBox.PrizeTier({weight: 9_999, prizeBps: 9_000, payInChip: false});
+        shortW[0] = IBox.PrizeTier({weight: 9_999, prizeBps: 9_000});
         IBox.PrizeTier[] memory empty = new IBox.PrizeTier[](0);
         IBox.PrizeTier[] memory zeroBps = new IBox.PrizeTier[](1);
-        zeroBps[0] = IBox.PrizeTier({weight: 10_000, prizeBps: 0, payInChip: false});
+        zeroBps[0] = IBox.PrizeTier({weight: 10_000, prizeBps: 0});
 
         vm.startPrank(multisig);
         vm.expectRevert(Box.BadConfig.selector);

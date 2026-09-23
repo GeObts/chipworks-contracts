@@ -5,7 +5,6 @@ import {Box} from "../../src/box/Box.sol";
 import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
-import {IChipConverter} from "../../src/interfaces/IChipConverter.sol";
 import {IEntropyV2} from "../../src/interfaces/IEntropyV2.sol";
 import {IPrizeVault} from "../../src/interfaces/IPrizeVault.sol";
 import {Venue} from "../../src/interfaces/IStockRegistry.sol";
@@ -29,12 +28,11 @@ contract BoxAuditPoCTest is BoxTestBase {
         address stock,
         uint256 stockAmount,
         uint256 usdcAmount,
-        uint256 chipPrizeId,
         bool fallbackStock,
         bool usdcFallback
     );
     event PrizeOwed(
-        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool payInChip, bool capped
+        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
     );
 
     /* ------------------------------------------------------------------ */
@@ -101,14 +99,13 @@ contract BoxAuditPoCTest is BoxTestBase {
         uint64 seq = b2.boxInfo(id2).sequence;
 
         vm.expectEmit(true, true, true, true);
-        emit PrizeOwed(alice, id2, 0, 200_000, true, false); // roll 0 -> Dust 0.20x of $1, a CHIP tier
+        emit PrizeOwed(alice, id2, 0, 200_000, false); // roll 0 -> Dust 0.20x of $1
         entropy.fulfill(seq, bytes32(uint256(0)));
 
         assertEq(b2.ownerOf(id2), alice, "failed settle: ownerOf unchanged");
         IBox.BoxView memory v = b2.boxInfo(id2);
         assertEq(v.state, b2.STATE_OWED());
         assertEq(v.owedUsd, 200_000);
-        assertTrue(v.owedInChip);
         assertEq(b2.sealedSupply(SKU1), 1, "not retired");
         assertEq(b2.outstandingLiabilityUsd(), 200_000, "liability is now the exact owed prize");
         assertEq(b2.tokenIdOfSequence(seq), 0, "the sequence is spent: no second draw");
@@ -373,13 +370,15 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertEq(chip.balanceOf(address(vault)), chip0, "settle never spends vault CHIP");
         assertEq(vault.inventoryUsd(), usdc.balanceOf(address(vault)), "CHIP is not prize inventory");
 
-        // A CHIP-tier win is paid as USDC escrow on the converter, never as vault CHIP.
+        // Dust and Common pay like every other tier: here the USDC fallback, never CHIP.
         vm.prank(alice);
         uint256 id2 = boxes.buyWithUsdc(SKU10, alice);
-        _openAndFulfill(alice, id2, _rollForTier(0)); // Dust: $2 in CHIP
+        uint256 aliceUsdc1 = usdc.balanceOf(alice);
+        _openAndFulfill(alice, id2, _rollForTier(0)); // Dust: $2
+        assertEq(usdc.balanceOf(alice) - aliceUsdc1, 2e6, "Dust paid at its exact USD value");
         assertEq(chip.balanceOf(address(vault)), chip0);
         assertEq(chip.balanceOf(alice), aliceChip0);
-        assertEq(converter.escrowedUsdc(), 2e6);
+        assertEq(usdc.balanceOf(address(converter)), 0, "nothing escrowed on the converter");
     }
 
     /* ------------------------------------------------------------------ */
@@ -393,10 +392,9 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertEq(minted.oddsVersion, 0);
 
         bytes32 roll0 = bytes32(uint256(0));
-        (uint8 mintTier,, uint32 mintBps, uint256 mintPrize, bool mintInChip) = boxes.previewDraw(roll0, SKU1);
+        (uint8 mintTier,, uint32 mintBps, uint256 mintPrize) = boxes.previewDraw(roll0, SKU1);
         assertEq(mintTier, 0, "roll 0 is dust on the 6-tier launch table");
         assertEq(mintPrize, 200_000); // $0.20
-        assertTrue(mintInChip);
 
         // Raise SKU 0 to $25 and invert the table so the same roll is a 36x jackpot live.
         vm.startPrank(multisig);
@@ -411,31 +409,21 @@ contract BoxAuditPoCTest is BoxTestBase {
         vault.setStockEnabled(address(tsla), false);
         vm.stopPrank();
 
-        (,,, uint256 livePrize, bool liveInChip) = boxes.previewDraw(roll0, SKU1);
+        (,,, uint256 livePrize) = boxes.previewDraw(roll0, SKU1);
         assertEq(livePrize, 25_000_000 * 360_000 / 10_000, "live $25 x 36x = $900");
-        assertFalse(liveInChip);
         assertEq(boxes.sku(SKU1).usdcPrice, 25_000_000);
         assertEq(boxes.oddsTable().length, 6, "still six tiers");
 
-        uint256 prizeId = converter.nextPrizeId();
+        uint256 usdc0 = usdc.balanceOf(alice);
         uint64 seq = _open(alice, id);
 
         vm.expectEmit(true, true, true, true);
-        emit BoxOpened(alice, id, seq, SKU1, mintTier, mintBps, mintPrize, address(0), 0, mintPrize, prizeId, false, false);
+        emit BoxOpened(alice, id, seq, SKU1, mintTier, mintBps, mintPrize, address(0), 0, mintPrize, false, true);
         entropy.fulfill(seq, roll0);
 
-        // Paid as the mint-time CHIP-tier Dust prize: $0.20 escrowed for alice, not $900.
-        IChipConverter.ChipPrize memory p = converter.chipPrize(prizeId);
-        assertEq(p.winner, alice);
-        assertEq(p.usdcAmount, mintPrize, "$1 ticket pays mint dust, not live $25 jackpot");
-        assertEq(converter.escrowedUsdc(), mintPrize);
-
-        // Undelivered after 24h, the winner takes the exact USD value in USDC.
-        uint256 usdc0 = usdc.balanceOf(alice);
-        vm.warp(block.timestamp + 1 days);
-        converter.claimChipPrizeAsUsdc(prizeId);
+        // Paid the mint-time Dust prize, $0.20, at once (stocks off -> USDC fallback), not $900.
         uint256 paid = usdc.balanceOf(alice) - usdc0;
-        assertEq(paid, mintPrize);
+        assertEq(paid, mintPrize, "$1 ticket pays mint dust, not live $25 jackpot");
         assertTrue(paid != livePrize, "$1 ticket never pays $25-tier for the same roll");
     }
 
@@ -470,22 +458,22 @@ contract BoxAuditPoCTest is BoxTestBase {
         vm.stopPrank();
 
         uint256 live10Jackpot = USD1 * 360_000 / 10_000;
-        (,,, uint256 livePreview,) = boxes.previewDraw(roll0, SKU10);
+        (,,, uint256 livePreview) = boxes.previewDraw(roll0, SKU10);
         assertEq(livePreview, live10Jackpot);
         assertEq(boxes.outstandingLiabilityUsd(), m10.mintEvUsd + m25.mintEvUsd, "SKU rewrite does not move mint EV");
 
-        uint256 idA = converter.nextPrizeId();
+        uint256 usdc0 = usdc.balanceOf(alice);
         _openAndFulfill(alice, id10, roll0);
-        uint256 paid10 = converter.chipPrize(idA).usdcAmount;
+        uint256 paid10 = usdc.balanceOf(alice) - usdc0;
         assertEq(paid10, dust10, "$10 ticket pays mint 0.20x ($2), not live $1 jackpot");
         assertTrue(paid10 != live10Jackpot);
 
-        uint256 idB = converter.nextPrizeId();
+        uint256 usdc1 = usdc.balanceOf(alice);
         _openAndFulfill(alice, id25, roll0);
-        uint256 paid25 = converter.chipPrize(idB).usdcAmount;
+        uint256 paid25 = usdc.balanceOf(alice) - usdc1;
         assertEq(paid25, dust25, "$25 ticket pays mint 0.20x ($5), not inverted live table");
         assertLt(paid25, 25_000_000 * 360_000 / 10_000);
-        assertEq(converter.escrowedUsdc(), dust10 + dust25);
+        assertEq(usdc.balanceOf(address(converter)), 0, "nothing escrowed on the converter");
         assertEq(boxes.outstandingLiabilityUsd(), 0);
     }
 
@@ -613,12 +601,12 @@ contract BoxAuditPoCTest is BoxTestBase {
 
     function _inverted() internal pure returns (IBox.PrizeTier[] memory t) {
         t = new IBox.PrizeTier[](6);
-        t[0] = IBox.PrizeTier({weight: 4_500, prizeBps: 360_000, payInChip: false});
-        t[1] = IBox.PrizeTier({weight: 3_000, prizeBps: 80_000, payInChip: false});
-        t[2] = IBox.PrizeTier({weight: 1_500, prizeBps: 20_000, payInChip: false});
-        t[3] = IBox.PrizeTier({weight: 700, prizeBps: 10_000, payInChip: false});
-        t[4] = IBox.PrizeTier({weight: 250, prizeBps: 5_000, payInChip: false});
-        t[5] = IBox.PrizeTier({weight: 50, prizeBps: 2_000, payInChip: false});
+        t[0] = IBox.PrizeTier({weight: 4_500, prizeBps: 360_000});
+        t[1] = IBox.PrizeTier({weight: 3_000, prizeBps: 80_000});
+        t[2] = IBox.PrizeTier({weight: 1_500, prizeBps: 20_000});
+        t[3] = IBox.PrizeTier({weight: 700, prizeBps: 10_000});
+        t[4] = IBox.PrizeTier({weight: 250, prizeBps: 5_000});
+        t[5] = IBox.PrizeTier({weight: 50, prizeBps: 2_000});
     }
 
     function _hostileVault() internal returns (SettleReverter hostile) {
@@ -661,7 +649,7 @@ contract SettleReverter {
         return type(uint128).max;
     }
 
-    function settle(address, uint256, bytes32, bool) external pure returns (IPrizeVault.Payout memory) {
+    function settle(address, uint256, bytes32) external pure returns (IPrizeVault.Payout memory) {
         revert("settle down");
     }
 }

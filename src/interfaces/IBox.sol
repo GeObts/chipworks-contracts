@@ -15,12 +15,11 @@ interface IBox {
         uint128 chipPrice;
     }
 
-    /// @notice One row of the odds table. `payInChip` tiers are paid as $CHIP bought with
-    ///         the USD prize; the others in a B20 stock (USDC if no stock can cover it).
+    /// @notice One row of the odds table. Every tier pays a B20 stock (USDC if no stock can
+    ///         cover it). Prizes are never paid in $CHIP.
     struct PrizeTier {
         uint16 weight;
         uint32 prizeBps;
-        bool payInChip;
     }
 
     struct BoxView {
@@ -38,7 +37,6 @@ interface IBox {
         uint256 mintEvUsd;
         /// @notice The drawn prize, once drawn and not yet paid. Fixed: a claim pays exactly this.
         uint256 owedUsd;
-        bool owedInChip;
     }
 
     function usdc() external view returns (address);
@@ -70,7 +68,7 @@ interface IBox {
     function previewDraw(bytes32 randomNumber, uint8 skuId)
         external
         view
-        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd, bool payInChip);
+        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd);
     function boxInfo(uint256 tokenId) external view returns (BoxView memory);
     function tokenIdOfSequence(uint64 sequence) external view returns (uint256);
 

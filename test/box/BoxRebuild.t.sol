@@ -6,9 +6,8 @@ import {Box} from "../../src/box/Box.sol";
 import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
-import {IChipConverter} from "../../src/interfaces/IChipConverter.sol";
 
-/// @notice The rebuild's own properties: CHIP never parked, CHIP-tier prizes, never-short
+/// @notice The rebuild's own properties: CHIP never parked, stocks-only prizes, never-short
 ///         payouts, the sell gate, keeper restock and the house-take sweep. Every expected
 ///         amount follows from the base's round prices (NVDA $100, TSLA $200, ETH $2,000,
 ///         20,000 CHIP = $1).
@@ -68,24 +67,25 @@ contract BoxRebuildTest is BoxTestBase {
         vm.prank(keeper);
         converter.sellChip(CHIP10, 10e6 + 1, _deadline());
 
-        // The owner's band: $10 per 200k CHIP is $50 per million. A floor of $60 refuses it.
+        // The owner's floor: $10 per 200k CHIP is $50 per million. A floor of $60 refuses it,
+        // whatever minimum the keeper passes.
         vm.prank(multisig);
-        converter.setPriceBand(60e6, 0);
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.OutsidePriceBand.selector, 50e6, 60e6, 0));
+        converter.setPriceFloor(60e6);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.BelowPriceFloor.selector, 50e6, 60e6));
         vm.prank(keeper);
         converter.sellChip(CHIP10, 0, _deadline());
 
         // Per-call and per-day caps.
         vm.startPrank(multisig);
-        converter.setPriceBand(0, 0);
-        converter.setLimits(CHIP10 - 1, type(uint256).max, 5_000e6, 50_000e6);
+        converter.setPriceFloor(0);
+        converter.setLimits(CHIP10 - 1, type(uint256).max);
         vm.stopPrank();
         vm.expectRevert(abi.encodeWithSelector(ChipConverter.OverCap.selector, CHIP10, CHIP10 - 1));
         vm.prank(keeper);
         converter.sellChip(CHIP10, 0, _deadline());
 
         vm.prank(multisig);
-        converter.setLimits(CHIP10, CHIP10 / 2, 5_000e6, 50_000e6);
+        converter.setLimits(CHIP10, CHIP10 / 2);
         vm.expectRevert(abi.encodeWithSelector(ChipConverter.OverDailyCap.selector, CHIP10, CHIP10 / 2));
         vm.prank(keeper);
         converter.sellChip(CHIP10, 0, _deadline());
@@ -118,86 +118,25 @@ contract BoxRebuildTest is BoxTestBase {
     }
 
     /* ------------------------------------------------------------------ */
-    /*                     2. CHIP-tier prizes                              */
+    /*                  2. Prizes are stocks, never $CHIP                    */
     /* ------------------------------------------------------------------ */
 
-    function test_chipTier_escrowsUsdc_thenDeliversChip() public {
-        uint256 id = _buyUsdc(alice, SKU10);
-        uint256 vaultUsdc0 = usdc.balanceOf(address(vault));
-        _openAndFulfill(alice, id, _rollForTier(DUST)); // $2 prize, CHIP tier
-
-        assertEq(usdc.balanceOf(address(vault)), vaultUsdc0 - 2e6, "the $2 left the vault");
-        assertEq(converter.escrowedUsdc(), 2e6, "escrowed for alice");
-        IChipConverter.ChipPrize memory p = converter.chipPrize(1);
-        assertEq(p.winner, alice);
-        assertEq(p.usdcAmount, 2e6);
-        vm.expectRevert(); // burned
-        boxes.ownerOf(id);
-        assertEq(boxes.outstandingLiabilityUsd(), 0, "liability released: the pool has paid");
-
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = 1;
-        uint256 chip0 = chip.balanceOf(alice);
-        vm.prank(keeper);
-        uint256 got = converter.deliverChipPrizes(ids, 40_000 ether, _deadline());
-
-        // $2 -> 0.001 ETH -> 40,000 CHIP.
-        assertEq(got, 40_000 ether);
-        assertEq(chip.balanceOf(alice) - chip0, 40_000 ether, "winner holds the CHIP");
-        assertEq(chip.balanceOf(address(converter)), 0, "converter holds none of it");
-        assertEq(converter.escrowedUsdc(), 0);
-        assertTrue(converter.chipPrize(1).settled);
-    }
-
-    function test_chipTier_batchIsProRata_withNoDustLeft() public {
-        _openAndFulfill(alice, _buyUsdc(alice, SKU10), _rollForTier(DUST)); // $2
-        _openAndFulfill(bob, _buyUsdc(bob, SKU10), _rollForTier(COMMON)); // $5
-        uint256[] memory ids = new uint256[](2);
-        ids[0] = 1;
-        ids[1] = 2;
-        uint256 a0 = chip.balanceOf(alice);
-        uint256 b0 = chip.balanceOf(bob);
-        vm.prank(keeper);
-        converter.deliverChipPrizes(ids, 0, _deadline());
-        assertEq(chip.balanceOf(alice) - a0, 40_000 ether, "$2 of CHIP");
-        assertEq(chip.balanceOf(bob) - b0, 100_000 ether, "$5 of CHIP");
-        assertEq(chip.balanceOf(address(converter)), 0);
-    }
-
-    function test_chipTier_duplicateIdInBatchReverts() public {
-        _openAndFulfill(alice, _buyUsdc(alice, SKU10), _rollForTier(DUST));
-        uint256[] memory ids = new uint256[](2);
-        ids[0] = 1;
-        ids[1] = 1;
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.PrizeSettled.selector, 1));
-        vm.prank(keeper);
-        converter.deliverChipPrizes(ids, 0, _deadline());
-    }
-
-    function test_chipTier_undeliveredPaysUsdcAfterTimeout() public {
-        _openAndFulfill(alice, _buyUsdc(alice, SKU10), _rollForTier(DUST));
-        vm.expectRevert();
-        converter.claimChipPrizeAsUsdc(1);
-
-        vm.warp(block.timestamp + 1 days);
-        uint256 u0 = usdc.balanceOf(alice);
-        vm.prank(bob); // anyone may push it; it pays the winner
-        converter.claimChipPrizeAsUsdc(1);
-        assertEq(usdc.balanceOf(alice) - u0, 2e6, "winner gets the USDC instead");
-        assertEq(converter.escrowedUsdc(), 0);
-
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = 1;
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.PrizeSettled.selector, 1));
-        vm.prank(keeper);
-        converter.deliverChipPrizes(ids, 0, _deadline());
-    }
-
-    function test_rescueNeverTouchesEscrowedUsdc() public {
-        _openAndFulfill(alice, _buyUsdc(alice, SKU10), _rollForTier(DUST));
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.ProtectedAsset.selector, address(usdc)));
-        vm.prank(multisig);
-        converter.rescue(address(usdc), multisig, 1);
+    /// @dev Every tier, Dust to Jackpot, pays a stock at the registry mark. The rolls used here
+    ///      are all even, so the stock walk starts at NVDA ($100): the raw 8-dp NVDA paid equals
+    ///      the 6-dp USD prize exactly.
+    function test_everyTier_paysAStock_neverChip() public {
+        uint256[6] memory prize = [uint256(2e6), 5e6, 10e6, 20e6, 80e6, 360e6];
+        uint256 convChip0 = chip.balanceOf(address(converter));
+        for (uint8 t; t < 6; ++t) {
+            uint256 id = _buyUsdc(alice, SKU10);
+            uint256 n0 = nvda.balanceOf(alice);
+            uint256 c0 = chip.balanceOf(alice);
+            _openAndFulfill(alice, id, _rollForTier(t));
+            assertEq(nvda.balanceOf(alice) - n0, prize[t], "the exact prize, in NVDA");
+            assertEq(chip.balanceOf(alice), c0, "never paid in CHIP");
+        }
+        assertEq(chip.balanceOf(address(converter)), convChip0, "the converter is not involved");
+        assertEq(boxes.outstandingLiabilityUsd(), 0);
     }
 
     function test_stockTier_paysAStock() public {
@@ -208,7 +147,18 @@ contract BoxRebuildTest is BoxTestBase {
         uint256 gotN = nvda.balanceOf(alice) - n0;
         uint256 gotT = tsla.balanceOf(alice) - t0;
         assertTrue(gotN == 0.1e8 || gotT == 0.05e8, "$10 of NVDA ($100) or TSLA ($200)");
-        assertEq(converter.escrowedUsdc(), 0, "stock tiers never touch the converter");
+    }
+
+    function test_noStockCanCover_paysTheUsdcFallback() public {
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false);
+        vm.stopPrank();
+        // With the stocks out of inventory the pool is $10,000 of USDC: the $10 SKU is covered.
+        uint256 id = _buyUsdc(alice, SKU10);
+        uint256 u0 = usdc.balanceOf(alice);
+        _openAndFulfill(alice, id, _rollForTier(DUST)); // $2
+        assertEq(usdc.balanceOf(alice) - u0, 2e6, "the full $2, in USDC");
     }
 
     /* ------------------------------------------------------------------ */
@@ -410,26 +360,24 @@ contract BoxRebuildTest is BoxTestBase {
         assertEq(chip.balanceOf(address(vault)), 0, "no CHIP can be stuck here");
     }
 
-    function test_noConverter_meansNoChipTiers() public {
+    function test_noConverter_disablesChipPaymentsOnly() public {
         PrizeVault v3v = new PrizeVault(multisig, address(usdc), address(0), address(registry), address(router), address(router), 2_500);
         Box b3 = new Box(multisig, address(usdc), address(0), treasury, address(v3v), address(0), address(entropy), 0, 0, 0);
-        IBox.PrizeTier[] memory t = b3.oddsTable();
-        for (uint256 i; i < t.length; ++i) {
-            assertFalse(t[i].payInChip);
-        }
-        t[0].payInChip = true;
-        vm.expectRevert(Box.BadConfig.selector);
         vm.prank(multisig);
-        b3.queueOdds(t);
+        v3v.setBox(address(b3));
+        usdc.mint(address(v3v), 200e6);
+        _approveBox(alice, b3);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        vm.prank(alice);
+        b3.buyWithChip(SKU1, alice);
+        vm.prank(alice);
+        b3.buyWithUsdc(SKU1, alice); // USDC is unaffected
     }
 
-    function test_launchTable_isStill91PctWithChipTiers() public view {
+    function test_launchTable_isStill91Pct() public view {
         assertEq(boxes.rtpBps(), 9_100);
-        IBox.PrizeTier[] memory t = boxes.oddsTable();
-        assertTrue(t[0].payInChip && t[1].payInChip, "Dust and Common pay CHIP");
-        for (uint256 i = 2; i < t.length; ++i) {
-            assertFalse(t[i].payInChip, "Uncommon and up pay stock");
-        }
+        assertEq(boxes.oddsTierCount(), 6);
+        assertEq(boxes.maxPrizeUsd(SKU1), 36e6);
         assertEq(boxes.maxPrizeUsd(SKU25), 900e6);
         assertEq(boxes.maxLivePrizeUsd(), 900e6);
     }

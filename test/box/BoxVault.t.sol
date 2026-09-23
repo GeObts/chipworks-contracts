@@ -12,7 +12,7 @@ import {MockERC20} from "../mocks/MockERC20.sol";
 
 contract BoxVaultTest is BoxTestBase {
     event PrizeOwed(
-        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool payInChip, bool capped
+        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
     );
 
     /// @dev roll 7500: tier 2 (1.00x, pays a stock). Even, so with [NVDA, TSLA] NVDA is tried first.
@@ -187,13 +187,12 @@ contract BoxVaultTest is BoxTestBase {
         uint256 vaultNvda0 = nvda.balanceOf(address(thinVault));
 
         vm.expectEmit(true, true, true, true);
-        emit PrizeOwed(alice, id, 5, 36e6, false, true);
+        emit PrizeOwed(alice, id, 5, 36e6, true);
         entropy.fulfill(seq, JACKPOT);
 
         IBox.BoxView memory b = thinBox.boxInfo(id);
         assertEq(b.state, thinBox.STATE_OWED());
         assertEq(b.owedUsd, 36e6, "owed at exactly the drawn size");
-        assertFalse(b.owedInChip);
         assertEq(thinBox.ownerOf(id), alice, "not burned");
         assertEq(thinBox.outstandingLiabilityUsd(), 36e6, "mint EV replaced by the owed prize");
         assertEq(usdc.balanceOf(address(thinVault)), vaultUsdc0, "nothing moved: not paid short");
@@ -248,7 +247,7 @@ contract BoxVaultTest is BoxTestBase {
         uint64 seq = thinBox.boxInfo(id).sequence;
 
         vm.expectEmit(true, true, true, true);
-        emit PrizeOwed(alice, id, 2, 1e6, false, false);
+        emit PrizeOwed(alice, id, 2, 1e6, false);
         entropy.fulfill(seq, PAR_EVEN);
         assertEq(thinBox.boxInfo(id).state, thinBox.STATE_OWED());
         assertEq(usdc.balanceOf(address(thinVault)), 950_000, "USDC not paid short");
@@ -264,7 +263,7 @@ contract BoxVaultTest is BoxTestBase {
         uint256 cap = vault.prizeCapUsd();
         uint256 usdc0 = usdc.balanceOf(address(vault));
         vm.prank(address(boxes));
-        IPrizeVault.Payout memory p = vault.settle(alice, cap + 1, bytes32(0), false);
+        IPrizeVault.Payout memory p = vault.settle(alice, cap + 1, bytes32(0));
         assertFalse(p.paid);
         assertTrue(p.capped);
         assertEq(p.paidUsd, 0);
@@ -272,7 +271,7 @@ contract BoxVaultTest is BoxTestBase {
         assertEq(nvda.balanceOf(alice) + tsla.balanceOf(alice), 0);
 
         vm.prank(address(boxes));
-        p = vault.settle(alice, cap, bytes32(0), false);
+        p = vault.settle(alice, cap, bytes32(0));
         assertTrue(p.paid);
         assertEq(p.paidUsd, cap);
     }
@@ -445,9 +444,7 @@ contract BoxVaultTest is BoxTestBase {
 
     function test_onlyBoxCanSettle() public {
         vm.expectRevert(PrizeVault.OnlyBox.selector);
-        vault.settle(alice, 1_000_000, bytes32(uint256(1)), false);
-        vm.expectRevert(PrizeVault.OnlyBox.selector);
-        vault.settle(alice, 1_000_000, bytes32(uint256(1)), true);
+        vault.settle(alice, 1_000_000, bytes32(uint256(1)));
     }
 
     function test_addStockReadsRegistry() public {

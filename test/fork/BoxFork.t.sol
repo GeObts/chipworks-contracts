@@ -109,7 +109,7 @@ contract BoxForkTest is Test {
         vault.setKeeper(keeper);
         converter.setKeeper(keeper);
         vault.setRestockParams(1_000e6, 5_000e6, 200, 3_000);
-        converter.setLimits(type(uint128).max, type(uint128).max, 1_000e6, 5_000e6);
+        converter.setLimits(type(uint128).max, type(uint128).max);
         vm.stopPrank();
 
         // Seed: $4,000 USDC covers the $25 box's $900 jackpot ($3,600 pool needed).
@@ -160,24 +160,24 @@ contract BoxForkTest is Test {
         uint256 nvdaWon = IERC20(NVDA).balanceOf(alice) - nvda0;
         assertGt(nvdaWon, 0, "stock prize paid in NVDA");
 
-        g0 = gasleft();
+        // A CHIP-bought box wins a stock like any other: prizes are never paid in $CHIP.
+        uint256 bobNvda0 = IERC20(NVDA).balanceOf(bob);
+        uint256 bobChip0 = IERC20(CHIP).balanceOf(bob);
         vm.prank(ENTROPY);
-        boxes.entropyCallback(seqChip, provider, rollDust); // Dust: $2 as CHIP
-        uint256 gasChipTier = g0 - gasleft();
-        assertEq(converter.escrowedUsdc(), 2e6, "the $2 escrowed for bob");
+        boxes.entropyCallback(seqChip, provider, rollDust); // Dust: $2 in stock
+        assertGt(IERC20(NVDA).balanceOf(bob) - bobNvda0, 0, "the CHIP buyer's Dust prize is NVDA");
+        assertEq(IERC20(CHIP).balanceOf(bob), bobChip0, "and never CHIP");
 
         console2.log("callback gas, stock tier:", gasStock);
-        console2.log("callback gas, CHIP tier :", gasChipTier);
         assertLt(gasStock, boxes.callbackGasLimit(), "fits Pyth's callback gas limit");
-        assertLt(gasChipTier, boxes.callbackGasLimit(), "fits Pyth's callback gas limit");
         (uint256 nvdaPx,) = IStockRegistry(REGISTRY).priceUsd(NVDA);
         console2.log("NVDA won (8dp)         :", nvdaWon, " value USD e-6:", nvdaWon * nvdaPx / 1e20);
 
-        _stepSellAndDeliver();
+        _stepSell();
         _stepRestockAndSweep();
     }
 
-    function _stepSellAndDeliver() internal {
+    function _stepSell() internal {
         // ---- 3. Keeper sells the box CHIP through the real v4 + v3 pools ------------
         uint256 split0 = IERC20(USDC).balanceOf(FEE_SPLITTER);
         uint256 vaultUsdc0 = IERC20(USDC).balanceOf(address(vault));
@@ -188,17 +188,7 @@ contract BoxForkTest is Test {
         assertEq(fee, usdcOut * 500 / 10_000, "5% of the proceeds to FeeSplitter");
         assertEq(IERC20(USDC).balanceOf(address(vault)) - vaultUsdc0, usdcOut - fee, "95% to the vault");
         assertEq(IERC20(CHIP).balanceOf(address(converter)), 0, "no CHIP left on the converter");
-
-        // ---- 4. Keeper delivers bob's CHIP prize through the real pools --------------
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = 1;
-        uint256 bobChip0 = IERC20(CHIP).balanceOf(bob);
-        vm.prank(keeper);
-        uint256 chipOut = converter.deliverChipPrizes(ids, 1.8e18 * chipPerUsd / 1e18, block.timestamp + 600);
-        assertEq(IERC20(CHIP).balanceOf(bob) - bobChip0, chipOut, "bob holds his CHIP prize");
-        assertEq(IERC20(CHIP).balanceOf(address(converter)), 0, "converter holds none");
-        assertEq(converter.escrowedUsdc(), 0);
-        console2.log("bob's $2 prize, CHIP (whole):", chipOut / 1e18);
+        assertEq(IERC20(USDC).balanceOf(address(converter)), 0, "and no USDC either");
     }
 
     function _stepRestockAndSweep() internal {

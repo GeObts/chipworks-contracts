@@ -36,8 +36,8 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      render that table and {previewDraw}, not a parallel copy. Constructor table is
 ///      91.00% EV of face price. The house take is 9% of face: the 5% fee, plus ~4% that
 ///      stays in the vault and reaches the fee recipient through {PrizeVault.sweepSurplus}.
-///      Some tiers pay $CHIP bought with the USD prize (`payInChip`), the rest a B20 stock;
-///      the USD value, and so the RTP, is the same either way. Changing the table is timelocked.
+///      Every tier pays a B20 stock, or USDC when no stock can cover it; never $CHIP.
+///      Changing the table is timelocked.
 ///
 ///      HONEST ODDS: NEVER PAID SHORT. A SKU cannot be bought while the vault could not pay
 ///      its top prize in full ({isSkuCovered}). If a drawn prize still cannot be paid at
@@ -62,8 +62,7 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      {IPrizeVault.chip} and the converter's chip MUST equal {chip} at construct.
 ///      `chip == address(0)` (with `converter == address(0)`) or a SKU `chipPrice == 0`
 ///      disables the CHIP path without affecting USDC. {buy*} revert unless the vault is
-///      wired to this Box. CHIP is never a prize STOCK: a CHIP-tier prize is USDC handed to
-///      the converter, which buys the $CHIP and delivers it to the winner.
+///      wired to this Box. $CHIP is a payment asset only: it is never a prize.
 contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Strings for uint256;
@@ -178,7 +177,6 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         address stock,
         uint256 stockAmount,
         uint256 usdcAmount,
-        uint256 chipPrizeId,
         bool fallbackStock,
         bool usdcFallback
     );
@@ -186,7 +184,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     /// @notice Drawn but not paid: the pool could not cover it in full. Fixed at `prizeUsd`;
     ///         {claimOwed} pays exactly this to `opener` once the pool can.
     event PrizeOwed(
-        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool payInChip, bool capped
+        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
     );
     event PausedSet(bool paused);
     event SkuPaused(uint8 indexed skuId, bool paused);
@@ -234,7 +232,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     /// @param treasury_      5% recipient ({feeRecipient}). Launch default is
     ///                       {DEFAULT_FEE_RECIPIENT} (Goyabean's Safe). Retarget is 48h-timelocked.
     /// @param vault_         PrizeVault. 95% of a USDC payment; every payout.
-    /// @param converter_     ChipConverter. All of a $CHIP payment; delivers CHIP-tier prizes.
+    /// @param converter_     ChipConverter. Receives all of a $CHIP payment and sells it for USDC.
     ///                       `address(0)` only together with `chip_ == address(0)`.
     /// @param entropy_       Pyth Entropy v2. Base: 0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb.
     /// @param chipPrice1     $CHIP charged for the $1 SKU. 0 disables CHIP on that SKU.
@@ -367,7 +365,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         BoxView memory b = _info[tokenId];
         if (b.state != STATE_OWED) revert NotOwed(tokenId);
         IPrizeVault.Payout memory payout =
-            IPrizeVault(vault).settle(b.opener, b.owedUsd, keccak256(abi.encode(tokenId, b.sequence)), b.owedInChip);
+            IPrizeVault(vault).settle(b.opener, b.owedUsd, keccak256(abi.encode(tokenId, b.sequence)));
         if (!payout.paid) revert StillUnpayable(tokenId, b.owedUsd);
         outstandingLiabilityUsd -= b.owedUsd;
         _retire(tokenId, b.skuId);
@@ -455,11 +453,11 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         public
         view
         override
-        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd, bool payInChip)
+        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd)
     {
         Sku memory s = _skus[skuId];
         if (!s.exists) revert UnknownSku(skuId);
-        (tierId, weight, prizeBps, prizeUsd, payInChip) = _drawAt(randomNumber, s.usdcPrice, oddsVersion);
+        (tierId, weight, prizeBps, prizeUsd) = _drawAt(randomNumber, s.usdcPrice, oddsVersion);
     }
 
     function boxInfo(uint256 tokenId) external view override returns (BoxView memory) {
@@ -572,7 +570,6 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         uint256 w;
         for (uint256 i; i < n; ++i) {
             if (tiers[i].weight == 0 || tiers[i].prizeBps == 0) revert BadConfig();
-            if (tiers[i].payInChip && converter == address(0)) revert BadConfig();
             w += tiers[i].weight;
         }
         if (w != WEIGHT_DENOM) revert BadConfig();
@@ -663,8 +660,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
             faceUsd: faceUsd,
             oddsVersion: ver,
             mintEvUsd: ev,
-            owedUsd: 0,
-            owedInChip: false
+            owedUsd: 0
         });
         unchecked {
             ++sealedSupply[skuId];
@@ -710,11 +706,10 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         }
 
         // H-05: mint snapshot, not live SKU price or live odds table.
-        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd, bool payInChip) =
-            _drawAt(randomNumber, b.faceUsd, b.oddsVersion);
+        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = _drawAt(randomNumber, b.faceUsd, b.oddsVersion);
 
         IPrizeVault.Payout memory payout;
-        try IPrizeVault(vault).settle(b.opener, prizeUsd, randomNumber, payInChip) returns (
+        try IPrizeVault(vault).settle(b.opener, prizeUsd, randomNumber) returns (
             IPrizeVault.Payout memory paid
         ) {
             payout = paid;
@@ -729,9 +724,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
             BoxView storage s = _info[tokenId];
             s.state = STATE_OWED;
             s.owedUsd = prizeUsd;
-            s.owedInChip = payInChip;
             outstandingLiabilityUsd += prizeUsd;
-            emit PrizeOwed(b.opener, tokenId, tierId, prizeUsd, payInChip, payout.capped);
+            emit PrizeOwed(b.opener, tokenId, tierId, prizeUsd, payout.capped);
             return;
         }
 
@@ -770,7 +764,6 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
             payout.stock,
             payout.stockAmount,
             payout.usdcAmount,
-            payout.chipPrizeId,
             payout.fallbackStock,
             payout.usdcFallback
         );
@@ -781,7 +774,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     function _drawAt(bytes32 randomNumber, uint256 usdcPrice, uint64 version)
         internal
         view
-        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd, bool payInChip)
+        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd)
     {
         OddsSnapshot storage snap = _oddsSnapshots[version];
         uint256 roll = uint256(randomNumber) % WEIGHT_DENOM;
@@ -792,12 +785,12 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
             acc += t.weight;
             if (roll < acc) {
                 prizeUsd = usdcPrice * t.prizeBps / WEIGHT_DENOM;
-                return (uint8(i), t.weight, t.prizeBps, prizeUsd, t.payInChip);
+                return (uint8(i), t.weight, t.prizeBps, prizeUsd);
             }
         }
         PrizeTier memory last = snap.tiers[n - 1];
         prizeUsd = usdcPrice * last.prizeBps / WEIGHT_DENOM;
-        return (uint8(n - 1), last.weight, last.prizeBps, prizeUsd, last.payInChip);
+        return (uint8(n - 1), last.weight, last.prizeBps, prizeUsd);
     }
 
     function _maxTierBpsAt(uint64 version) internal view returns (uint32 top) {
@@ -820,15 +813,12 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     function _loadLaunchOdds() internal {
         // weight, prizeBps. EV = sum(w * prizeBps) / 10_000 = 9_100 bps = 91.00% RTP.
         OddsSnapshot storage s = _oddsSnapshots[0];
-        // Dust and Common pay $CHIP (75% of opens: steady buy pressure, winners stay in the
-        // ecosystem); Uncommon and up pay a B20 stock. Only when this Box has a converter.
-        bool chipTiers = converter != address(0);
-        s.tiers[0] = PrizeTier({weight: 4_500, prizeBps: 2_000, payInChip: chipTiers}); // 45% → 0.20×
-        s.tiers[1] = PrizeTier({weight: 3_000, prizeBps: 5_000, payInChip: chipTiers}); // 30% → 0.50×
-        s.tiers[2] = PrizeTier({weight: 1_500, prizeBps: 10_000, payInChip: false}); // 15% → 1.00×
-        s.tiers[3] = PrizeTier({weight: 700, prizeBps: 20_000, payInChip: false}); //  7% → 2.00×
-        s.tiers[4] = PrizeTier({weight: 250, prizeBps: 80_000, payInChip: false}); // 2.5% → 8.00×
-        s.tiers[5] = PrizeTier({weight: 50, prizeBps: 360_000, payInChip: false}); // 0.5% → 36.00×
+        s.tiers[0] = PrizeTier({weight: 4_500, prizeBps: 2_000}); // 45% → 0.20×
+        s.tiers[1] = PrizeTier({weight: 3_000, prizeBps: 5_000}); // 30% → 0.50×
+        s.tiers[2] = PrizeTier({weight: 1_500, prizeBps: 10_000}); // 15% → 1.00×
+        s.tiers[3] = PrizeTier({weight: 700, prizeBps: 20_000}); //  7% → 2.00×
+        s.tiers[4] = PrizeTier({weight: 250, prizeBps: 80_000}); // 2.5% → 8.00×
+        s.tiers[5] = PrizeTier({weight: 50, prizeBps: 360_000}); // 0.5% → 36.00×
         s.count = 6;
     }
 

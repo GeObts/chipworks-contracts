@@ -23,7 +23,7 @@ import {PoolKey} from "../../src/interfaces/IUniswapV4.sol";
 ///      After CREATE the Safe must, in one batch:
 ///        vault.setBox(box); converter.setBox(box);
 ///        vault.addStock(...) for each prize stock; vault.setKeeper / converter.setKeeper;
-///        vault.setRestockParams(...); converter.setLimits(...); converter.setPriceBand(...)
+///        vault.setRestockParams(...); converter.setLimits(...); converter.setPriceFloor(...)
 ///        and seed the vault. Until the vault can cover a SKU's top prize, that SKU cannot sell.
 contract DeployBox is Script {
     address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;

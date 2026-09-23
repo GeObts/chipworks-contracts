@@ -109,7 +109,7 @@ contract BoxTestBase is Test {
         vault.setKeeper(keeper);
         converter.setKeeper(keeper);
         vault.setRestockParams(5_000e6, 20_000e6, 200, 5_000);
-        converter.setLimits(100_000_000 ether, 1_000_000_000 ether, 5_000e6, 50_000e6);
+        converter.setLimits(100_000_000 ether, 1_000_000_000 ether);
         vm.stopPrank();
 
         _fundVault();

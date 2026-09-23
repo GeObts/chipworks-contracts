@@ -10,7 +10,6 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IBox} from "../interfaces/IBox.sol";
-import {IChipConverter} from "../interfaces/IChipConverter.sol";
 import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 import {IStockRegistry, Stock, Venue} from "../interfaces/IStockRegistry.sol";
 import {ISlipstreamSwapRouter, IUniswapV3SwapRouter} from "../interfaces/ISwapRouters.sol";
@@ -30,8 +29,8 @@ import {ISlipstreamSwapRouter, IUniswapV3SwapRouter} from "../interfaces/ISwapRo
 ///      selling a SKU whose top prize the pool could not pay ({IBox.isSkuCovered}).
 ///
 ///      CHIP IS NEVER INVENTORY (H-01). {addStock} refuses it and {settle} never pays it. The
-///      vault never takes $CHIP in: box $CHIP goes to the ChipConverter, and a CHIP-tier prize
-///      leaves here as USDC escrowed on the converter for that winner. A stray $CHIP transfer
+///      vault never takes $CHIP in (box $CHIP goes to the ChipConverter, which sells it) and
+///      never pays it out: every prize is a stock or USDC. A stray $CHIP transfer
 ///      is an ordinary stray token and {rescue} can return it.
 ///
 ///      PRICES ARE THE REGISTRY'S. Stock marks come from {IStockRegistry.priceUsd} — the same
@@ -42,14 +41,14 @@ import {ISlipstreamSwapRouter, IUniswapV3SwapRouter} from "../interfaces/ISwapRo
 ///      AUTOMATIC RESTOCK. {restock} lets the KEEPER swap vault USDC into a registered stock,
 ///      output straight back into the vault, with the minimum out set by the Chainlink mark
 ///      less {restockSlippageBps} (exactly ChipRounds' `_buy` bound), per-call and per-day
-///      caps, and a USDC share ({minUsdcBps}) it may not spend below — CHIP-tier prizes and
-///      the USDC fallback are paid in USDC. The keeper cannot withdraw anything.
+///      caps, and a USDC share ({minUsdcBps}) it may not spend below, because a prize no stock
+///      can cover is paid in USDC. The keeper cannot withdraw anything.
 ///
 ///      HOUSE TAKE -> FEE RECIPIENT. {sweepSurplus} is permissionless and pays only the Box's
 ///      fee recipient (the FeeSplitter at launch: 80% Pot / 20% ops). It sends only USDC that
 ///      clears ALL THREE floors: USDC >= 110% of outstanding liability; inventory >= the size
 ///      needed to pay the largest prize on sale in full ({jackpotReserveUsd}); and USDC >=
-///      {minUsdcBps} of what remains (the share CHIP-tier prizes and the fallback draw on).
+///      {minUsdcBps} of what remains (the share the fallback and restock draw on).
 contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -136,7 +135,6 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         address indexed stock,
         uint256 stockAmount,
         uint256 usdcAmount,
-        uint256 chipPrizeId,
         bool fallbackStock,
         bool usdcFallback
     );
@@ -260,7 +258,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /// @dev Called from inside the Pyth callback via Box, so it must not revert on a bad
     ///      stock or a thin pool — it skips. It returns `paid == false` (nothing moved)
     ///      rather than ever paying part of a prize.
-    function settle(address to, uint256 prizeUsd, bytes32 entropy, bool payInChip)
+    function settle(address to, uint256 prizeUsd, bytes32 entropy)
         external
         override
         nonReentrant
@@ -279,45 +277,11 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
             return p;
         }
 
-        if (payInChip && _payInChip(to, prizeUsd, p)) {
-            _emitPaid(to, p);
-            return p;
-        }
-        if (_payInStock(to, prizeUsd, entropy, p)) {
-            p.fallbackStock = p.fallbackStock || payInChip;
-            _emitPaid(to, p);
-            return p;
-        }
-        if (_payInUsdc(to, prizeUsd, p)) {
+        if (_payInStock(to, prizeUsd, entropy, p) || _payInUsdc(to, prizeUsd, p)) {
             _emitPaid(to, p);
             return p;
         }
         emit PrizeNotPaid(to, prizeUsd, cap, false);
-    }
-
-    function _payInChip(address to, uint256 prizeUsd, Payout memory p) internal returns (bool) {
-        address conv = IBox(box).converter();
-        if (conv == address(0)) return false;
-        uint256 amount = _usdToUsdc(prizeUsd);
-        if (IERC20(usdc).balanceOf(address(this)) < amount) return false;
-        // Transfer + queue as ONE external call so a failed queue unwinds the transfer.
-        try this.extQueueChipPrize(conv, to, amount) returns (uint256 id) {
-            p.paid = true;
-            p.chipPrizeId = id;
-            p.usdcAmount = amount;
-            p.paidUsd = prizeUsd;
-            return true;
-        } catch {
-            emit StockSkipped(chip, bytes32("chip-queue"));
-            return false;
-        }
-    }
-
-    /// @notice Self-call only. Escrows a CHIP-tier prize on the converter atomically.
-    function extQueueChipPrize(address conv, address to, uint256 amount) external returns (uint256) {
-        if (msg.sender != address(this)) revert OnlyBox();
-        IERC20(usdc).safeTransfer(conv, amount);
-        return IChipConverter(conv).queueChipPrize(to, amount);
     }
 
     function _payInStock(address to, uint256 prizeUsd, bytes32 entropy, Payout memory p) internal returns (bool) {
@@ -355,7 +319,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     function _emitPaid(address to, Payout memory p) internal {
         emit PrizePaid(
-            to, p.requestedUsd, p.paidUsd, p.stock, p.stockAmount, p.usdcAmount, p.chipPrizeId, p.fallbackStock, p.usdcFallback
+            to, p.requestedUsd, p.paidUsd, p.stock, p.stockAmount, p.usdcAmount, p.fallbackStock, p.usdcFallback
         );
     }
 
@@ -420,7 +384,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         got = IERC20(stock).balanceOf(address(this)) - before;
         if (got < minOut) revert RestockShort(got, minOut);
 
-        // CHIP-tier prizes and the fallback pay USDC: keep a USDC share of the pool.
+        // The fallback pays USDC and restock spends it: keep a USDC share of the pool.
         uint256 usdcUsd = _usdcToUsd(IERC20(usdc).balanceOf(address(this)));
         uint256 required = inventoryUsd() * minUsdcBps / BPS;
         if (usdcUsd < required) revert UsdcShareTooLow(usdcUsd, required);
@@ -464,7 +428,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         if (inv <= reserve) return 0;
         uint256 byReserve = inv - reserve;
 
-        // Keep the same USDC share {restock} keeps: CHIP-tier prizes and the fallback pay
+        // Keep the same USDC share {restock} keeps: the fallback pays and restock spends
         // USDC. Solve usdc - x >= m * (inv - x) for x, with m = minUsdcBps / BPS < 1.
         uint256 m = minUsdcBps;
         if (usdcUsd * BPS <= m * inv) return 0;
