@@ -186,9 +186,11 @@ contract BoxAuditPoCTest is BoxTestBase {
         _newBox(address(v1), address(other), CHIP1, CHIP10, CHIP25);
 
         // setBox refuses a Box-shaped contract whose chip() differs from vault.chip.
+        // Built first: expectRevert binds to the NEXT call, and an inline `new` would be it.
+        address zeroChipBox = address(new LiabilityReverter());
         vm.prank(multisig);
         vm.expectRevert(PrizeVault.BadConfig.selector);
-        v1.setBox(address(new LiabilityReverter()));
+        v1.setBox(zeroChipBox);
         assertEq(v1.box(), address(0));
     }
 
