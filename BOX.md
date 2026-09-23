@@ -1,20 +1,14 @@
 # ChipWorks Box
 
-**UNAUDITED. Not deployed. A new product family — not Anvil, not rounds.**
+**UNAUDITED. Not deployed. Needs a Bankr + Grok audit and the owner's written OK before mainnet.**
 
-Sealed, giftable ERC-721 boxes on Base. Buy with USDC and/or `$CHIP`. Open for a random Coinbase B20 stock prize, sized by a published on-chain odds table. Pyth Entropy v2 supplies the draw. The Next.js `/box` page must read that table from chain and match it exactly.
+Sealed, giftable ERC-721 gacha boxes on Base. Buy with USDC or `$CHIP` ($1 / $10 / $25). Open with
+Pyth Entropy v2 for a prize sized by a published on-chain odds table: a Coinbase B20 stock, or
+`$CHIP` bought with the prize, or USDC as the fallback. 91% RTP. The pool funds itself from sales.
 
-This document is the feature brief. Contracts live in `src/box/` and `src/interfaces/IBox.sol`.
-
----
-
-## What this is not
-
-Anvil's `{buyNext}` is a FIFO shelf of **known** Nouns. Box is a gacha. The two share no storage, no inheritance, and no call path. Do not bolt Box onto Anvil, and do not reuse Anvil events or prices here.
-
-Gifted-stock style vaults (the `0xaBB8…214B` pattern class: sealed NFT, inventory pool, **owner can withdraw the prizes**) were used as negative space only. Prize assets leave this vault through `{settle}` or a 48-hour surplus withdraw that still leaves enough **USDC** to cover outstanding Box EV plus a 10% buffer. Stock mark-to-market is **not** counted toward that floor (feeds are owner-settable). There is no instant privileged drain of USDC, registered B20, or `$CHIP` working capital.
-
-**UNAUDITED.** Highs H-01–H-05 from the Box review are closed in this revision; do not treat that as a completed audit.
+This is the **rebuild** of the first draft (PRs #8/#9). What changed and why is in
+[What the rebuild changed](#what-the-rebuild-changed). Contracts: `src/box/`, interfaces in
+`src/interfaces/IBox.sol`, `IPrizeVault.sol`, `IChipConverter.sol`.
 
 ---
 
@@ -22,146 +16,156 @@ Gifted-stock style vaults (the `0xaBB8…214B` pattern class: sealed NFT, invent
 
 | Contract | Role |
 |---|---|
-| `Box` | ERC-721. Buy, gift, open, odds table, fee split, Entropy request/callback. |
-| `PrizeVault` | USDC + B20 inventory. Caps a single prize vs holdings. Never pays more than it holds. Honest empty-stock handling. |
+| `Box` | ERC-721. Buy, gift, open, odds table, fee split, Entropy request/callback, owed prizes. |
+| `PrizeVault` | The prize pool: USDC + B20 stocks. Pays draws all-or-nothing. Keeper restock. House-take sweep. |
+| `ChipConverter` | Where `$CHIP` meets the Box. Sells box `$CHIP` for pool USDC; buys `$CHIP` for CHIP-tier winners. |
 
-Deploy order: `PrizeVault` → `Box(vault)` → `PrizeVault.setBox(box)` once. Same shape as `ChipClaims.setRounds`.
+Deploy: `PrizeVault` → `ChipConverter` → `Box(vault, converter)` → the Safe calls
+`vault.setBox(box)` and `converter.setBox(box)` once each, lists stocks, sets keepers and limits, seeds
+the vault. `script/box/DeployBox.s.sol` refuses to run without `BOX_MAINNET_WRITTEN_OK=true` and
+has no default `$CHIP` price (the price moves; pass `BOX_CHIP_PER_USD`).
 
-Constructor args filled at deploy, not in bytecode:
+## Money flow
 
-- `$CHIP` token — **deploy default is the live Base token** `0x75Af968d2e58749FDA1b42C58186B76f5E511bA3` (`Box.DEFAULT_CHIP`). Pass `address(0)` only to disable `{buyWithChip}`. USDC and `$CHIP` are both live payment assets.
-- 5% fee recipient (`treasury` / `feeRecipient`) — **default is Goyabean's Safe** `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). Constructor still takes the address so a deploy can override; a live change is 48h-timelocked with a 14-day grace window.
+```text
+USDC buy  ── 5% ──► fee recipient (FeeSplitter: 80% Pot / 20% ops)
+          └─ 95% ─► PrizeVault
 
-`PrizeVault` takes the same `$CHIP` address. `{Box}` construction reverts unless `vault.chip == Box.chip` (and matching USDC). `{buy*}` revert unless `vault.box == this`. `{rescue}`, `{addStock}` and surplus withdraw all refuse CHIP — it is payment working capital, never prize inventory (H-01). `{settle}` will not pay CHIP. The live Base CHIP address is protected even if the constructor was passed `address(0)`.
+$CHIP buy ─ 100% ─► ChipConverter ──keeper sellChip──► USDC ── 5% ──► fee recipient
+                                                           └─ 95% ─► PrizeVault
 
-USDC on Base is `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (`Box.DEFAULT_USDC`, 6 dp). Pyth Entropy v2 on Base is `0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb`.
+open ──► Pyth Entropy ──► callback ──► PrizeVault.settle (all or nothing)
+            stock tier ─► B20 from the vault (USDC if no stock can cover it)
+            CHIP tier  ─► USDC escrowed on the converter ──keeper──► $CHIP to the winner
+                                                        └─ after 24h, the USDC instead
+            unpayable  ─► box becomes OWED at exactly the drawn prize ── claimOwed later
 
-Launch SKUs (all `exists = true`): **$1** (id 0), **$10** (id 1), **$25** (id 2). There is no $5 SKU.
+keeper restock: vault USDC ──► B20 stock ──► vault   (Chainlink-bounded, capped)
+sweepSurplus:   vault USDC above every floor ──► fee recipient   (permissionless)
+```
 
----
+**House take is 9% of face**: the 5% fee, plus ~4% of expected value that stays in the vault and
+leaves through `sweepSurplus` once the floors are met. All of it reaches the fee recipient as
+**USDC**, never `$CHIP`. The live Pot's round currency is USDC and it has no `$CHIP` conversion
+route (it converts WETH and AERO only), so `$CHIP` sent to FeeSplitter would be stranded in the Pot.
 
 ## Odds table (launch, 91.00% RTP)
 
-Weights sum to `10_000`. Prize is `sku.usdcPrice * prizeBps / 10_000`, so the same table serves $1, $10, and $25.
+Weights sum to `10_000`. Prize = `sku.usdcPrice * prizeBps / 10_000`.
 
-| Tier | Weight | Prob | Prize (× face) | $1 box | $10 box | $25 box | EV contribution ($1) |
+| Tier | Weight | Prob | Prize | Paid as | $1 | $10 | $25 |
 |---|---|---|---|---|---|---|---|
-| Dust | 4,500 | 45.00% | 0.20× | $0.20 | $2.00 | $5.00 | 9.00¢ |
-| Common | 3,000 | 30.00% | 0.50× | $0.50 | $5.00 | $12.50 | 15.00¢ |
-| Uncommon | 1,500 | 15.00% | 1.00× | $1.00 | $10.00 | $25.00 | 15.00¢ |
-| Rare | 700 | 7.00% | 2.00× | $2.00 | $20.00 | $50.00 | 14.00¢ |
-| Epic | 250 | 2.50% | 8.00× | $8.00 | $80.00 | $200.00 | 20.00¢ |
-| Jackpot | 50 | 0.50% | 36.00× | $36.00 | $360.00 | $900.00 | 18.00¢ |
-| **Total** | **10,000** | **100%** | | | | | **$0.9100 (91.00%)** |
+| Dust | 4,500 | 45% | 0.20× | `$CHIP` | $0.20 | $2 | $5 |
+| Common | 3,000 | 30% | 0.50× | `$CHIP` | $0.50 | $5 | $12.50 |
+| Uncommon | 1,500 | 15% | 1.00× | stock | $1 | $10 | $25 |
+| Rare | 700 | 7% | 2.00× | stock | $2 | $20 | $50 |
+| Epic | 250 | 2.5% | 8.00× | stock | $8 | $80 | $200 |
+| Jackpot | 50 | 0.5% | 36.00× | stock | $36 | $360 | $900 |
 
-`Box.rtpBps()` returns `9100`. Changing the table is timelocked. SKU ids: `$1=0`, `$10=1`, `$25=2`.
+`payInChip` is per tier and timelocked with the table (`queueOdds`). A Box with no converter
+cannot set it. The USD value is the same either way, so RTP does not depend on it. A CHIP-tier
+winner receives `$CHIP` bought on the open market with the USD prize, so the pool's swap cost
+(~1.75% measured on the fork) comes out of what they receive. **The UI must disclose this.**
 
-### Draw rule the UI must copy
+Draw rule the UI must copy (or call `previewDraw`):
 
 ```text
-roll     = uint256(randomNumber) % 10_000
-tier     = first oddsTable[i] whose cumulative weight > roll
-prizeUsd = sku.usdcPrice * tier.prizeBps / 10_000
+roll = uint256(randomNumber) % 10_000
+tier = first tier whose cumulative weight > roll
 ```
 
-Call `previewDraw(randomNumber, skuId)` rather than reimplementing it. `test_everyRollMapsToATier` locks the 10,000-entry histogram to the weights above. A sealed box pays the **mint** face and odds version, not a later `{executeSku}` / `{executeOdds}` (H-05).
+## Honest odds: never paid short
 
----
+- **Sell gate.** `buy*` reverts `SkuNotCovered` while `vault.prizeCapUsd() < maxPrizeUsd(sku)`.
+  The cap is 25% of inventory, so a SKU sells only when the pool holds 4× its jackpot:
+  **$144** for $1, **$1,440** for $10, **$3,600** for $25. Launch with $1 only; the others unlock
+  by themselves as volume grows. `isSkuCovered(sku)` is the UI's read.
+- **All-or-nothing settle.** If a drawn prize still cannot be paid at callback time (the pool
+  shrank between buy and open), NOTHING moves and the box becomes **OWED** (`state 3`) at exactly
+  the drawn size, counted in full in `outstandingLiabilityUsd`. Anyone may `claimOwed(tokenId)`
+  later; it pays the opener in full. It is never paid short and never re-rolled. Owed and opening
+  boxes cannot be transferred.
+- **Single-prize cap.** One prize can never exceed 25% of the pool (`maxPrizeBps`, ceiling 50%,
+  raise timelocked). Back-to-back jackpots take at most 25%, then 25% of the rest: the pool
+  cannot be drained by early luck.
 
-## Audit Highs (this revision)
+## Keeper powers (and their bounds)
 
-| ID | Issue | Fix |
+The keeper can move value only by swapping, never to itself.
+
+| Call | Where output goes | Bounded by |
 |---|---|---|
-| H-04 | `open` with `vault.box` unset → Entropy callback `settle` reverts → silent burn | `open`/`retryOpen` revert unless `vault.box()==this`. Failed settle emits `SettleFailed`, does not burn. |
-| H-03 | `outstandingLiabilityUsd` revert (retired SKU) zeroed the surplus floor | Surplus fail-closes on a failed liability call. `executeSku` cannot set `exists=false` while `sealedSupply>0`. Liability is the mint-EV running total. |
-| H-02 | Fake/owner-set stock feed inflated `inventoryUsd`, surplus drained USDC | Surplus leftover floor is **USDC only**. |
-| H-01 | `rescue(CHIP)` / `addStock(CHIP)` / surplus / settle / unwired-buy drained working capital | **CLOSED.** `Box` constructor requires `vault.chip == Box.chip` (and matching USDC). `{buy*}` revert unless `vault.box == this`, so CHIP cannot land in an unwired vault. `{rescue}`, `{addStock}`, surplus withdraw, and `{settle}` all refuse CHIP (constructor chip, `{Box.chip}` after wire, and `{DEFAULT_CHIP}`). |
-| H-05 | Live SKU/odds rewrote sealed tickets (`$1` paid `$25`-tier) | Each box snapshots `faceUsd`, `oddsVersion`, `mintEvUsd` at mint. Launch table stays 6-tier. |
-| M-08 | Entropy fee | `{open}` forwards `getFeeV2` exactly and refunds excess (unit test + optional Base fork). |
+| `PrizeVault.restock(stock, usdcIn)` | the vault | Chainlink mark from the StockRegistry less `restockSlippageBps` (≤5%); stale mark refused; per-call + per-day caps; USDC must stay ≥ `minUsdcBps` of inventory (≤90%) |
+| `ChipConverter.sellChip(chipIn, minUsdcOut)` | 5% fee recipient / 95% vault | **keeper `minUsdcOut`** + owner price band; per-call + per-day caps; ETH leg Chainlink-bounded |
+| `ChipConverter.deliverChipPrizes(ids, minChipOut)` | each winner, pro rata | **keeper `minChipOut`** + owner price band; per-call + per-day caps; ETH leg Chainlink-bounded |
 
----
+### ⚠ AUDIT FOCUS: `$CHIP` has no on-chain price
 
-## Fee flow
+`$CHIP` trades only on a Uniswap v4 pool behind a Doppler hook with no oracle, no cumulatives and
+no Chainlink feed. The `$CHIP`/WETH leg of both converter directions is therefore bounded by a
+**keeper-supplied minimum**, not an oracle. A compromised keeper key could sell box `$CHIP` too
+cheap or buy winners' `$CHIP` too dear. The loss is bounded by the caps and the optional owner
+price band (`minUsdcPerMillionChip` / `maxUsdcPerMillionChip`); nothing lets the keeper withdraw.
+Auditors should treat this as the Box's primary trust assumption.
 
-Every buy, same transaction, same token (USDC or `$CHIP`):
+## House take → fee recipient
 
-```text
-user ──100%──► Box ──5%──► feeRecipient / treasury (Goyabean's Safe by default)
-                   └──95%──► PrizeVault
-```
+`PrizeVault.sweepSurplus()` is permissionless and pays only `box.treasury()`. It sends USDC that
+clears **all three** floors:
 
-Default recipient: `0xe1096B727499a3f70FaD8bc0267F5e69d01373C7` (`Box.DEFAULT_FEE_RECIPIENT`). `FEE_BPS = 500`. Rounding dust (`price - fee`) stays with the vault, not the treasury. Box holds no ERC-20 between calls. Override at construct with a different `treasury_`, or later via `{queueTreasury}` / `{executeTreasury}`.
+1. USDC ≥ 110% of `outstandingLiabilityUsd` (EV of every unopened box + every owed prize);
+2. inventory ≥ `jackpotReserveUsd()` (the pool the largest live jackpot needs; a paused SKU still
+   counts while its boxes are out);
+3. USDC ≥ `minUsdcBps` of what remains (CHIP-tier prizes, the fallback and restock draw on USDC).
 
-`$CHIP` in the vault is **working capital** to acquire B20 off-cycle. It is not priced into `{inventoryUsd}` and is not a prize asset. `{rescue(CHIP)}`, `{addStock(CHIP)}`, and surplus withdraw of CHIP all revert (H-01). A CHIP-funded vault with no B20/USDC will pay a shortfall (see below) rather than pretend.
+A reverting liability or reserve read sweeps nothing. The owner's 48h `queueSurplusWithdraw` (for
+winding down) checks the same floors.
 
----
+## `$CHIP` is never inventory (H-01, redone)
+
+The first draft sent 95% of every `$CHIP` payment to the vault and then refused `$CHIP` on every
+exit, so it sat there forever and `$CHIP` boxes were paid for by USDC buyers. Now:
+
+- the vault never takes `$CHIP` in: `addStock`, `deposit` and `settle` refuse it; a stray transfer
+  is an ordinary stray and `rescue` can return it;
+- box `$CHIP` sits on the converter only until `sellChip`; if the pool route ever breaks, the owner
+  can recover it after a 48h timelock (`queueChipRecovery`);
+- winners' `$CHIP` is bought and sent in the same transaction; the converter holds none of it.
 
 ## Entropy (Pyth v2)
 
-1. UI calls `quoteOpenFee()` → `entropy.getFeeV2(callbackGasLimit)`.
-2. Owner of a **sealed** box calls `open{value: fee}(tokenId)`. Excess ETH is refunded; Entropy does not refund. `{buy*}` / `{open}` / `{retryOpen}` revert unless `PrizeVault.box() == address(Box)` (H-04 / H-01: payment cannot hit an unwired vault).
-3. Box stores the sequence, locks the NFT (not transferable, still owned).
-4. Entropy later calls `entropyCallback(sequence, provider, randomNumber)` — the Pyth v2 consumer selector (`_entropyCallback` is an alias).
-5. Callback **must not revert**. A failing vault settle emits `{SettleFailed}` and **does not burn** the NFT (ownerOf unchanged). An honest shortfall (empty inventory) is still a successful settle call and burns as before.
-6. If the callback never arrives — or settle failed — the opener may `retryOpen` after `REVEAL_TIMEOUT` (3 days), paying a new fee. A late original callback is ignored (`OrphanCallback`) unless the box is still `OPENING` on that sequence (failed settle leaves it opening so a late retry of the same callback can still pay).
+`quoteOpenFee()` then `open{value}(tokenId)`: the exact fee is forwarded, excess refunded (M-08).
+The fee is paid in ETH and sits **outside** the 91% RTP. The callback never reverts. It pays, or
+marks the box owed, or ignores an orphan sequence. Nothing swaps inside the callback. Measured on
+the Base fork: **72k gas** (stock tier), **146k** (CHIP tier), against a 500k limit. `retryOpen`
+re-requests only if no callback arrived within `REVEAL_TIMEOUT` (3 days).
 
-Default `callbackGasLimit` is 500,000 (stock loop + transfers). Owner can retune it; that only changes the fee, not RTP.
+Mint terms are snapshotted per box (face, odds version, EV: H-05). A SKU cannot be retired while
+boxes are out (H-03). Payment and opens revert until the vault and converter are wired (H-04).
 
----
+## What the rebuild changed
 
-## Vault rules
+| Draft | Rebuild |
+|---|---|
+| 95% of `$CHIP` payments stranded in the vault | 100% to `ChipConverter`, sold for USDC 5/95 |
+| Manual restock (owner 48h withdraw, buy off-chain, deposit) | Keeper `restock`, oracle-bounded, into the vault |
+| Owner-set price feeds per stock | StockRegistry Chainlink marks (same as ChipRounds) |
+| Prize over the cap paid short (`shortfall`) | Sell gate + all-or-nothing settle + owed prizes |
+| Settle revert → `SettleFailed`, retry re-rolls | Settle failure → owed at the drawn size, no re-roll |
+| 5% fee to the Safe; 4% margin stuck unless owner withdraws | FeeSplitter; permissionless `sweepSurplus` above three floors |
+| No `$CHIP` prizes | Dust/Common pay `$CHIP`, bought and delivered by the keeper |
 
-- Never transfer more of a token than `balanceOf(this)`.
-- Single prize capped at `maxPrizeBps` of live USD inventory (launch 2,500 = 25%; ceiling 50%). Lowering the cap is immediate; raising it is timelocked.
-- Stock pick: `uint256(entropy) % n`, then walk the list. Empty, thin, disabled, dead-feed, or reverting-transfer stocks are skipped (`StockSkipped`) and the next one is tried.
-- If no B20 can fill the (capped) prize, pay USDC. Never pay `$CHIP`.
-- If USDC cannot fill it either, pay what is there and set `shortfall`. The open still completes.
-- B20 tokens are identified **by address**, never by ticker. Feeds may hold last close over the weekend; a bad feed skips that stock instead of bricking the callback.
-- `{open}` uses the **mint snapshot** of face USDC and odds version (H-05). `{executeSku}` / `{executeOdds}` cannot rewrite a sealed ticket. `{executeSku}` cannot set `exists = false` while `sealedSupply[id] > 0` (H-03).
-
-Surplus withdraw of USDC / registered B20: 48h queue, then leftover **USDC** (not stock MTM) must still cover `{Box.outstandingLiabilityUsd} * 110%`. A reverting liability query fails closed (H-03). `$CHIP` is working capital: `{rescue(CHIP)}`, `{addStock(CHIP)}`, and surplus withdraw of CHIP revert (H-01). Stray tokens (not USDC, not CHIP, not a registered prize stock) can be rescued immediately.
-
----
-
-## Events (Basescan)
-
-- `BoxPurchased(buyer, to, tokenId, skuId, paymentToken, price, fee, toVault)`
-- `BoxOpeningRequested(opener, tokenId, sequence, skuId, entropyFee)`
-- `BoxOpened(opener, tokenId, sequence, skuId, tierId, prizeBps, prizeUsd, stock, stockAmount, usdcAmount, paidUsd, capped, shortfall, emptyStockFallback)`
-- `PrizePaid` / `StockSkipped` on the vault
-
----
-
-## Frontend surface
-
-`IBox` is the `/box` page ABI. Minimum calls:
-
-- `buyWithUsdc(skuId, to)` / `buyWithChip(skuId, to)` (and the batch variants)
-- `quoteOpenFee()` then `open{value}(tokenId)`
-- `oddsTable()`, `rtpBps()`, `sku(id)`, `previewDraw`, `boxInfo`, `sealedSupply`
-- `feeRecipient()` / `treasury()` — 5% recipient; default Goyabean's Safe
-- `PrizeVault.inventoryUsd()`, `prizeCapUsd()`, `quoteTokenAmount(token, prizeUsd)`
-
-Metadata: `setBaseURI` + `tokenURI = baseURI + tokenId`. Index `Transfer` events for a wallet's boxes; the collection is not enumerable.
-
----
-
-## How to test locally
+## Tests
 
 ```bash
-forge test --match-path 'test/box/*' -vv
+forge test --match-path 'test/box/*'                       # unit: no RPC
+forge test --match-contract BoxForkTest -vv                # Base fork: needs BASE_RPC_URL
 ```
 
-No RPC required. The suite covers odds math (including the 10,000-roll histogram), 5/95 fee split on both USDC and CHIP for **$1 / $10 / $25**, Entropy fee pass-through and callback mock, gift/lock, vault cap, empty/thin/blacklisted stock, USDC fallback, CHIP-buy shortfall, surplus-withdraw accounting, and PoCs for H-01–H-05 / M-08 (`test/box/BoxAuditPoC.t.sol`) including addStock/surplus CHIP drains.
-
-An optional Base-fork assertion for M-08 (`test_M08_OpenForwardsExactEntropyFee_RefundsExcess_BaseFork`) runs only when `BASE_RPC_URL` is set; it never broadcasts.
-
-Dry-run the isolated Box deploy script (does **not** touch Anvil / rounds; does not broadcast unless you pass `--broadcast`):
-
-```bash
-MULTISIG=0x... forge script script/box/DeployBox.s.sol:DeployBox --rpc-url $BASE_RPC_URL -vvv
-```
-
-`BOX_TREASURY` overrides the 5% recipient; otherwise it is `Box.DEFAULT_FEE_RECIPIENT`. After a real broadcast the Safe must call `PrizeVault.setBox(box)` once.
-
-Do not mainnet-deploy from this PR.
+`test/box/BoxRebuild.t.sol` covers the rebuild's properties; `Box.t.sol`, `BoxVault.t.sol` and
+`BoxAuditPoC.t.sol` carry the draft's audit PoCs forward. `test/fork/BoxFork.t.sol` is the proof on
+live Base: the StockRegistry, the factory-B Slipstream router, the `$CHIP` v4 pool, the WETH/USDC
+pool, Chainlink ETH/USD, a real Entropy request, and FeeSplitter → Pot. B20 stocks are node-native
+precompiles that cannot run in a fork, so NVDA is etched with a runnable ERC-20 carrying the pool's
+real balance. That means the fork does **not** measure real B20 transfer gas inside the callback.
+Close that with an `eth_simulateV1` run on the live node before mainnet.
