@@ -132,9 +132,17 @@ exit, so it sat there forever and `$CHIP` boxes were paid for by USDC buyers. No
 
 `quoteOpenFee()` then `open{value}(tokenId)`: the exact fee is forwarded, excess refunded (M-08).
 The fee is paid in ETH and sits **outside** the 91% RTP. The callback never reverts: it pays, or
-marks the box owed, or ignores an orphan sequence. Nothing swaps inside the callback. Measured on
-the Base fork: **~71k gas** for a stock payout against a 500k limit. `retryOpen` re-requests only if
-no callback arrived within `REVEAL_TIMEOUT` (3 days).
+marks the box owed, or ignores an orphan sequence. Nothing swaps inside the callback.
+
+**Callback gas, measured on the live node with real B20s** (`tools/box/box-callback-sim.cjs`,
+`eth_simulateV1`, 10 stocks listed): **~466k** whether the walk pays the first stock or skips all
+nine others, against a **1,000,000** `callbackGasLimit` (~35k more per extra stock, so ~680k at the
+16-stock maximum). The first build measured 529k over a 500k limit, which would have left a box
+stuck and re-rolled by `retryOpen`; the fix prices each stock once per payout (`_snapshot`) and
+raised the limit. Pyth charges 0.000020 ETH at 1M against 0.000015 at 500k. The cost is the pool
+valuation (~35k/stock), not the B20 transfer (a B20 `balanceOf` is 2.6k). A buy costs ~640k gas
+for the same reason (the sell gate values the pool). `retryOpen` re-requests only if no callback
+arrived within `REVEAL_TIMEOUT` (3 days).
 
 Mint terms are snapshotted per box (face, odds version, EV: H-05). A SKU cannot be retired while
 boxes are out (H-03). Payment and opens revert until the vault and converter are wired (H-04).
@@ -162,5 +170,7 @@ forge test --match-contract BoxForkTest -vv                # Base fork: needs BA
 live Base: the StockRegistry, the factory-B Slipstream router, the `$CHIP` v4 pool, the WETH/USDC
 pool, Chainlink ETH/USD, a real Entropy request, and FeeSplitter → Pot. B20 stocks are node-native
 precompiles that cannot run in a fork, so NVDA is etched with a runnable ERC-20 carrying the pool's
-real balance. That means the fork does **not** measure real B20 transfer gas inside the callback.
-Close that with an `eth_simulateV1` run on the live node before mainnet.
+real balance, so the fork cannot measure real B20 gas. `tools/box/box-callback-sim.cjs` does:
+it deploys all three contracts in an `eth_simulateV1` block on the live node, restocks real NVDA,
+buys, opens through real Entropy and delivers both reveals. Re-run it after any change to
+`settle`, and whenever stocks are added: `node tools/box/box-callback-sim.cjs`.

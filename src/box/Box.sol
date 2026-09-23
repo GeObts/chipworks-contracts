@@ -105,7 +105,10 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     address public immutable override entropy;
 
     address public override treasury;
-    uint32 public override callbackGasLimit = 500_000;
+    /// @dev 1M, not 500k: with real B20s and ten stocks listed the callback measured 529k before
+    ///      {PrizeVault._snapshot} (tools/box/box-callback-sim.cjs). Pyth charges little for the
+    ///      headroom: 0.000020 ETH at 1M against 0.000015 at 500k.
+    uint32 public override callbackGasLimit = 1_000_000;
     bool public paused;
     string public baseURI;
     uint256 public nextId = 1;

@@ -270,27 +270,32 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
             p.paid = true;
             return p;
         }
-        uint256 cap = _prizeCapUsd();
+        (Mark[] memory marks, uint256 inv) = _snapshot();
+        uint256 cap = inv * maxPrizeBps / BPS;
         if (prizeUsd > cap) {
             p.capped = true;
             emit PrizeNotPaid(to, prizeUsd, cap, true);
             return p;
         }
 
-        if (_payInStock(to, prizeUsd, entropy, p) || _payInUsdc(to, prizeUsd, p)) {
+        if (_payInStock(to, prizeUsd, entropy, marks, p) || _payInUsdc(to, prizeUsd, p)) {
             _emitPaid(to, p);
             return p;
         }
         emit PrizeNotPaid(to, prizeUsd, cap, false);
     }
 
-    function _payInStock(address to, uint256 prizeUsd, bytes32 entropy, Payout memory p) internal returns (bool) {
+    function _payInStock(address to, uint256 prizeUsd, bytes32 entropy, Mark[] memory marks, Payout memory p)
+        internal
+        returns (bool)
+    {
         uint256 n = _stockList.length;
         if (n == 0) return false;
         uint256 start = uint256(entropy) % n;
         for (uint256 i; i < n; ++i) {
-            address token = _stockList[_wrap(start + i, n)];
-            (bool ok, uint256 amount) = _canPayStock(token, prizeUsd);
+            uint256 k = _wrap(start + i, n);
+            address token = _stockList[k];
+            (bool ok, uint256 amount) = _canPayStock(token, prizeUsd, marks[k]);
             if (!ok) continue;
             if (!_tryTransfer(token, to, amount)) {
                 emit StockSkipped(token, bytes32("transfer"));
@@ -454,8 +459,25 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     /// @notice USDC plus every enabled stock with a fresh registry mark, in 6-dp USD.
     function inventoryUsd() public view override returns (uint256 usd) {
+        (, usd) = _snapshot();
+    }
+
+    /// @dev One stock's price and holding, read once.
+    struct Mark {
+        uint256 price; // 1e18 USD per whole token; 0 = unusable (disabled, stale, missing)
+        uint256 bal;
+        uint8 decimals;
+    }
+
+    /// @dev EVERY stock read happens here, once. On the live node a registry mark costs ~22.5k
+    ///      gas, and {settle} used to read each stock twice (once to size the cap over the whole
+    ///      pool, once again in the payout walk): 529k gas in the Pyth callback with ten stocks
+    ///      listed, over the 500k limit, measured with real B20s by tools/box/box-callback-sim.cjs.
+    ///      {settle} now values the pool and walks it from this one snapshot.
+    function _snapshot() internal view returns (Mark[] memory marks, uint256 usd) {
         usd = _usdcToUsd(IERC20(usdc).balanceOf(address(this)));
         uint256 n = _stockList.length;
+        marks = new Mark[](n);
         for (uint256 i; i < n; ++i) {
             address token = _stockList[i];
             PrizeStock memory st = _stocks[token];
@@ -463,8 +485,8 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
             uint256 price = _freshPrice(token);
             if (price == 0) continue;
             uint256 bal = IERC20(token).balanceOf(address(this));
-            if (bal == 0) continue;
-            usd += _tokensToUsd(bal, price, st.tokenDecimals);
+            marks[i] = Mark({price: price, bal: bal, decimals: st.tokenDecimals});
+            if (bal != 0) usd += _tokensToUsd(bal, price, st.tokenDecimals);
         }
     }
 
@@ -611,28 +633,24 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function _canPayStock(address token, uint256 prizeUsd) internal returns (bool ok, uint256 amount) {
+    /// @dev Decided from the {_snapshot} mark, with no further reads. `price == 0` there covers a
+    ///      disabled stock, a stale or missing registry mark, and a reverting feed.
+    function _canPayStock(address token, uint256 prizeUsd, Mark memory m) internal returns (bool ok, uint256 amount) {
         if (_isChip(token)) {
             emit StockSkipped(token, bytes32("chip"));
             return (false, 0);
         }
-        PrizeStock memory st = _stocks[token];
-        if (!st.enabled) {
-            emit StockSkipped(token, bytes32("disabled"));
+        if (m.price == 0) {
+            emit StockSkipped(token, bytes32("unpriced"));
             return (false, 0);
         }
-        uint256 price = _freshPrice(token);
-        if (price == 0) {
-            emit StockSkipped(token, bytes32("price"));
-            return (false, 0);
-        }
-        amount = Math.mulDiv(prizeUsd * 1e12, 10 ** uint256(st.tokenDecimals), price);
+        amount = Math.mulDiv(prizeUsd * 1e12, 10 ** uint256(m.decimals), m.price);
         if (amount == 0) {
             emit StockSkipped(token, bytes32("dust"));
             return (false, 0);
         }
-        if (amount > IERC20(token).balanceOf(address(this))) {
-            emit StockSkipped(token, bytes32("thin"));
+        if (amount > m.bal) {
+            emit StockSkipped(token, m.bal == 0 ? bytes32("empty") : bytes32("thin"));
             return (false, 0);
         }
         return (true, amount);

@@ -551,9 +551,6 @@ contract BoxAuditPoCTest is BoxTestBase {
         vm.createSelectFork(url);
 
         address realEntropy = 0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb;
-        uint128 fee = IEntropyV2(realEntropy).getFeeV2(500_000);
-        assertGt(fee, 0, "live Entropy quotes a fee");
-
         // USDC-only Box on fresh mocks (no CHIP path, so no converter / v4 pool needed).
         MockERC20 forkUsdc = new MockERC20("USD Coin", "USDC", 6);
         MockStockRegistry forkReg = new MockStockRegistry(address(forkUsdc));
@@ -576,6 +573,10 @@ contract BoxAuditPoCTest is BoxTestBase {
         vm.prank(multisig);
         forkVault.setBox(address(forkBox));
         forkUsdc.mint(address(forkVault), 200e6); // covers SKU1's $36 top prize
+        // The fee at the Box's own callback gas limit, not an assumed one.
+        uint128 fee = IEntropyV2(realEntropy).getFeeV2(forkBox.callbackGasLimit());
+        assertGt(fee, 0, "live Entropy quotes a fee");
+        assertEq(fee, forkBox.quoteOpenFee());
 
         // Forge's well-known `alice` key has code on Base mainnet (an EIP-7702 delegation), which
         // makes _safeMint's receiver check fail. Clear it: this test is about the Entropy fee.
