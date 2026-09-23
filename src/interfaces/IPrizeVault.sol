@@ -2,27 +2,28 @@
 pragma solidity ^0.8.24;
 
 /// @title IPrizeVault
-/// @notice B20 / USDC inventory that settles a Box draw. The Next.js /box page reads
-///         {inventoryUsd} and {prizeCapUsd}; only {Box} may call {settle}.
+/// @notice USDC + B20 pool that pays a Box draw. The Next.js /box page reads {inventoryUsd}
+///         and {prizeCapUsd}; only {Box} may call {settle}.
 interface IPrizeVault {
     /// @notice Result of one attempt to pay a drawn USD prize.
-    /// @dev `requestedUsd` is the odds-table draw. `payableUsd` is after the vault cap.
-    ///      `paidUsd` is what actually left. `shortfall` means we could not pay `payableUsd`.
+    /// @dev ALL OR NOTHING. `paid == false` means NOTHING moved and the Box records the prize
+    ///      as owed (claimable later at the same size). A prize is never paid short.
     struct Payout {
+        bool paid;
         uint256 requestedUsd;
-        uint256 payableUsd;
         uint256 paidUsd;
         address stock;
         uint256 stockAmount;
         uint256 usdcAmount;
+        /// @notice Non-zero when the prize was handed to the ChipConverter to be delivered as CHIP.
+        uint256 chipPrizeId;
         bool capped;
-        bool shortfall;
         bool fallbackStock;
         bool usdcFallback;
     }
 
     function usdc() external view returns (address);
-    /// @notice $CHIP payment / working capital. Never a prize asset (H-01).
+    /// @notice $CHIP. Held here only to be REFUSED as prize stock (H-01). The vault never takes CHIP in.
     function chip() external view returns (address);
     function box() external view returns (address);
     function maxPrizeBps() external view returns (uint32);
@@ -30,7 +31,5 @@ interface IPrizeVault {
     function prizeCapUsd() external view returns (uint256);
     function stockCount() external view returns (uint256);
     function stockAt(uint256 index) external view returns (address);
-    function quoteTokenAmount(address token, uint256 prizeUsd) external view returns (uint256);
-
-    function settle(address to, uint256 prizeUsd, bytes32 entropy) external returns (Payout memory);
+    function settle(address to, uint256 prizeUsd, bytes32 entropy, bool payInChip) external returns (Payout memory);
 }

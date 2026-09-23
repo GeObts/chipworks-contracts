@@ -17,6 +17,10 @@ import {NounLoans} from "../src/loans/NounLoans.sol";
 import {Anvil} from "../src/anvil/Anvil.sol";
 import {Box} from "../src/box/Box.sol";
 import {PrizeVault} from "../src/box/PrizeVault.sol";
+import {ChipConverter} from "../src/box/ChipConverter.sol";
+import {PoolKey} from "../src/interfaces/IUniswapV4.sol";
+import {MockStockRegistry} from "./mocks/MockStockRegistry.sol";
+import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 
 /// @title CodeSizeTest
 /// @notice Fails the build if any deployable contract grows past the budget.
@@ -120,8 +124,26 @@ contract CodeSizeTest is Test {
         // ChipWorks Box is a separate product family. Still undeployable if it exceeds EIP-170.
         address boxUsdc = _erc20();
         address boxChip = _erc20();
-        address prizeVault = address(new PrizeVault(multisig, boxUsdc, boxChip, 2_500));
+        address boxWeth = _erc20();
+        address prizeVault = address(
+            new PrizeVault(multisig, boxUsdc, boxChip, address(new MockStockRegistry(boxUsdc)), _factory(), _factory(), 2_500)
+        );
         _check("PrizeVault", prizeVault);
+        (address c0, address c1) = boxChip < boxWeth ? (boxChip, boxWeth) : (boxWeth, boxChip);
+        address boxConverter = address(
+            new ChipConverter(
+                multisig,
+                boxChip,
+                boxWeth,
+                boxUsdc,
+                _factory(),
+                _factory(),
+                address(new MockAggregatorV3(8, 2_000e8, "ETH / USD")),
+                500,
+                PoolKey({currency0: c0, currency1: c1, fee: 0x800000, tickSpacing: 200, hooks: address(0)})
+            )
+        );
+        _check("ChipConverter", boxConverter);
         _check(
             "Box",
             address(
@@ -129,8 +151,9 @@ contract CodeSizeTest is Test {
                     multisig,
                     boxUsdc,
                     boxChip,
-                    0xe1096B727499a3f70FaD8bc0267F5e69d01373C7,
+                    0xb9b76e1835afE05e5A73065FE01A19B14869F8A3,
                     prizeVault,
+                    boxConverter,
                     _factory(),
                     0,
                     0,

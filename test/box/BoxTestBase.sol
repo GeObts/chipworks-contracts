@@ -5,58 +5,111 @@ import {Test} from "forge-std/Test.sol";
 
 import {Box} from "../../src/box/Box.sol";
 import {PrizeVault} from "../../src/box/PrizeVault.sol";
+import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {PoolKey} from "../../src/interfaces/IUniswapV4.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockAggregatorV3} from "../mocks/MockAggregatorV3.sol";
 import {MockEntropyV2} from "../mocks/MockEntropyV2.sol";
+import {MockStockRegistry} from "../mocks/MockStockRegistry.sol";
+import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
+import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 
+/// @notice The whole Box system on mocks. Prices are round numbers so every expected
+///         amount in a test can be worked out by hand:
+///           NVDA $100 (8 dp, Slipstream)   TSLA $200 (8 dp, Uniswap v3)
+///           ETH  $2,000                    CHIP $0.00005 (20,000 CHIP = $1)
 contract BoxTestBase is Test {
     Box internal boxes;
     PrizeVault internal vault;
+    ChipConverter internal converter;
     MockEntropyV2 internal entropy;
+    MockStockRegistry internal registry;
+    MockSwapRouter internal router; // plays both the Slipstream and the Uniswap v3 stock routers
+    MockSwapRouter internal v3; // the WETH/USDC leg of the converter
+    MockPoolManager internal pm; // the $CHIP/WETH v4 pool
+    MockAggregatorV3 internal ethFeed;
+
     MockERC20 internal usdc;
     MockERC20 internal chip;
+    MockERC20 internal weth;
     MockERC20 internal nvda;
     MockERC20 internal tsla;
-    MockAggregatorV3 internal nvdaFeed;
-    MockAggregatorV3 internal tslaFeed;
 
     address internal multisig = makeAddr("multisig");
-    /// @dev Goyabean's Safe — same address as {Box.DEFAULT_FEE_RECIPIENT}.
-    address internal treasury = 0xe1096B727499a3f70FaD8bc0267F5e69d01373C7;
+    address internal keeper = makeAddr("keeper");
+    /// @dev Stands in for the FeeSplitter: the Box's fee recipient.
+    address internal treasury = makeAddr("feeSplitter");
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
 
     uint8 internal constant SKU1 = 0;
     uint8 internal constant SKU10 = 1;
     uint8 internal constant SKU25 = 2;
+
     uint256 internal constant USD1 = 1_000_000;
     uint256 internal constant USD10 = 10_000_000;
     uint256 internal constant USD25 = 25_000_000;
-    uint128 internal constant CHIP1 = 100 ether;
-    uint128 internal constant CHIP10 = 1_000 ether;
-    uint128 internal constant CHIP25 = 2_500 ether;
-    uint256 internal constant NVDA_PRICE = 100e8; // $100, 8 dp feed
-    uint256 internal constant TSLA_PRICE = 200e8; // $200
+
+    uint128 internal constant CHIP_PER_USD = 20_000 ether;
+    uint128 internal constant CHIP1 = CHIP_PER_USD;
+    uint128 internal constant CHIP10 = 10 * CHIP_PER_USD;
+    uint128 internal constant CHIP25 = 25 * CHIP_PER_USD;
+
+    uint256 internal constant NVDA_PRICE = 100e18;
+    uint256 internal constant TSLA_PRICE = 200e18;
 
     function setUp() public virtual {
         vm.warp(1_700_000_000);
-
         usdc = new MockERC20("USD Coin", "USDC", 6);
         chip = new MockERC20("Chipworks", "CHIP", 18);
-        nvda = new MockERC20("NVIDIA", "NVDAX", 8);
-        tsla = new MockERC20("Tesla", "TSLAX", 8);
-        nvdaFeed = new MockAggregatorV3(8, int256(NVDA_PRICE), "NVDA");
-        tslaFeed = new MockAggregatorV3(8, int256(TSLA_PRICE), "TSLA");
-        entropy = new MockEntropyV2();
+        weth = new MockERC20("Wrapped Ether", "WETH", 18);
+        nvda = new MockERC20("NVIDIA", "NVDAc", 8);
+        tsla = new MockERC20("Tesla", "TSLAc", 8);
 
-        vault = new PrizeVault(multisig, address(usdc), address(chip), 2_500);
-        boxes = _newBox(address(vault), address(chip), CHIP1, CHIP10, CHIP25);
+        registry = new MockStockRegistry(address(usdc));
+        registry.setStock(address(nvda), Venue.Slipstream, 0, 10, 8, true);
+        registry.setStock(address(tsla), Venue.UniswapV3, 3000, 0, 8, true);
+        registry.setPrice(address(nvda), NVDA_PRICE);
+        registry.setPrice(address(tsla), TSLA_PRICE);
+
+        router = new MockSwapRouter();
+        router.setRate(address(usdc), address(nvda), 1, 1); // $1 (1e6) -> 0.01 NVDA (1e6)
+        router.setRate(address(usdc), address(tsla), 1, 2); // $1 -> 0.005 TSLA
+        nvda.mint(address(router), 1_000_000e8);
+        tsla.mint(address(router), 1_000_000e8);
+
+        v3 = new MockSwapRouter();
+        v3.setRate(address(weth), address(usdc), 2_000e6, 1e18);
+        v3.setRate(address(usdc), address(weth), 1e18, 2_000e6);
+        usdc.mint(address(v3), 10_000_000e6);
+        weth.mint(address(v3), 10_000 ether);
+        ethFeed = new MockAggregatorV3(8, 2_000e8, "ETH / USD");
+
+        pm = new MockPoolManager();
+        // 1 CHIP = $0.00005 = 2.5e-8 ETH
+        pm.setRate(address(chip), address(weth), 25, 1e9);
+        pm.setRate(address(weth), address(chip), 1e9, 25);
+        weth.mint(address(pm), 10_000 ether);
+        chip.mint(address(pm), 1e33);
+
+        entropy = new MockEntropyV2();
+        vault = new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 2_500);
+        converter = new ChipConverter(
+            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), address(ethFeed), 500, _key()
+        );
+        boxes = _newBox(address(vault), address(chip), address(converter));
 
         vm.startPrank(multisig);
         vault.setBox(address(boxes));
-        vault.addStock(address(nvda), address(nvdaFeed), 8);
-        vault.addStock(address(tsla), address(tslaFeed), 8);
+        converter.setBox(address(boxes));
+        vault.addStock(address(nvda));
+        vault.addStock(address(tsla));
+        vault.setKeeper(keeper);
+        converter.setKeeper(keeper);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 5_000);
+        converter.setLimits(100_000_000 ether, 1_000_000_000 ether, 5_000e6, 50_000e6);
         vm.stopPrank();
 
         _fundVault();
@@ -64,23 +117,32 @@ contract BoxTestBase is Test {
         _fundBuyer(bob);
     }
 
-    function _newBox(address vault_, address chip_, uint128 p1, uint128 p10, uint128 p25) internal returns (Box) {
-        return new Box(multisig, address(usdc), chip_, treasury, vault_, address(entropy), p1, p10, p25);
+    function _key() internal view returns (PoolKey memory) {
+        (address c0, address c1) = address(chip) < address(weth) ? (address(chip), address(weth)) : (address(weth), address(chip));
+        return PoolKey({currency0: c0, currency1: c1, fee: 0x800000, tickSpacing: 200, hooks: address(0)});
     }
 
+    function _newBox(address vault_, address chip_, address converter_) internal returns (Box) {
+        return new Box(
+            multisig, address(usdc), chip_, treasury, vault_, converter_, address(entropy), CHIP1, CHIP10, CHIP25
+        );
+    }
+
+    /// @dev $10,000 USDC + 100 NVDA ($10,000) + 50 TSLA ($10,000) = $30,000 inventory,
+    ///      so the 25% cap is $7,500 and every SKU's top prize ($900 at most) is covered.
     function _fundVault() internal {
-        usdc.mint(address(vault), 10_000 * 1e6);
-        nvda.mint(address(this), 1_000e8);
-        tsla.mint(address(this), 1_000e8);
+        usdc.mint(address(vault), 10_000e6);
+        nvda.mint(address(this), 100e8);
+        tsla.mint(address(this), 50e8);
         nvda.approve(address(vault), type(uint256).max);
         tsla.approve(address(vault), type(uint256).max);
-        vault.deposit(address(nvda), 1_000e8);
-        vault.deposit(address(tsla), 1_000e8);
+        vault.deposit(address(nvda), 100e8);
+        vault.deposit(address(tsla), 50e8);
     }
 
     function _fundBuyer(address who) internal {
-        usdc.mint(who, 1_000 * 1e6);
-        chip.mint(who, 100_000 ether);
+        usdc.mint(who, 1_000e6);
+        chip.mint(who, 100 * uint256(CHIP_PER_USD) * 100);
         vm.deal(who, 10 ether);
         vm.startPrank(who);
         usdc.approve(address(boxes), type(uint256).max);
@@ -93,14 +155,19 @@ contract BoxTestBase is Test {
         id = boxes.buyWithUsdc(SKU1, who);
     }
 
-    function _openAndFulfill(address who, uint256 id, bytes32 rand) internal {
+    function _open(address who, uint256 id) internal returns (uint64 seq) {
         uint128 fee = boxes.quoteOpenFee();
         vm.prank(who);
         boxes.open{value: fee}(id);
-        uint64 seq = boxes.boxInfo(id).sequence;
+        seq = boxes.boxInfo(id).sequence;
+    }
+
+    function _openAndFulfill(address who, uint256 id, bytes32 rand) internal {
+        uint64 seq = _open(who, id);
         entropy.fulfill(seq, rand);
     }
 
+    /// @dev A random number that lands exactly on the first roll of `tierId`.
     function _rollForTier(uint8 tierId) internal view returns (bytes32) {
         IBox.PrizeTier[] memory tiers = boxes.oddsTable();
         uint256 acc;
