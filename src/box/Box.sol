@@ -49,7 +49,7 @@ import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
 ///      configured callback gas limit, forwards that exact fee, and refunds any excess
 ///      ETH (M-08). {buy*}/{open}/{retryOpen} revert unless {IPrizeVault.box} == this
 ///      (H-04 / H-01: no payment into an unwired vault).
-///      The Entropy contract later calls {entropyCallback}. That callback must not
+///      The Entropy contract later calls {_entropyCallback}. That callback must not
 ///      revert: an unpaid or reverting {IPrizeVault.settle} leaves the NFT OWED with the
 ///      drawn prize fixed (no silent burn, no re-roll). Basescan sees
 ///      {BoxOpeningRequested}, then {BoxOpened} (paid) or {PrizeOwed}.
@@ -77,8 +77,15 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     uint256 public constant MAX_BATCH = 20;
     uint64 public constant CONFIG_TIMELOCK = 48 hours;
     uint64 public constant CONFIG_GRACE = 14 days;
-    uint64 public constant REVEAL_TIMEOUT = 3 days;
-    uint32 public constant MIN_CALLBACK_GAS = 100_000;
+    /// @notice How long an open must go completely unrevealed before {retryOpen}. See there.
+    uint64 public constant REVEAL_TIMEOUT = 30 days;
+    /// @dev EntropyStatusConstants.CALLBACK_NOT_STARTED: requested, never revealed.
+    uint8 internal constant CALLBACK_NOT_STARTED = 1;
+    /// @notice The owner cannot set the callback gas below what a payout needs with the vault's
+    ///         maximum stock list ({PrizeVault.MAX_STOCKS} = 16). Measured with real B20s on the
+    ///         live node (tools/box/box-callback-sim.cjs): ~36k gas per listed stock, 573k with 13
+    ///         listed, so ~683k at 16. 900k keeps ~30% over that; the 1M default keeps ~46%.
+    uint32 public constant MIN_CALLBACK_GAS = 900_000;
     uint32 public constant MAX_CALLBACK_GAS = 2_000_000;
 
     uint8 public constant SKU_ONE_USD = 0;
@@ -117,6 +124,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     mapping(uint8 => uint256) public override sealedSupply;
     mapping(uint256 => BoxView) internal _info;
     mapping(uint64 => uint256) internal _tokenIdOfSequence;
+    /// @dev The Entropy provider each open was requested from.
+    mapping(uint256 => address) internal _providerOf;
 
     /// @notice USD EV of every sealed + opening box, snapshotted at mint (6 decimals).
     uint256 public override outstandingLiabilityUsd;
@@ -216,6 +225,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     error StillUnpayable(uint256 tokenId, uint256 prizeUsd);
     error SkuNotCovered(uint8 skuId, uint256 topPrizeUsd, uint256 prizeCapUsd);
     error RevealNotTimedOut(uint64 nowTs, uint64 readyAt);
+    error RevealAlreadyPublic(uint256 tokenId, uint8 callbackStatus);
     error BoxLocked(uint256 tokenId);
     error Underpaid(uint256 sent, uint256 required);
     error RefundFailed();
@@ -349,7 +359,16 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         _requestEntropy(tokenId, b);
     }
 
-    /// @notice Re-request entropy if the original callback has not arrived after {REVEAL_TIMEOUT}.
+    /// @notice Last resort: ask Entropy for NEW randomness, only if the original request was never
+    ///         revealed at all within {REVEAL_TIMEOUT} (the provider is gone).
+    /// @dev NOT A RE-ROLL. When a callback fails, Pyth publishes the random number in
+    ///      `CallbackFailed` and marks the request CALLBACK_FAILED; the fix for that is Pyth's own
+    ///      permissionless `revealWithCallback`, which re-runs this Box's callback with the SAME
+    ///      number (the keeper does it). Allowing fresh randomness there would let a holder read a
+    ///      bad draw and roll again, so this refuses anything but CALLBACK_NOT_STARTED. The 30-day
+    ///      timeout covers the remaining case: Fortuna serves revelations over HTTP, so an
+    ///      unrevealed draw is computable off chain, and the keeper completes stuck reveals long
+    ///      before any holder could wait out the clock.
     function retryOpen(uint256 tokenId) external payable override nonReentrant {
         if (paused) revert PausedError();
         BoxView storage b = _info[tokenId];
@@ -357,6 +376,10 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         if (b.opener != msg.sender) revert NotOwner();
         uint64 readyAt = b.openingStartedAt + REVEAL_TIMEOUT;
         if (block.timestamp < readyAt) revert RevealNotTimedOut(uint64(block.timestamp), readyAt);
+        IEntropyV2.RequestV2 memory r = IEntropyV2(entropy).getRequestV2(_providerOf[tokenId], b.sequence);
+        if (r.sequenceNumber != b.sequence || r.callbackStatus != CALLBACK_NOT_STARTED) {
+            revert RevealAlreadyPublic(tokenId, r.callbackStatus);
+        }
         delete _tokenIdOfSequence[b.sequence];
         _requestEntropy(tokenId, b);
     }
@@ -375,14 +398,18 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         _emitOpened(b.opener, tokenId, b.sequence, b.skuId, type(uint8).max, 0, b.owedUsd, payout);
     }
 
-    /// @notice Pyth Entropy v2 callback. This is the selector Entropy actually calls.
+    /// @notice Pyth Entropy v2 callback body. Entropy itself calls {_entropyCallback}
+    ///         (IEntropyConsumer._entropyCallback, read from the verified Base implementation).
     /// @dev Never reverts on a failed payout. A revert here would stall the keeper.
     function entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) public {
         if (msg.sender != entropy) revert OnlyEntropy();
         _fulfill(sequence, provider, randomNumber);
     }
 
-    /// @dev Alias kept for the in-repo mock / older ABI. Pyth v2 calls {entropyCallback}.
+    /// @dev THE SELECTOR PYTH CALLS: Entropy.revealWithCallback invokes this on
+    ///      the requester, gas-capped at the request's limit. On failure Pyth publishes the number
+    ///      and marks the request CALLBACK_FAILED; re-running revealWithCallback calls this again
+    ///      with the SAME number and all remaining gas. See {retryOpen}.
     function _entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) external {
         entropyCallback(sequence, provider, randomNumber);
     }
@@ -465,6 +492,12 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
 
     function boxInfo(uint256 tokenId) external view override returns (BoxView memory) {
         return _info[tokenId];
+    }
+
+    /// @notice The Entropy provider an opening box was requested from. The keeper needs it to
+    ///         complete a stuck reveal through Entropy.revealWithCallback.
+    function openingProvider(uint256 tokenId) external view returns (address) {
+        return _providerOf[tokenId];
     }
 
     function tokenIdOfSequence(uint64 sequence) external view override returns (uint256) {
@@ -677,10 +710,14 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         if (IPrizeVault(vault).box() != address(this)) revert VaultNotWired();
 
         uint32 gasLimit = callbackGasLimit;
-        uint128 fee = IEntropyV2(entropy).getFeeV2(gasLimit);
+        // The provider is named explicitly and remembered: {retryOpen} must ask Entropy about
+        // THIS request, even if the default provider has changed since.
+        address provider = IEntropyV2(entropy).getDefaultProvider();
+        uint128 fee = IEntropyV2(entropy).getFeeV2(provider, gasLimit);
         if (msg.value < fee) revert Underpaid(msg.value, fee);
 
-        uint64 sequence = IEntropyV2(entropy).requestV2{value: fee}(gasLimit);
+        uint64 sequence = IEntropyV2(entropy).requestV2{value: fee}(provider, gasLimit);
+        _providerOf[tokenId] = provider;
         b.state = STATE_OPENING;
         b.opener = msg.sender;
         b.sequence = sequence;
@@ -738,6 +775,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
 
     function _retire(uint256 tokenId, uint8 skuId) internal {
         delete _info[tokenId];
+        delete _providerOf[tokenId];
         if (sealedSupply[skuId] != 0) {
             unchecked {
                 --sealedSupply[skuId];

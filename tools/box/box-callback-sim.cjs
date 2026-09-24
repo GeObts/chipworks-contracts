@@ -49,7 +49,7 @@ const ME = '0x00000000000000000000000000000000B0c50001';
 const USDC_BALANCE_SLOT = 9n; // FiatToken balanceAndBlacklistStates
 
 const ERC20 = parseAbi(['function balanceOf(address) view returns (uint256)', 'function approve(address,uint256) returns (bool)', 'function transfer(address,uint256) returns (bool)']);
-const REG = parseAbi(['function enabledTokens() view returns (address[])']);
+const REG = parseAbi(['function enabledTokens() view returns (address[])', 'function allTokens() view returns (address[])']);
 const ENT = parseAbi(['function getDefaultProvider() view returns (address)', 'function getFeeV2(uint32) view returns (uint128)']);
 
 const hex = (n) => '0x' + BigInt(n).toString(16);
@@ -91,7 +91,10 @@ async function simulate(calls) {
   const vault = getContractAddress({ from: ME, nonce: 0n });
   const conv = getContractAddress({ from: ME, nonce: 1n });
   const box = getContractAddress({ from: ME, nonce: 2n });
-  const stocks = (await read(REGISTRY, REG, 'enabledTokens')).filter((t) => t.toLowerCase() !== CHIP.toLowerCase());
+  // STOCKS=all lists every REGISTERED stock (the vault accepts registered, not only enabled),
+  // to measure the callback with as many real B20s as exist.
+  const which = process.env.STOCKS === 'all' ? 'allTokens' : 'enabledTokens';
+  const stocks = (await read(REGISTRY, REG, which)).filter((t) => t.toLowerCase() !== CHIP.toLowerCase());
   const provider = await read(ENTROPY, ENT, 'getDefaultProvider');
   const fee = await read(ENTROPY, ENT, 'getFeeV2', [1_000_000]); // Box.callbackGasLimit
   const nvdaIdx = stocks.findIndex((t) => t.toLowerCase() === NVDA.toLowerCase());
@@ -138,9 +141,9 @@ async function simulate(calls) {
   // Pass 2: the same, plus both reveals delivered as Entropy, plus the balances after.
   const tail = [
     call(ME, NVDA, ERC20, 'balanceOf', [ME]),
-    call(ENTROPY, box, BOX_ART.abi, 'entropyCallback', [seq1, provider, pad(toHex(best), { size: 32 })]),
+    call(ENTROPY, box, BOX_ART.abi, '_entropyCallback', [seq1, provider, pad(toHex(best), { size: 32 })]),
     call(ME, NVDA, ERC20, 'balanceOf', [ME]),
-    call(ENTROPY, box, BOX_ART.abi, 'entropyCallback', [seq2, provider, pad(toHex(worst), { size: 32 })]),
+    call(ENTROPY, box, BOX_ART.abi, '_entropyCallback', [seq2, provider, pad(toHex(worst), { size: 32 })]),
     call(ME, NVDA, ERC20, 'balanceOf', [ME]),
     call(ME, box, BOX_ART.abi, 'outstandingLiabilityUsd'),
     call(ME, box, BOX_ART.abi, 'callbackGasLimit'),
@@ -156,7 +159,7 @@ async function simulate(calls) {
   const u = (c, abi, fn) => decodeFunctionResult({ abi, functionName: fn, data: c.returnData });
   const bal = (c) => u(c, ERC20, 'balanceOf');
 
-  console.log(`block ${p2.block}; ${stocks.length} enabled registry stocks listed; NVDA is #${nvdaIdx}`);
+  console.log(`block ${p2.block}; ${stocks.length} ${which === 'allTokens' ? 'registered' : 'enabled'} registry stocks listed; NVDA is #${nvdaIdx}`);
   console.log(`restock $1,000 -> NVDA: ${restock.status === '0x1' ? 'ok' : 'REVERTED ' + errName(restock.returnData)}, gas ${BigInt(restock.gasUsed)}`);
   const limit = u(r[6], BOX_ART.abi, 'callbackGasLimit');
   const problems = [];

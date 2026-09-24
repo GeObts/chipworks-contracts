@@ -53,6 +53,11 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint32 public constant BPS = 10_000;
+    /// @notice HARD CAP, and a gas bound, not a tidiness rule. Every listed stock is priced in
+    ///         the Pyth callback ({_snapshot}): ~36k gas each with real B20s, ~683k at 16 against
+    ///         Box.MIN_CALLBACK_GAS = 900k. Listing more would let a stock list outgrow the callback
+    ///         gas and strand opens. Stocks can be disabled but never removed, so this counts
+    ///         every stock ever listed.
     uint256 public constant MAX_STOCKS = 16;
     uint64 public constant CONFIG_TIMELOCK = 48 hours;
     uint64 public constant CONFIG_GRACE = 14 days;

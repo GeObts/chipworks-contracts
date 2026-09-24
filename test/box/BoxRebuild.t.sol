@@ -6,6 +6,7 @@ import {Box} from "../../src/box/Box.sol";
 import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
 
 /// @notice The rebuild's own properties: CHIP never parked, stocks-only prizes, never-short
 ///         payouts, the sell gate, keeper restock and the house-take sweep. Every expected
@@ -220,6 +221,69 @@ contract BoxRebuildTest is BoxTestBase {
         assertEq(b2.outstandingLiabilityUsd(), 0);
     }
 
+    /// @dev The re-roll hole: a callback that FAILED has had its random number published by
+    ///      Pyth. retryOpen must refuse it however long the holder waits; the only way forward
+    ///      is Pyth's revealWithCallback, which re-runs the callback with the SAME number.
+    function test_retryOpen_refusesARevealThatFailed_evenAfterTheTimeout() public {
+        uint256 id = _buy1(alice);
+        uint64 seq = _open(alice, id);
+        entropy.setStatus(seq, 3); // CALLBACK_FAILED: the number is public
+        vm.warp(block.timestamp + boxes.REVEAL_TIMEOUT());
+        uint128 fee = boxes.quoteOpenFee();
+        vm.expectRevert(abi.encodeWithSelector(Box.RevealAlreadyPublic.selector, id, uint8(3)));
+        vm.prank(alice);
+        boxes.retryOpen{value: fee}(id);
+
+        // Recovery is the same number, delivered again: the box pays that draw, not a new one.
+        entropy.setStatus(seq, 1);
+        registry.setPrice(address(nvda), NVDA_PRICE); // 30 days on, the marks need a fresh stamp
+        registry.setPrice(address(tsla), TSLA_PRICE);
+        uint256 n0 = nvda.balanceOf(alice);
+        entropy.fulfill(seq, _rollForTier(2)); // Uncommon, $1
+        assertEq(nvda.balanceOf(alice) - n0, 1e6, "the original draw is what pays");
+    }
+
+    /// @dev The gas bound: at most 16 stocks can ever be listed, and the callback gas can never be
+    ///      set below what 16 need (measured ~683k with real B20s; the floor is 900k).
+    function test_stockListAndCallbackGasAreBothBounded() public {
+        uint256 cap = vault.MAX_STOCKS();
+        assertEq(cap, 16);
+        vm.startPrank(multisig);
+        for (uint256 i = vault.stockCount(); i < cap; ++i) {
+            MockERC20_ t = new MockERC20_();
+            registry.setStock(address(t), Venue.Slipstream, 0, 10, 8, true);
+            vault.addStock(address(t));
+        }
+        MockERC20_ extra = new MockERC20_();
+        registry.setStock(address(extra), Venue.Slipstream, 0, 10, 8, true);
+        vm.expectRevert(PrizeVault.TooManyStocks.selector);
+        vault.addStock(address(extra));
+
+        // Disabling does not free a slot: every stock ever listed is still walked.
+        vault.setStockEnabled(address(nvda), false);
+        vm.expectRevert(PrizeVault.TooManyStocks.selector);
+        vault.addStock(address(extra));
+
+        uint32 floor = boxes.MIN_CALLBACK_GAS();
+        assertEq(floor, 900_000);
+        vm.expectRevert(Box.BadConfig.selector);
+        boxes.setCallbackGasLimit(floor - 1);
+        boxes.setCallbackGasLimit(floor);
+        vm.stopPrank();
+        assertEq(boxes.callbackGasLimit(), 900_000);
+    }
+
+    function test_retryOpen_waitsThirtyDays() public {
+        uint256 id = _buy1(alice);
+        _open(alice, id);
+        assertEq(boxes.REVEAL_TIMEOUT(), 30 days);
+        vm.warp(block.timestamp + 30 days - 1);
+        uint128 fee = boxes.quoteOpenFee();
+        vm.expectRevert();
+        vm.prank(alice);
+        boxes.retryOpen{value: fee}(id);
+    }
+
     /* ------------------------------------------------------------------ */
     /*                     4. Keeper restock                                */
     /* ------------------------------------------------------------------ */
@@ -426,5 +490,16 @@ contract BoxRebuildTest is BoxTestBase {
             acc += tiers[i].weight;
         }
         return bytes32(acc);
+    }
+}
+
+/// @dev A throwaway 8-dp token for filling the stock list.
+contract MockERC20_ {
+    function decimals() external pure returns (uint8) {
+        return 8;
+    }
+
+    function balanceOf(address) external pure returns (uint256) {
+        return 0;
     }
 }

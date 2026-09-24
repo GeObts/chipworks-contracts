@@ -475,7 +475,7 @@ contract BoxTest is BoxTestBase {
         vm.expectRevert();
         boxes.retryOpen{value: fee}(id);
 
-        vm.warp(block.timestamp + 3 days);
+        vm.warp(block.timestamp + boxes.REVEAL_TIMEOUT());
         vm.prank(alice);
         boxes.retryOpen{value: fee}(id);
         uint64 newSeq = boxes.boxInfo(id).sequence;
