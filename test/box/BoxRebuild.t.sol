@@ -402,6 +402,29 @@ contract BoxRebuildTest is BoxTestBase {
         assertEq(boxes.maxLivePrizeUsd(), 900e6);
     }
 
+    /// @dev A sold box keeps its mint face and odds (H-05). Cutting the top tier or the price
+    ///      afterwards must not shrink the reserve the sweep leaves under that box's jackpot.
+    function test_sweep_reserveCoversJackpotsAlreadySold_afterOddsAndPriceCuts() public {
+        vm.prank(alice);
+        boxes.buyWithUsdc(SKU25, alice); // this box can win $900 forever
+        assertEq(boxes.maxSoldPrizeUsd(), 900e6);
+
+        // Owner cuts the jackpot to 10x and the $25 SKU to $20 (both 48h-timelocked).
+        IBox.PrizeTier[] memory t = boxes.oddsTable();
+        t[5].prizeBps = 100_000;
+        vm.startPrank(multisig);
+        boxes.queueOdds(t);
+        boxes.queueSku(SKU25, true, 20e6, CHIP25);
+        vm.warp(block.timestamp + 48 hours);
+        boxes.executeOdds();
+        boxes.executeSku();
+        vm.stopPrank();
+
+        assertEq(boxes.maxPrizeUsd(SKU25), 200e6, "a NEW $25-slot box now tops out at $200");
+        assertEq(boxes.maxLivePrizeUsd(), 900e6, "the sold box still reserves its $900");
+        assertEq(vault.jackpotReserveUsd(), 3_600e6);
+    }
+
     /* ------------------------------------------------------------------ */
     /*                   6. CHIP is never inventory                         */
     /* ------------------------------------------------------------------ */

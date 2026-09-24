@@ -127,6 +127,11 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     /// @dev The Entropy provider each open was requested from.
     mapping(uint256 => address) internal _providerOf;
 
+    /// @notice Largest single prize any box ever sold can win (6 dp). Only ever rises; see
+    ///         {maxLivePrizeUsd}. Conservative on purpose: after the last such box is opened it
+    ///         keeps the sweep's reserve higher than it needs to be, never lower.
+    uint256 public maxSoldPrizeUsd;
+
     /// @notice USD EV of every sealed + opening box, snapshotted at mint (6 decimals).
     uint256 public override outstandingLiabilityUsd;
 
@@ -458,13 +463,16 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     }
 
     /// @inheritdoc IBox
+    /// @dev Two sources, the larger wins. (1) Every SKU on sale, at the current table: what the
+    ///      next sale could owe. (2) {maxSoldPrizeUsd}: the largest prize any box ALREADY SOLD
+    ///      can win. A sold box keeps its mint face and odds version (H-05), so pausing a SKU,
+    ///      cutting its price or lowering the top tier must not shrink the reserve under it.
     function maxLivePrizeUsd() public view override returns (uint256 m) {
+        m = maxSoldPrizeUsd;
         uint32 top = _maxTierBpsAt(oddsVersion);
         for (uint8 i; i < MAX_SKUS; ++i) {
             Sku memory s = _skus[i];
-            // A paused SKU still counts while any of its boxes are out: otherwise pausing the
-            // $25 SKU would shrink the sweep's reserve under jackpots already sold.
-            if (!s.exists || (s.paused && sealedSupply[i] == 0)) continue;
+            if (!s.exists || s.paused) continue;
             uint256 p = uint256(s.usdcPrice) * top / WEIGHT_DENOM;
             if (p > m) m = p;
         }
@@ -662,6 +670,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
             uint256 top = maxPrizeUsd(skuId);
             uint256 cap = IPrizeVault(vault).prizeCapUsd();
             if (cap < top) revert SkuNotCovered(skuId, top, cap);
+            if (top > maxSoldPrizeUsd) maxSoldPrizeUsd = top;
         }
 
         uint256 fee;
