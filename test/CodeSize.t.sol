@@ -20,7 +20,6 @@ import {PrizeVault} from "../src/box/PrizeVault.sol";
 import {ChipConverter} from "../src/box/ChipConverter.sol";
 import {PoolKey} from "../src/interfaces/IUniswapV4.sol";
 import {MockStockRegistry} from "./mocks/MockStockRegistry.sol";
-import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 
 /// @title CodeSizeTest
 /// @notice Fails the build if any deployable contract grows past the budget.
@@ -138,7 +137,6 @@ contract CodeSizeTest is Test {
                 boxUsdc,
                 _factory(),
                 _factory(),
-                address(new MockAggregatorV3(8, 2_000e8, "ETH / USD")),
                 500,
                 PoolKey({currency0: c0, currency1: c1, fee: 0x800000, tickSpacing: 200, hooks: address(0)})
             )
@@ -154,10 +152,7 @@ contract CodeSizeTest is Test {
                     0xb9b76e1835afE05e5A73065FE01A19B14869F8A3,
                     prizeVault,
                     boxConverter,
-                    _factory(),
-                    0,
-                    0,
-                    0
+                    _factory()
                 )
             )
         );

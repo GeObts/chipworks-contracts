@@ -132,9 +132,10 @@ contract BoxVaultTest is BoxTestBase {
 
         uint256 usdc0 = usdc.balanceOf(alice);
         uint256 chip0 = chip.balanceOf(alice);
+        (uint256 w, uint256 c) = _chipQuote(USD1);
         vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), uint256(0)));
-        thinBox.buyWithChip(SKU1, alice);
+        thinBox.buyWithChip(SKU1, alice, w, c * 2, block.timestamp);
         vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), uint256(0)));
         thinBox.buyWithUsdc(SKU1, alice);
         vm.stopPrank();
@@ -160,8 +161,9 @@ contract BoxVaultTest is BoxTestBase {
         assertFalse(thinBox.isSkuCovered(SKU10));
         vm.prank(alice);
         thinBox.buyWithUsdc(SKU1, alice);
+        uint256 capNow = thinVault.prizeCapUsd(); // read first: an inline call would eat the prank
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU10, uint256(360e6), thinVault.prizeCapUsd()));
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU10, uint256(360e6), capNow));
         thinBox.buyWithUsdc(SKU10, alice);
     }
 

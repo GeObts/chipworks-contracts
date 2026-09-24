@@ -1,21 +1,21 @@
-# node tools/box/box-callback-sim.cjs  (default: the 10 ENABLED registry stocks)
-block 51712113; 10 enabled registry stocks listed; NVDA is #0
-restock $1,000 -> NVDA: ok, gas 668464
-callback best  (NVDA first): ok  gas 466322  NVDA won 4436065 (8dp)
-callback worst (skip all)  : ok  gas 464193  NVDA won 4436065 (8dp)
+# node tools/box/box-callback-sim.cjs  (default: the ENABLED registry stocks)
+block 51733604; 10 enabled registry stocks listed; NVDA is #0
+restock $1,000 -> NVDA: ok, gas 674406
+callback best  (NVDA first): ok  gas 466753  NVDA won 4504808 (8dp)
+callback worst (skip all)  : ok  gas 464624  NVDA won 4504808 (8dp)
 breakdown (execution gas, 21k intrinsic removed): B20 balanceOf 2644, registry.priceUsd 22569, vault.inventoryUsd 351853, vault.prizeCapUsd 352296
-buyWithUsdc gas 639548 (includes the sell-gate read), open gas 200762
-callbackGasLimit 1000000; liability after 0; vault inventory $5000
+buyWithUsdc gas 664735 (includes the sell-gate read), open gas 200994
+callbackGasLimit 1000000; liability after 0; vault inventory $4997
 
 OK: real B20 transfers inside the callback fit the gas limit on both paths.
 
-# STOCKS=all node tools/box/box-callback-sim.cjs  (all 13 REGISTERED registry stocks)
-block 51712114; 13 registered registry stocks listed; NVDA is #0
-restock $1,000 -> NVDA: ok, gas 767864
-callback best  (NVDA first): ok  gas 565717  NVDA won 4436065 (8dp)
-callback worst (skip all)  : ok  gas 573350  NVDA won 4436065 (8dp)
+# STOCKS=all node tools/box/box-callback-sim.cjs  (all REGISTERED registry stocks)
+block 51733606; 13 registered registry stocks listed; NVDA is #0
+restock $1,000 -> NVDA: ok, gas 773806
+callback best  (NVDA first): ok  gas 566148  NVDA won 4504808 (8dp)
+callback worst (skip all)  : ok  gas 573781  NVDA won 4504808 (8dp)
 breakdown (execution gas, 21k intrinsic removed): B20 balanceOf 2644, registry.priceUsd 22569, vault.inventoryUsd 451246, vault.prizeCapUsd 451689
-buyWithUsdc gas 738941 (includes the sell-gate read), open gas 200762
-callbackGasLimit 1000000; liability after 0; vault inventory $5000
+buyWithUsdc gas 764128 (includes the sell-gate read), open gas 200994
+callbackGasLimit 1000000; liability after 0; vault inventory $4997
 
 OK: real B20 transfers inside the callback fit the gas limit on both paths.

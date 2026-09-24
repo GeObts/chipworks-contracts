@@ -7,48 +7,38 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
 import {IBox} from "../interfaces/IBox.sol";
 import {IChipConverter} from "../interfaces/IChipConverter.sol";
-import {IUniswapV3SwapRouter} from "../interfaces/ISwapRouters.sol";
-import {IPoolManager, IUnlockCallback, PoolKey, SwapParams} from "../interfaces/IUniswapV4.sol";
+import {IPoolManager, IUnlockCallback, IUniswapV3ExactOutput, PoolKey, SwapParams} from "../interfaces/IUniswapV4.sol";
 
 /// @title ChipConverter
-/// @notice Turns the $CHIP boxes were paid in into prize-pool USDC: 5% to the Box's fee
-///         recipient, 95% to the vault — the same split a USDC buy gets in the Box itself.
+/// @notice Pays for a box in $CHIP by swapping the buyer's $CHIP to the box's exact USDC price,
+///         inside the buy. The Box receives exactly that USDC and splits it 5/95 like any USDC buy.
 ///
-/// @dev UNAUDITED. ─── READ THIS BEFORE AUDITING ANYTHING ELSE IN THE BOX ───
+/// @dev UNAUDITED. THE SWAP IS LIFTED FROM THE DEPLOYED ChipLottery (0x2F68…70F0), which buys
+///      Megapot tickets the same way: $CHIP -> WETH exact OUTPUT on the $CHIP/WETH Uniswap v4 pool,
+///      then WETH -> USDC exact OUTPUT on the v3 pool. Only the recipient of the USDC differs.
 ///
-///      $CHIP HAS NO ON-CHAIN PRICE. Its only market is a Uniswap v4 pool behind a Doppler
-///      hook that exposes no oracle and no cumulatives, and there is no Chainlink feed. So
-///      the $CHIP -> WETH leg of {sellChip} is bounded by a KEEPER-SUPPLIED minimum, not by
-///      an oracle. A compromised keeper key could sell box $CHIP too cheap, and nothing on
-///      chain can tell. What bounds that loss:
+///      WHY SWAP AT BUY (audit round 1, H-1 / H-2 / F-1). The previous design took a fixed $CHIP
+///      price per box and let a keeper sell the $CHIP later. When $CHIP fell, a "$10" box cost $5
+///      of $CHIP while its prizes stayed in dollars — measured: $4.75 into the pool for $9.10 of
+///      liability, an arbitrage anyone could run. Swapping at buy funds the pool at face every
+///      time, whatever $CHIP does, and removes the keeper sale, its trust point, the owner price
+///      floor and the $CHIP recovery path with it.
 ///
-///        - the keeper can only SELL. Output goes to the fee recipient and the vault, read
-///          live from the Box. There is no path from here to the keeper.
-///        - per-call and per-day caps, owner-set.
-///        - an optional owner-set price floor ({minUsdcPerMillionChip}) that no keeper
-///          number can go under. 0 disables it.
-///        - the WETH -> USDC leg IS oracle-bounded (Chainlink ETH/USD), so the unbounded part
-///          is the $CHIP/WETH leg only.
+///      THE BUYER CARRIES THE PRICE RISK, AND BOUNDS IT. `maxChipIn` is the most $CHIP they will
+///      part with; `wethNeeded` (quoted off chain) bounds the ETH leg. A sandwich can only cost the
+///      buyer up to their own `maxChipIn`; it can never short the pool, because the USDC leg is
+///      exact output. The pool fee (~2.3% measured) is the buyer's: the UI must say so.
 ///
-///      WHY THIS EXISTS (H-01, redone). The first Box sent 95% of a $CHIP payment to the
-///      vault and then refused to let $CHIP leave the vault by any path — so every $CHIP
-///      box was funded by USDC buyers and the $CHIP sat there forever. Now a $CHIP payment
-///      lands HERE, whole, and leaves only as USDC via {sellChip}, or via a 48h owner
-///      recovery if the pool route ever breaks. Prizes are never paid in $CHIP.
+///      NOTHING STAYS HERE. Every call ends with this contract holding no $CHIP, WETH or USDC:
+///      the USDC goes to the Box, and every unspent token goes back to the payer. So {rescue} can
+///      only ever reach tokens sent here by mistake ({sweepZero} reads (0,0,0) between calls).
 contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    uint32 public constant BPS = 10_000;
-    uint64 public constant RECOVERY_TIMELOCK = 48 hours;
-    uint64 public constant RECOVERY_GRACE = 14 days;
-    uint32 public constant MAX_ETH_SLIPPAGE_BPS = 300;
-    /// @dev 1e6 CHIP in wei — the unit the price floor is quoted in.
-    uint256 internal constant MILLION_CHIP = 1e24;
-
-    /// @dev TickMath.MAX_SQRT_PRICE - 1 / MIN_SQRT_PRICE + 1. Curve-end guards, not slippage.
+    /// @dev TickMath.MAX_SQRT_PRICE - 1 / MIN_SQRT_PRICE + 1. Curve-end guards, not slippage:
+    ///      `maxChipIn` is the bound.
     uint160 internal constant MAX_SQRT_PRICE_LIMIT = 1461446703485210103287273052203988822378723970341;
     uint160 internal constant MIN_SQRT_PRICE_LIMIT = 4295128740;
 
@@ -56,10 +46,9 @@ contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, Reentra
     address public immutable weth;
     address public immutable override usdc;
     IPoolManager public immutable poolManager;
-    IUniswapV3SwapRouter public immutable v3Router;
-    IAggregatorV3 public immutable ethUsdFeed;
+    IUniswapV3ExactOutput public immutable v3Router;
+    /// @notice The v3 fee tier for the WETH -> USDC leg. 500 = 0.05%.
     uint24 public immutable v3Fee;
-    uint8 internal immutable _ethFeedDecimals;
 
     address public immutable currency0;
     address public immutable currency1;
@@ -69,60 +58,21 @@ contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, Reentra
     bool public immutable chipIsCurrency0;
 
     address public override box;
-    address public keeper;
-
-    /// @notice Most $CHIP one {sellChip} may push through the pool, and per UTC day.
-    uint256 public maxChipPerSell;
-    uint256 public maxChipSoldPerDay;
-    /// @notice Owner price floor, USDC (6 dp) per 1,000,000 $CHIP. 0 disables it.
-    uint256 public minUsdcPerMillionChip;
-    /// @notice ETH/USD leg: slippage below the Chainlink mark, and the oldest mark accepted.
-    uint32 public ethSlippageBps = 100;
-    uint64 public maxEthFeedAge = 1 hours;
-
-    mapping(uint256 day => uint256) public chipSoldOnDay;
-
-    struct PendingRecovery {
-        bool queued;
-        uint64 executableAt;
-        address to;
-    }
-
-    PendingRecovery internal _pendingRecovery;
 
     event BoxSet(address indexed box);
-    event KeeperSet(address indexed keeper);
-    event LimitsSet(uint256 maxChipPerSell, uint256 maxChipSoldPerDay);
-    event PriceFloorSet(uint256 minUsdcPerMillionChip);
-    event EthLegSet(uint32 slippageBps, uint64 maxFeedAge);
-    event ChipSold(uint256 chipIn, uint256 usdcOut, uint256 toFeeRecipient, uint256 toVault, address indexed feeRecipient);
-    event RecoveryQueued(address indexed to, uint64 executableAt);
-    event RecoveryExecuted(address indexed to, uint256 chipAmount);
-    event RecoveryCancelled();
+    event ChipSwapped(address indexed payer, uint256 chipSpent, uint256 usdcOut);
     event Rescued(address indexed token, address indexed to, uint256 amount);
 
     error ZeroAddress();
     error BadConfig();
     error AlreadyWired();
-    error NotKeeper(address caller);
+    error NotBox(address caller);
     error NotPoolManager(address caller);
     error KeyIsNotChipWeth();
-    error DeadlinePassed(uint256 nowTs, uint256 deadline);
-    error OverCap(uint256 amount, uint256 cap);
-    error OverDailyCap(uint256 wouldBe, uint256 cap);
-    error BelowMinOut(uint256 out, uint256 minOut);
-    error BelowPriceFloor(uint256 usdcPerMillionChip, uint256 floor);
     error NothingSwapped();
-    error BadEthPrice();
-    error NothingQueued();
-    error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
-    error TimelockExpired(uint64 nowTs, uint64 expiredAt);
-    error ProtectedAsset(address token);
-
-    modifier onlyKeeper() {
-        if (msg.sender != keeper) revert NotKeeper(msg.sender);
-        _;
-    }
+    error ChipCostAboveMax(uint256 needed, uint256 max);
+    error SwapAccountingMismatch(uint256 reported, uint256 measured);
+    error UsdcShort(uint256 got, uint256 wanted);
 
     constructor(
         address owner_,
@@ -131,31 +81,26 @@ contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, Reentra
         address usdc_,
         address poolManager_,
         address v3Router_,
-        address ethUsdFeed_,
         uint24 v3Fee_,
         PoolKey memory poolKey_
     ) Ownable(owner_) {
         if (
             owner_ == address(0) || chip_ == address(0) || weth_ == address(0) || usdc_ == address(0)
-                || poolManager_ == address(0) || v3Router_ == address(0) || ethUsdFeed_ == address(0)
+                || poolManager_ == address(0) || v3Router_ == address(0)
         ) revert ZeroAddress();
         chip = chip_;
         weth = weth_;
         usdc = usdc_;
         poolManager = IPoolManager(poolManager_);
-        v3Router = IUniswapV3SwapRouter(v3Router_);
-        ethUsdFeed = IAggregatorV3(ethUsdFeed_);
+        v3Router = IUniswapV3ExactOutput(v3Router_);
         v3Fee = v3Fee_;
-        uint8 fd = IAggregatorV3(ethUsdFeed_).decimals();
-        if (fd == 0 || fd > 18) revert BadConfig();
-        _ethFeedDecimals = fd;
 
         currency0 = poolKey_.currency0;
         currency1 = poolKey_.currency1;
         poolFee = poolKey_.fee;
         tickSpacing = poolKey_.tickSpacing;
         hooks = poolKey_.hooks;
-        // Same guard as ChipLottery: the swap direction below is derived from this boolean.
+        // Same guard as ChipLottery: the swap direction and delta decode derive from this boolean.
         if (poolKey_.currency0 == chip_ && poolKey_.currency1 == weth_) {
             chipIsCurrency0 = true;
         } else if (poolKey_.currency0 == weth_ && poolKey_.currency1 == chip_) {
@@ -165,11 +110,7 @@ contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, Reentra
         }
     }
 
-    /* ------------------------------------------------------------------ */
-    /*                              WIRING                                  */
-    /* ------------------------------------------------------------------ */
-
-    /// @notice Point at the Box, once. The vault and fee recipient are read from it live.
+    /// @notice Point at the Box, once. Only the Box can swap.
     function setBox(address v) external onlyOwner {
         if (v == address(0)) revert ZeroAddress();
         if (box != address(0)) revert AlreadyWired();
@@ -180,166 +121,102 @@ contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, Reentra
         emit BoxSet(v);
     }
 
-    /// @notice Immediate: the keeper can only sell within the caps, never withdraw.
-    function setKeeper(address v) external onlyOwner {
-        keeper = v;
-        emit KeeperSet(v);
-    }
-
-    function setLimits(uint256 chipPerSell, uint256 chipPerDay) external onlyOwner {
-        maxChipPerSell = chipPerSell;
-        maxChipSoldPerDay = chipPerDay;
-        emit LimitsSet(chipPerSell, chipPerDay);
-    }
-
-    function setPriceFloor(uint256 minPerMillion) external onlyOwner {
-        minUsdcPerMillionChip = minPerMillion;
-        emit PriceFloorSet(minPerMillion);
-    }
-
-    function setEthLeg(uint32 slippageBps, uint64 maxFeedAge) external onlyOwner {
-        if (slippageBps > MAX_ETH_SLIPPAGE_BPS || maxFeedAge == 0) revert BadConfig();
-        ethSlippageBps = slippageBps;
-        maxEthFeedAge = maxFeedAge;
-        emit EthLegSet(slippageBps, maxFeedAge);
-    }
-
-    /* ------------------------------------------------------------------ */
-    /*                      SELL: box $CHIP -> USDC                         */
-    /* ------------------------------------------------------------------ */
-
-    /// @notice Sell `chipIn` of the $CHIP boxes were paid in. 5% of the USDC goes to the
-    ///         Box's fee recipient, 95% to the vault.
-    /// @param minUsdcOut  The keeper's floor for the whole trade. With the owner floor, the
-    ///                    only bound on the $CHIP leg. See the contract header.
-    function sellChip(uint256 chipIn, uint256 minUsdcOut, uint256 deadline)
+    /// @inheritdoc IChipConverter
+    /// @dev The Box has ALREADY moved `maxChipIn` of the payer's $CHIP here. Steps, as ChipLottery:
+    ///      1. $CHIP -> WETH, exact output `wethNeeded`, reverting if it costs more than `maxChipIn`;
+    ///         the pool's reported cost is checked against the measured balance change.
+    ///      2. WETH -> USDC, exact output `usdcOut`, straight to the Box, spending at most the WETH
+    ///         step 1 bought.
+    ///      3. Every unspent $CHIP and WETH goes back to `payer`.
+    function swapToUsdc(uint256 usdcOut, uint256 wethNeeded, uint256 maxChipIn, address payer)
         external
+        override
         nonReentrant
-        onlyKeeper
-        returns (uint256 usdcOut)
+        returns (uint256 chipSpent)
     {
-        if (block.timestamp > deadline) revert DeadlinePassed(block.timestamp, deadline);
-        if (chipIn == 0) revert BadConfig();
-        if (chipIn > maxChipPerSell) revert OverCap(chipIn, maxChipPerSell);
-        uint256 day = block.timestamp / 1 days;
-        uint256 sold = chipSoldOnDay[day] + chipIn;
-        if (sold > maxChipSoldPerDay) revert OverDailyCap(sold, maxChipSoldPerDay);
-        chipSoldOnDay[day] = sold;
-
-        uint256 usdcBefore = IERC20(usdc).balanceOf(address(this));
-        uint256 wethBefore = IERC20(weth).balanceOf(address(this));
-        uint256 chipSpent = _sellChipForWeth(chipIn);
-        uint256 wethIn = IERC20(weth).balanceOf(address(this)) - wethBefore;
-        _wethToUsdc(wethIn);
-        usdcOut = IERC20(usdc).balanceOf(address(this)) - usdcBefore;
-
-        if (usdcOut < minUsdcOut) revert BelowMinOut(usdcOut, minUsdcOut);
-        _checkFloorAndPay(chipSpent, usdcOut);
-    }
-
-    /// @dev The owner floor, then 5% to the Box's fee recipient and 95% to the vault.
-    function _checkFloorAndPay(uint256 chipSpent, uint256 usdcOut) internal {
-        uint256 floor = minUsdcPerMillionChip;
-        if (floor != 0) {
-            uint256 px = usdcOut * MILLION_CHIP / chipSpent;
-            if (px < floor) revert BelowPriceFloor(px, floor);
-        }
         address b = box;
-        address feeTo = IBox(b).treasury();
-        uint256 fee = usdcOut * IBox(b).FEE_BPS() / BPS;
-        IERC20(usdc).safeTransfer(feeTo, fee);
-        IERC20(usdc).safeTransfer(IBox(b).vault(), usdcOut - fee);
-        emit ChipSold(chipSpent, usdcOut, fee, usdcOut - fee, feeTo);
+        if (msg.sender != b) revert NotBox(msg.sender);
+        if (usdcOut == 0 || wethNeeded == 0 || maxChipIn == 0 || payer == address(0)) revert BadConfig();
+
+        uint256 chipBefore = IERC20(chip).balanceOf(address(this));
+        uint256 reported = _swapChipForWeth(wethNeeded, maxChipIn);
+        uint256 measured = chipBefore - IERC20(chip).balanceOf(address(this));
+        if (reported != measured) revert SwapAccountingMismatch(reported, measured);
+
+        _wethToUsdc(b, usdcOut);
+        _refund(payer);
+
+        chipSpent = measured;
+        emit ChipSwapped(payer, chipSpent, usdcOut);
     }
 
-    /* ------------------------------------------------------------------ */
-    /*                    RECOVERY (route broken)                           */
-    /* ------------------------------------------------------------------ */
-
-    /// @notice If the $CHIP pool route ever stops working, unsold box $CHIP must not be
-    ///         stranded the way the first Box stranded it. 48h notice, then all of it to `to`.
-    function queueChipRecovery(address to) external onlyOwner {
-        if (to == address(0)) revert ZeroAddress();
-        uint64 at = uint64(block.timestamp) + RECOVERY_TIMELOCK;
-        _pendingRecovery = PendingRecovery({queued: true, executableAt: at, to: to});
-        emit RecoveryQueued(to, at);
+    /// @dev WETH -> exactly `usdcOut` USDC to `to`, spending at most the WETH held.
+    function _wethToUsdc(address to, uint256 usdcOut) internal {
+        uint256 usdcBefore = IERC20(usdc).balanceOf(to);
+        uint256 wethHeld = IERC20(weth).balanceOf(address(this));
+        IERC20(weth).forceApprove(address(v3Router), wethHeld);
+        v3Router.exactOutputSingle(
+            IUniswapV3ExactOutput.ExactOutputSingleParams({
+                tokenIn: weth,
+                tokenOut: usdc,
+                fee: v3Fee,
+                recipient: to,
+                amountOut: usdcOut,
+                amountInMaximum: wethHeld,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        IERC20(weth).forceApprove(address(v3Router), 0);
+        // Exact output means exactly this: the Box must have received the whole price.
+        uint256 got = IERC20(usdc).balanceOf(to) - usdcBefore;
+        if (got != usdcOut) revert UsdcShort(got, usdcOut);
     }
 
-    function executeChipRecovery() external onlyOwner nonReentrant {
-        PendingRecovery memory p = _pendingRecovery;
-        if (!p.queued) revert NothingQueued();
-        if (block.timestamp < p.executableAt) revert TimelockNotElapsed(uint64(block.timestamp), p.executableAt);
-        uint64 expiresAt = p.executableAt + RECOVERY_GRACE;
-        if (block.timestamp > expiresAt) revert TimelockExpired(uint64(block.timestamp), expiresAt);
-        delete _pendingRecovery;
-        uint256 amount = IERC20(chip).balanceOf(address(this));
-        IERC20(chip).safeTransfer(p.to, amount);
-        emit RecoveryExecuted(p.to, amount);
+    /// @dev Every unspent $CHIP and WETH back to whoever paid. Nothing stays here.
+    function _refund(address payer) internal {
+        uint256 chipLeft = IERC20(chip).balanceOf(address(this));
+        if (chipLeft != 0) IERC20(chip).safeTransfer(payer, chipLeft);
+        uint256 wethLeft = IERC20(weth).balanceOf(address(this));
+        if (wethLeft != 0) IERC20(weth).safeTransfer(payer, wethLeft);
     }
 
-    function cancelChipRecovery() external onlyOwner {
-        if (!_pendingRecovery.queued) revert NothingQueued();
-        delete _pendingRecovery;
-        emit RecoveryCancelled();
+    /// @notice What this contract holds. Expected to be (0,0,0) between calls.
+    function sweepZero() external view returns (uint256 chipBal, uint256 wethBal, uint256 usdcBal) {
+        return (IERC20(chip).balanceOf(address(this)), IERC20(weth).balanceOf(address(this)), IERC20(usdc).balanceOf(address(this)));
     }
 
-    /// @notice Stray tokens. Never $CHIP (see {queueChipRecovery}). Nothing else is ever held
-    ///         here between calls: {sellChip} forwards every unit of USDC it produces.
+    /// @notice Recover a token sent here by mistake. Safe because no call leaves anything behind:
+    ///         there is never in-flight user money for the owner to take (same reasoning as
+    ///         ChipLottery.rescue).
     function rescue(address token, address to, uint256 amount) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
-        if (token == chip) revert ProtectedAsset(token);
         IERC20(token).safeTransfer(to, amount);
         emit Rescued(token, to, amount);
     }
 
     /* ------------------------------------------------------------------ */
-    /*                             SWAPS                                    */
+    /*                  THE V4 SWAP (as ChipLottery)                        */
     /* ------------------------------------------------------------------ */
 
-    /// @dev WETH -> USDC on v3 with the minimum set by Chainlink ETH/USD less {ethSlippageBps}.
-    function _wethToUsdc(uint256 wethIn) internal {
-        (, int256 answer,, uint256 updatedAt,) = ethUsdFeed.latestRoundData();
-        if (answer <= 0 || updatedAt == 0 || block.timestamp > updatedAt + maxEthFeedAge) revert BadEthPrice();
-        // 18-dp WETH x 8-dp price -> 6-dp USDC.
-        uint256 fair = wethIn * uint256(answer) / (10 ** (12 + uint256(_ethFeedDecimals)));
-        uint256 minOut = fair * (BPS - ethSlippageBps) / BPS;
-
-        IERC20(weth).forceApprove(address(v3Router), wethIn);
-        v3Router.exactInputSingle(
-            IUniswapV3SwapRouter.ExactInputSingleParams({
-                tokenIn: weth,
-                tokenOut: usdc,
-                fee: v3Fee,
-                recipient: address(this),
-                amountIn: wethIn,
-                amountOutMinimum: minOut,
-                sqrtPriceLimitX96: 0
-            })
-        );
-        IERC20(weth).forceApprove(address(v3Router), 0);
-    }
-
-    /// @dev Exact-input $CHIP -> WETH on the v4 pool. Returns the $CHIP actually paid, measured.
-    function _sellChipForWeth(uint256 chipIn) internal returns (uint256 paid) {
-        uint256 before = IERC20(chip).balanceOf(address(this));
-        poolManager.unlock(abi.encode(chipIn));
-        paid = before - IERC20(chip).balanceOf(address(this));
+    function _swapChipForWeth(uint256 wethOut, uint256 maxChipIn) internal returns (uint256 chipUsed) {
+        bytes memory out = poolManager.unlock(abi.encode(wethOut, maxChipIn));
+        chipUsed = abi.decode(out, (uint256));
     }
 
     /// @inheritdoc IUnlockCallback
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert NotPoolManager(msg.sender);
-        uint256 chipIn = abi.decode(data, (uint256));
+        (uint256 wethOut, uint256 maxChipIn) = abi.decode(data, (uint256, uint256));
 
-        // Selling $CHIP swaps $CHIP's side for the other.
+        // Selling $CHIP for WETH: $CHIP's side for the other. Down-swaps are limited from below.
         bool zeroForOne = chipIsCurrency0;
-        // NEGATIVE amountSpecified is exact INPUT (v4-core). ChipLottery uses the positive,
-        // exact-output form; test/fork/V4SignConvention.t.sol proves both signs live.
+        // POSITIVE amountSpecified is exact OUTPUT (v4-core) — proved both signs live in
+        // test/fork/V4SignConvention.t.sol, for ChipLottery.
         int256 delta = poolManager.swap(
             PoolKey({currency0: currency0, currency1: currency1, fee: poolFee, tickSpacing: tickSpacing, hooks: hooks}),
             SwapParams({
                 zeroForOne: zeroForOne,
-                amountSpecified: -int256(chipIn),
+                amountSpecified: int256(wethOut),
                 sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE_LIMIT : MAX_SQRT_PRICE_LIMIT
             }),
             ""
@@ -350,13 +227,16 @@ contract ChipConverter is IChipConverter, IUnlockCallback, Ownable2Step, Reentra
         int128 wethDelta = chipIsCurrency0 ? amount1 : amount0;
         if (chipDelta >= 0 || wethDelta <= 0) revert NothingSwapped();
 
-        uint256 owed = uint256(uint128(-chipDelta));
-        if (owed > chipIn) revert NothingSwapped();
+        uint256 chipOwed = uint256(uint128(-chipDelta));
+        uint256 wethGot = uint256(uint128(wethDelta));
+        // Exact output means exactly this.
+        if (wethGot != wethOut) revert NothingSwapped();
+        if (chipOwed > maxChipIn) revert ChipCostAboveMax(chipOwed, maxChipIn);
 
         poolManager.sync(chip);
-        IERC20(chip).safeTransfer(address(poolManager), owed);
+        IERC20(chip).safeTransfer(address(poolManager), chipOwed);
         poolManager.settle();
-        poolManager.take(weth, address(this), uint256(uint128(wethDelta)));
-        return "";
+        poolManager.take(weth, address(this), wethGot);
+        return abi.encode(chipOwed);
     }
 }

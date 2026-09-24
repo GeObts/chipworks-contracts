@@ -15,15 +15,13 @@ import {PoolKey} from "../../src/interfaces/IUniswapV4.sol";
 ///
 ///      Env:
 ///        MULTISIG          owner of all three (required; the Safe)
-///        BOX_CHIP_PER_USD  18-dp $CHIP charged per $1 of face (REQUIRED — no default: the
-///                          $CHIP price moves, and a stale default would misprice every box)
 ///        BOX_TREASURY      fee recipient, default the FeeSplitter (80% Pot / 20% ops)
 ///        BOX_MAX_PRIZE_BPS default 2500 (25% of inventory)
 ///
 ///      After CREATE the Safe must, in one batch:
 ///        vault.setBox(box); converter.setBox(box);
-///        vault.addStock(...) for each prize stock; vault.setKeeper / converter.setKeeper;
-///        vault.setRestockParams(...); converter.setLimits(...); converter.setPriceFloor(...)
+///        vault.addStock(...) for each prize stock; vault.setKeeper;
+///        vault.setRestockParams(...)
 ///        and seed the vault. Until the vault can cover a SKU's top prize, that SKU cannot sell.
 contract DeployBox is Script {
     address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -36,18 +34,15 @@ contract DeployBox is Script {
     address internal constant SLIPSTREAM_ROUTER_B = 0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F;
     address internal constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
     address internal constant CHIP_HOOK = 0xBDF938149ac6a781F94FAa0ed45E6A0e984c6544;
-    address internal constant ETH_USD_FEED = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
     uint24 internal constant WETH_USDC_FEE = 500;
 
     function run() external returns (address vault, address converter, address boxes) {
         require(block.chainid == 8453, "DeployBox: Base mainnet only");
         require(vm.envOr("BOX_MAINNET_WRITTEN_OK", false), "DeployBox: needs the owner's written OK");
         address multisig = vm.envAddress("MULTISIG");
-        uint256 chipPerUsd = vm.envUint("BOX_CHIP_PER_USD");
         address treasury = vm.envOr("BOX_TREASURY", FEE_SPLITTER);
         uint32 maxPrizeBps = uint32(vm.envOr("BOX_MAX_PRIZE_BPS", uint256(2_500)));
         require(multisig != address(0) && treasury != address(0), "unset address");
-        require(chipPerUsd != 0, "BOX_CHIP_PER_USD unset");
 
         PoolKey memory key =
             PoolKey({currency0: WETH, currency1: CHIP, fee: 0x800000, tickSpacing: 200, hooks: CHIP_HOOK});
@@ -57,7 +52,7 @@ contract DeployBox is Script {
             multisig, USDC, CHIP, STOCK_REGISTRY, UNISWAP_V3_ROUTER, SLIPSTREAM_ROUTER_B, maxPrizeBps
         );
         ChipConverter c = new ChipConverter(
-            multisig, CHIP, WETH, USDC, POOL_MANAGER, UNISWAP_V3_ROUTER, ETH_USD_FEED, WETH_USDC_FEE, key
+            multisig, CHIP, WETH, USDC, POOL_MANAGER, UNISWAP_V3_ROUTER, WETH_USDC_FEE, key
         );
         Box b = new Box(
             multisig,
@@ -66,10 +61,7 @@ contract DeployBox is Script {
             treasury,
             address(v),
             address(c),
-            ENTROPY,
-            uint128(chipPerUsd),
-            uint128(10 * chipPerUsd),
-            uint128(25 * chipPerUsd)
+            ENTROPY
         );
         vm.stopBroadcast();
 

@@ -97,7 +97,7 @@ contract BoxTestBase is Test {
         entropy = new MockEntropyV2();
         vault = new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 2_500);
         converter = new ChipConverter(
-            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), address(ethFeed), 500, _key()
+            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), 500, _key()
         );
         boxes = _newBox(address(vault), address(chip), address(converter));
 
@@ -107,9 +107,7 @@ contract BoxTestBase is Test {
         vault.addStock(address(nvda));
         vault.addStock(address(tsla));
         vault.setKeeper(keeper);
-        converter.setKeeper(keeper);
         vault.setRestockParams(5_000e6, 20_000e6, 200, 5_000);
-        converter.setLimits(100_000_000 ether, 1_000_000_000 ether);
         vm.stopPrank();
 
         _fundVault();
@@ -124,7 +122,7 @@ contract BoxTestBase is Test {
 
     function _newBox(address vault_, address chip_, address converter_) internal returns (Box) {
         return new Box(
-            multisig, address(usdc), chip_, treasury, vault_, converter_, address(entropy), CHIP1, CHIP10, CHIP25
+            multisig, address(usdc), chip_, treasury, vault_, converter_, address(entropy)
         );
     }
 
@@ -182,7 +180,7 @@ contract BoxTestBase is Test {
         v = new PrizeVault(multisig, address(usdc), chip_, address(registry), address(router), address(router), 2_500);
         if (chip_ != address(0)) {
             c = new ChipConverter(
-                multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), address(ethFeed), 500, _key()
+                multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), 500, _key()
             );
         }
     }
@@ -204,6 +202,28 @@ contract BoxTestBase is Test {
             chip.approve(address(b), type(uint256).max);
             vm.stopPrank();
         }
+    }
+
+    /// @dev What a $CHIP buy of `usdcOut` costs at the mock pools' CURRENT rates, rounded up the
+    ///      way the mocks charge: the WETH the USDC leg needs, and the $CHIP that buys that WETH.
+    function _chipQuote(uint256 usdcOut) internal view returns (uint256 wethNeeded, uint256 chipCost) {
+        uint256 n1 = v3.rateNum(address(weth), address(usdc));
+        uint256 d1 = v3.rateDen(address(weth), address(usdc));
+        wethNeeded = (usdcOut * d1 + n1 - 1) / n1;
+        uint256 n0 = pm.rateNum(address(chip), address(weth));
+        uint256 d0 = pm.rateDen(address(chip), address(weth));
+        chipCost = (wethNeeded * d0 + n0 - 1) / n0;
+    }
+
+    /// @dev Buy one box of `skuId` with $CHIP on `b`, allowing 1% over the quoted cost.
+    function _buyChipOn(Box b, address who, uint8 skuId) internal returns (uint256 id) {
+        (uint256 wethNeeded, uint256 chipCost) = _chipQuote(b.sku(skuId).usdcPrice);
+        vm.prank(who);
+        id = b.buyWithChip(skuId, who, wethNeeded, chipCost * 101 / 100, block.timestamp + 600);
+    }
+
+    function _buyChip(address who, uint8 skuId) internal returns (uint256 id) {
+        id = _buyChipOn(boxes, who, skuId);
     }
 
     function _skuUsd(uint8 skuId) internal pure returns (uint256) {

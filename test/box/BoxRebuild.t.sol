@@ -8,7 +8,7 @@ import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
 import {Venue} from "../../src/interfaces/IStockRegistry.sol";
 
-/// @notice The rebuild's own properties: CHIP never parked, stocks-only prizes, never-short
+/// @notice The rebuild's own properties: CHIP swapped to the exact price at buy, stocks-only prizes, never-short
 ///         payouts, the sell gate, keeper restock and the house-take sweep. Every expected
 ///         amount follows from the base's round prices (NVDA $100, TSLA $200, ETH $2,000,
 ///         20,000 CHIP = $1).
@@ -23,99 +23,70 @@ contract BoxRebuildTest is BoxTestBase {
     }
 
     /* ------------------------------------------------------------------ */
-    /*                  1. $CHIP payments: never parked                     */
+    /*        1. $CHIP payments: swapped to the exact price at buy          */
     /* ------------------------------------------------------------------ */
 
-    function test_chipBuy_sendsWholePaymentToConverter() public {
-        uint256 vaultUsdc0 = usdc.balanceOf(address(vault));
-        vm.prank(alice);
-        boxes.buyWithChip(SKU10, alice);
+    /// @dev The whole point of swap-at-buy: a $CHIP box funds the pool exactly like a USDC box,
+    ///      in the same transaction. 200,000 $CHIP -> 0.005 ETH -> $10 at the base's rates.
+    function test_chipBuy_fundsThePoolAtFace_inTheSameTransaction() public {
+        uint256 vault0 = usdc.balanceOf(address(vault));
+        uint256 chip0 = chip.balanceOf(alice);
+        (, uint256 cost) = _chipQuote(USD10);
+        assertEq(cost, CHIP10, "a $10 box costs 200k CHIP at these rates");
 
-        assertEq(chip.balanceOf(address(converter)), CHIP10, "whole payment to converter");
-        assertEq(chip.balanceOf(address(vault)), 0, "vault never holds CHIP");
-        assertEq(chip.balanceOf(treasury), 0, "fee recipient never gets CHIP");
-        assertEq(chip.balanceOf(address(boxes)), 0, "box holds nothing");
-        assertEq(usdc.balanceOf(address(vault)), vaultUsdc0, "no USDC until the keeper sells");
-        assertEq(boxes.outstandingLiabilityUsd(), 9_100_000, "liability is booked at mint");
+        uint256 id = _buyChip(alice, SKU10); // allows 1% over the quote
+
+        assertEq(boxes.ownerOf(id), alice);
+        assertEq(usdc.balanceOf(treasury), 500_000, "5% to the fee recipient, in USDC");
+        assertEq(usdc.balanceOf(address(vault)) - vault0, 9_500_000, "95% to the vault, now");
+        assertEq(chip0 - chip.balanceOf(alice), cost, "the buyer spent the quote; the 1% headroom came back");
+        (uint256 c, uint256 w, uint256 u) = converter.sweepZero();
+        assertEq(c + w + u, 0, "the converter holds nothing afterwards");
+        assertEq(chip.balanceOf(address(vault)) + chip.balanceOf(address(boxes)) + chip.balanceOf(treasury), 0);
+        assertEq(boxes.outstandingLiabilityUsd(), 9_100_000);
     }
 
-    function test_sellChip_splitsUsdcFiveNinetyFive() public {
+    function test_chipBuy_theBuyerBoundsTheirOwnCost() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD10);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.ChipCostAboveMax.selector, cost, cost - 1));
         vm.prank(alice);
-        boxes.buyWithChip(SKU10, alice);
-        uint256 vaultUsdc0 = usdc.balanceOf(address(vault));
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost - 1, _deadline());
 
-        // 200,000 CHIP -> 0.005 ETH -> $10.
-        vm.prank(keeper);
-        uint256 out = converter.sellChip(CHIP10, 10e6, _deadline());
-
-        assertEq(out, 10e6, "200k CHIP sells for $10");
-        assertEq(usdc.balanceOf(treasury), 500_000, "5% to the fee recipient");
-        assertEq(usdc.balanceOf(address(vault)) - vaultUsdc0, 9_500_000, "95% to the vault");
-        assertEq(chip.balanceOf(address(converter)), 0, "nothing left behind");
-        assertEq(usdc.balanceOf(address(converter)), 0, "no USDC left behind");
+        vm.expectRevert(abi.encodeWithSelector(Box.DeadlinePassed.selector, block.timestamp, block.timestamp - 1));
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost, block.timestamp - 1);
     }
 
-    function test_sellChip_boundsTheKeeper() public {
+    function test_chipBuy_batchIsOneSwapForNBoxes() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(3 * USD10);
+        uint256 vault0 = usdc.balanceOf(address(vault));
         vm.prank(alice);
-        boxes.buyWithChip(SKU10, alice);
+        uint256 first = boxes.buyWithChipBatch(SKU10, bob, 3, wethNeeded, cost, _deadline());
+        for (uint256 i; i < 3; ++i) assertEq(boxes.ownerOf(first + i), bob, "gifted: minted to bob");
+        assertEq(usdc.balanceOf(address(vault)) - vault0, 3 * 9_500_000);
+        assertEq(usdc.balanceOf(treasury), 3 * 500_000);
+    }
 
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.NotKeeper.selector, alice));
-        vm.prank(alice);
-        converter.sellChip(CHIP10, 0, _deadline());
-
-        // The keeper's own floor.
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.BelowMinOut.selector, 10e6, 10e6 + 1));
-        vm.prank(keeper);
-        converter.sellChip(CHIP10, 10e6 + 1, _deadline());
-
-        // The owner's floor: $10 per 200k CHIP is $50 per million. A floor of $60 refuses it,
-        // whatever minimum the keeper passes.
-        vm.prank(multisig);
-        converter.setPriceFloor(60e6);
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.BelowPriceFloor.selector, 50e6, 60e6));
-        vm.prank(keeper);
-        converter.sellChip(CHIP10, 0, _deadline());
-
-        // Per-call and per-day caps.
+    function test_chipBuy_canBeTurnedOffPerSku() public {
         vm.startPrank(multisig);
-        converter.setPriceFloor(0);
-        converter.setLimits(CHIP10 - 1, type(uint256).max);
-        vm.stopPrank();
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.OverCap.selector, CHIP10, CHIP10 - 1));
-        vm.prank(keeper);
-        converter.sellChip(CHIP10, 0, _deadline());
-
-        vm.prank(multisig);
-        converter.setLimits(CHIP10, CHIP10 / 2);
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.OverDailyCap.selector, CHIP10, CHIP10 / 2));
-        vm.prank(keeper);
-        converter.sellChip(CHIP10, 0, _deadline());
-    }
-
-    function test_sellChip_refusesAStaleEthMark() public {
-        vm.prank(alice);
-        boxes.buyWithChip(SKU10, alice);
-        vm.warp(block.timestamp + 2 hours); // the mock feed was stamped at setUp
-        vm.expectRevert(ChipConverter.BadEthPrice.selector);
-        vm.prank(keeper);
-        converter.sellChip(CHIP10, 0, _deadline());
-    }
-
-    function test_chipRecovery_isTimelocked_andRescueNeverTakesChip() public {
-        vm.prank(alice);
-        boxes.buyWithChip(SKU10, alice);
-
-        vm.startPrank(multisig);
-        vm.expectRevert(abi.encodeWithSelector(ChipConverter.ProtectedAsset.selector, address(chip)));
-        converter.rescue(address(chip), multisig, 1);
-
-        converter.queueChipRecovery(multisig);
-        vm.expectRevert();
-        converter.executeChipRecovery();
+        boxes.queueSku(SKU10, true, uint96(USD10), false);
         vm.warp(block.timestamp + 48 hours);
-        converter.executeChipRecovery();
+        boxes.executeSku();
         vm.stopPrank();
-        assertEq(chip.balanceOf(multisig), CHIP10, "route-broken recovery returns all of it");
+        registry.setPrice(address(nvda), NVDA_PRICE);
+        registry.setPrice(address(tsla), TSLA_PRICE);
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD10);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost, _deadline());
+        vm.prank(alice);
+        boxes.buyWithUsdc(SKU10, alice); // USDC unaffected
+    }
+
+    function test_converter_onlyTheBoxCanSwap() public {
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.NotBox.selector, alice));
+        vm.prank(alice);
+        converter.swapToUsdc(USD10, 1, 1, alice);
     }
 
     /* ------------------------------------------------------------------ */
@@ -414,7 +385,7 @@ contract BoxRebuildTest is BoxTestBase {
         t[5].prizeBps = 100_000;
         vm.startPrank(multisig);
         boxes.queueOdds(t);
-        boxes.queueSku(SKU25, true, 20e6, CHIP25);
+        boxes.queueSku(SKU25, true, 20e6, true);
         vm.warp(block.timestamp + 48 hours);
         boxes.executeOdds();
         boxes.executeSku();
@@ -449,14 +420,14 @@ contract BoxRebuildTest is BoxTestBase {
 
     function test_noConverter_disablesChipPaymentsOnly() public {
         PrizeVault v3v = new PrizeVault(multisig, address(usdc), address(0), address(registry), address(router), address(router), 2_500);
-        Box b3 = new Box(multisig, address(usdc), address(0), treasury, address(v3v), address(0), address(entropy), 0, 0, 0);
+        Box b3 = new Box(multisig, address(usdc), address(0), treasury, address(v3v), address(0), address(entropy));
         vm.prank(multisig);
         v3v.setBox(address(b3));
         usdc.mint(address(v3v), 200e6);
         _approveBox(alice, b3);
         vm.expectRevert(Box.ChipDisabled.selector);
         vm.prank(alice);
-        b3.buyWithChip(SKU1, alice);
+        b3.buyWithChip(SKU1, alice, 1, 1, block.timestamp);
         vm.prank(alice);
         b3.buyWithUsdc(SKU1, alice); // USDC is unaffected
     }
@@ -481,9 +452,9 @@ contract BoxRebuildTest is BoxTestBase {
     function _freshSystem(uint256 seedUsdc) internal returns (Box b2, PrizeVault v2, ChipConverter c2) {
         v2 = new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 2_500);
         c2 = new ChipConverter(
-            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), address(ethFeed), 500, _key()
+            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), 500, _key()
         );
-        b2 = new Box(multisig, address(usdc), address(chip), treasury, address(v2), address(c2), address(entropy), CHIP1, CHIP10, CHIP25);
+        b2 = new Box(multisig, address(usdc), address(chip), treasury, address(v2), address(c2), address(entropy));
         vm.startPrank(multisig);
         v2.setBox(address(b2));
         c2.setBox(address(b2));

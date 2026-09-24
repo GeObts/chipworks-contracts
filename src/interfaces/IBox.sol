@@ -12,7 +12,8 @@ interface IBox {
         bool exists;
         bool paused;
         uint96 usdcPrice;
-        uint128 chipPrice;
+        /// @notice $CHIP accepted for this SKU (swapped to `usdcPrice` inside the buy).
+        bool chipEnabled;
     }
 
     /// @notice One row of the odds table. Every tier pays a B20 stock (USDC if no stock can
@@ -70,12 +71,22 @@ interface IBox {
         view
         returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd);
     function boxInfo(uint256 tokenId) external view returns (BoxView memory);
-    function tokenIdOfSequence(uint64 sequence) external view returns (uint256);
+    /// @notice The box an Entropy request belongs to. Requests are numbered per provider.
+    function tokenIdOfRequest(address provider, uint64 sequence) external view returns (uint256);
 
     function buyWithUsdc(uint8 skuId, address to) external returns (uint256 tokenId);
-    function buyWithChip(uint8 skuId, address to) external returns (uint256 tokenId);
+    function buyWithChip(uint8 skuId, address to, uint256 wethNeeded, uint256 maxChipIn, uint256 deadline)
+        external
+        returns (uint256 tokenId);
     function buyWithUsdcBatch(uint8 skuId, address to, uint256 n) external returns (uint256 firstId);
-    function buyWithChipBatch(uint8 skuId, address to, uint256 n) external returns (uint256 firstId);
+    function buyWithChipBatch(
+        uint8 skuId,
+        address to,
+        uint256 n,
+        uint256 wethNeeded,
+        uint256 maxChipIn,
+        uint256 deadline
+    ) external returns (uint256 firstId);
     function open(uint256 tokenId) external payable;
     function retryOpen(uint256 tokenId) external payable;
     function claimOwed(uint256 tokenId) external;

@@ -16,9 +16,9 @@ contract BoxTest is BoxTestBase {
         address paymentToken,
         uint256 price,
         uint256 fee,
-        uint256 toVault,
-        uint256 toConverter
+        uint256 toVault
     );
+    event PaidInChip(address indexed buyer, uint256 chipSpent, uint256 usdc);
     event BoxOpened(
         address indexed opener,
         uint256 indexed tokenId,
@@ -118,7 +118,7 @@ contract BoxTest is BoxTestBase {
         uint256 vault0 = usdc.balanceOf(address(vault));
 
         vm.expectEmit(true, true, true, true);
-        emit BoxPurchased(alice, alice, 1, SKU1, address(usdc), USD1, 50_000, 950_000, 0);
+        emit BoxPurchased(alice, alice, 1, SKU1, address(usdc), USD1, 50_000, 950_000);
 
         uint256 id = _buy1(alice);
         assertEq(id, 1);
@@ -129,58 +129,131 @@ contract BoxTest is BoxTestBase {
         assertEq(usdc.balanceOf(treasury) - tre0, 50_000);
         assertEq(usdc.balanceOf(address(vault)) - vault0, 950_000);
         assertEq(usdc.balanceOf(address(boxes)), 0, "box holds nothing between calls");
-        assertEq(usdc.balanceOf(address(converter)), 0, "USDC buy never touches the converter");
+        _assertConverterEmpty();
     }
 
-    /// @notice A $CHIP buy sends the WHOLE payment to the converter. The 5/95 split happens
-    ///         later, in USDC, when the keeper sells it (H-01 redone).
-    function test_buyWithChip_sendsWholePaymentToConverter() public {
-        uint256 tre0 = chip.balanceOf(treasury);
-        uint256 conv0 = chip.balanceOf(address(converter));
+    /// @notice Was `test_buyWithChip_sendsWholePaymentToConverter`. Swap-at-buy: the buyer's CHIP
+    ///         is swapped to the exact USDC face inside the buy, then split 5/95 like a USDC buy.
+    function test_buyWithChip_swapsAtBuyAndSplitsLikeUsdc() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD1);
+        assertEq(cost, CHIP1, "20,000 CHIP = $1 at the mock rates");
+        uint256 tre0 = usdc.balanceOf(treasury);
+        uint256 vault0 = usdc.balanceOf(address(vault));
+        uint256 chip0 = chip.balanceOf(alice);
+        uint256 usdc0 = usdc.balanceOf(alice);
 
         vm.expectEmit(true, true, true, true);
-        emit BoxPurchased(alice, alice, 1, SKU1, address(chip), CHIP1, 0, 0, CHIP1);
-
+        emit PaidInChip(alice, cost, USD1);
+        vm.expectEmit(true, true, true, true);
+        emit BoxPurchased(alice, alice, 1, SKU1, address(chip), USD1, 50_000, 950_000);
         vm.prank(alice);
-        uint256 id = boxes.buyWithChip(SKU1, alice);
+        uint256 id = boxes.buyWithChip(SKU1, alice, wethNeeded, cost * 101 / 100, block.timestamp);
 
         assertEq(boxes.ownerOf(id), alice);
-        assertEq(chip.balanceOf(address(converter)) - conv0, CHIP1);
-        assertEq(chip.balanceOf(treasury) - tre0, 0, "no CHIP fee: the fee is taken in USDC on sale");
+        assertEq(boxes.boxInfo(id).faceUsd, USD1);
+        assertEq(chip0 - chip.balanceOf(alice), cost, "spent exactly the swap cost; the 1% slack refunded");
+        assertEq(usdc.balanceOf(alice), usdc0, "no USDC taken from the buyer");
+        assertEq(usdc.balanceOf(treasury) - tre0, 50_000, "5% fee in USDC, at once");
+        assertEq(usdc.balanceOf(address(vault)) - vault0, 950_000, "95% of face in the vault, at once");
         assertEq(chip.balanceOf(address(vault)), 0, "vault never receives CHIP");
+        assertEq(chip.balanceOf(treasury), 0);
         assertEq(chip.balanceOf(address(boxes)), 0);
+        assertEq(usdc.balanceOf(address(boxes)), 0);
+        _assertConverterEmpty();
+    }
+
+    function test_chipBuyRefundsUnspentChipAndWeth() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD10);
+        uint256 chip0 = chip.balanceOf(alice);
+
+        // Generous max: every unspent CHIP comes back.
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost * 3, block.timestamp);
+        assertEq(chip0 - chip.balanceOf(alice), cost);
+        _assertConverterEmpty();
+
+        // Over-quoted WETH: the extra WETH (and the CHIP it cost) is the buyer's, not the house's.
+        uint256 chip1 = chip.balanceOf(alice);
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded * 2, cost * 3, block.timestamp);
+        assertEq(chip1 - chip.balanceOf(alice), cost * 2, "bought 2x the WETH the USDC leg needed");
+        assertEq(weth.balanceOf(alice), wethNeeded, "the unused WETH is refunded to the buyer");
+        _assertConverterEmpty();
+        assertEq(usdc.balanceOf(address(boxes)), 0);
+    }
+
+    function test_chipBuyRevertsWhenMaxChipInTooLow() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD1);
+        uint256 chip0 = chip.balanceOf(alice);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.ChipCostAboveMax.selector, cost, cost - 1));
+        boxes.buyWithChip(SKU1, alice, wethNeeded, cost - 1, block.timestamp);
+        assertEq(chip.balanceOf(alice), chip0);
+        assertEq(boxes.nextId(), 1);
+
+        // Exactly the cost is enough.
+        vm.prank(alice);
+        boxes.buyWithChip(SKU1, alice, wethNeeded, cost, block.timestamp);
+        assertEq(chip0 - chip.balanceOf(alice), cost);
+    }
+
+    function test_chipBuyRevertsWhenWethQuoteTooLow() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD1);
+        vm.prank(alice);
+        vm.expectRevert();
+        boxes.buyWithChip(SKU1, alice, wethNeeded - 1, cost * 2, block.timestamp);
+        assertEq(boxes.nextId(), 1);
+        _assertConverterEmpty();
+    }
+
+    function test_chipBuyRevertsAfterDeadline() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD1);
+        (uint256 w4, uint256 c4) = _chipQuote(4 * USD1);
+        uint256 dl = block.timestamp - 1;
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.DeadlinePassed.selector, block.timestamp, dl));
+        boxes.buyWithChip(SKU1, alice, wethNeeded, cost * 2, dl);
+        vm.expectRevert(abi.encodeWithSelector(Box.DeadlinePassed.selector, block.timestamp, dl));
+        boxes.buyWithChipBatch(SKU1, alice, 4, w4, c4 * 2, dl);
+        // The deadline itself is still valid.
+        boxes.buyWithChip(SKU1, alice, wethNeeded, cost * 2, block.timestamp);
+        vm.stopPrank();
     }
 
     function test_buyOneTenTwentyFiveUsdcAndChip() public {
         uint256 treUsdc0 = usdc.balanceOf(treasury);
         uint256 vaultUsdc0 = usdc.balanceOf(address(vault));
-        uint256 conv0 = chip.balanceOf(address(converter));
+        uint256 aliceChip0 = chip.balanceOf(alice);
 
         uint8[3] memory skus = [SKU1, SKU10, SKU25];
+        uint256 chipCost;
         for (uint256 i; i < skus.length; ++i) {
             uint8 skuId = skus[i];
             vm.prank(alice);
             uint256 usdcId = boxes.buyWithUsdc(skuId, alice);
-            vm.prank(alice);
-            uint256 chipId = boxes.buyWithChip(skuId, alice);
+            (, uint256 c) = _chipQuote(_skuUsd(skuId));
+            chipCost += c;
+            uint256 chipId = _buyChip(alice, skuId);
             assertEq(boxes.boxInfo(usdcId).skuId, skuId);
             assertEq(boxes.boxInfo(chipId).skuId, skuId);
             assertEq(boxes.boxInfo(usdcId).faceUsd, _skuUsd(skuId));
             assertEq(boxes.boxInfo(chipId).faceUsd, _skuUsd(skuId));
             assertEq(boxes.sku(skuId).usdcPrice, _skuUsd(skuId));
-            assertEq(boxes.sku(skuId).chipPrice, _skuChip(skuId));
+            assertTrue(boxes.sku(skuId).chipEnabled);
         }
 
         uint256 usdcPaid = USD1 + USD10 + USD25;
-        uint256 chipPaid = uint256(CHIP1) + uint256(CHIP10) + uint256(CHIP25);
         uint256 usdcFee = usdcPaid * 500 / 10_000;
-        assertEq(usdc.balanceOf(treasury) - treUsdc0, usdcFee);
+        // Both paths land identically: 2x the face, split 5/95.
+        assertEq(usdc.balanceOf(treasury) - treUsdc0, 2 * usdcFee);
+        assertEq(usdc.balanceOf(address(vault)) - vaultUsdc0, 2 * (usdcPaid - usdcFee));
+        assertEq(aliceChip0 - chip.balanceOf(alice), chipCost);
+        assertEq(chipCost, uint256(CHIP1) + CHIP10 + CHIP25);
         assertEq(chip.balanceOf(treasury), 0);
-        assertEq(usdc.balanceOf(address(vault)) - vaultUsdc0, usdcPaid - usdcFee);
         assertEq(chip.balanceOf(address(vault)), 0);
-        assertEq(chip.balanceOf(address(converter)) - conv0, chipPaid);
         assertEq(usdc.balanceOf(address(boxes)), 0);
         assertEq(chip.balanceOf(address(boxes)), 0);
+        _assertConverterEmpty();
         assertEq(boxes.sealedSupply(SKU1), 2);
         assertEq(boxes.sealedSupply(SKU10), 2);
         assertEq(boxes.sealedSupply(SKU25), 2);
@@ -192,12 +265,25 @@ contract BoxTest is BoxTestBase {
         uint256 id = boxes.buyWithUsdc(SKU1, bob);
         assertEq(boxes.ownerOf(id), bob);
         assertEq(boxes.boxInfo(id).state, boxes.STATE_SEALED());
+
+        (uint256 w, uint256 c) = _chipQuote(USD1);
+        uint256 bobChip0 = chip.balanceOf(bob);
+        uint256 aliceChip0 = chip.balanceOf(alice);
+        vm.prank(alice);
+        uint256 id2 = boxes.buyWithChip(SKU1, bob, w, c * 2, block.timestamp);
+        assertEq(boxes.ownerOf(id2), bob);
+        assertEq(chip.balanceOf(bob), bobChip0, "the giftee pays nothing");
+        assertEq(aliceChip0 - chip.balanceOf(alice), c, "the payer is charged and refunded");
     }
 
     function test_buyToZeroReverts() public {
-        vm.prank(alice);
+        (uint256 w, uint256 c) = _chipQuote(USD1);
+        vm.startPrank(alice);
         vm.expectRevert(Box.ZeroAddress.selector);
         boxes.buyWithUsdc(SKU1, address(0));
+        vm.expectRevert(Box.ZeroAddress.selector);
+        boxes.buyWithChip(SKU1, address(0), w, c * 2, block.timestamp);
+        vm.stopPrank();
     }
 
     function test_sealedBoxIsTransferable() public {
@@ -208,6 +294,7 @@ contract BoxTest is BoxTestBase {
     }
 
     function test_batchBuy() public {
+        uint256 alice0 = usdc.balanceOf(alice);
         vm.prank(alice);
         uint256 first = boxes.buyWithUsdcBatch(SKU1, bob, 3);
         assertEq(first, 1);
@@ -215,45 +302,76 @@ contract BoxTest is BoxTestBase {
         assertEq(boxes.ownerOf(3), bob);
         assertEq(boxes.sealedSupply(SKU1), 3);
         assertEq(usdc.balanceOf(treasury), 150_000);
+        assertEq(alice0 - usdc.balanceOf(alice), 3 * USD1);
+        assertEq(usdc.balanceOf(address(boxes)), 0);
     }
 
+    /// @notice One swap of n x the price, then n boxes split 5/95 each.
     function test_chipBatchBuy() public {
+        (uint256 w, uint256 cost) = _chipQuote(4 * USD10);
+        uint256 alice0 = chip.balanceOf(alice);
+        uint256 tre0 = usdc.balanceOf(treasury);
+        uint256 vault0 = usdc.balanceOf(address(vault));
+
+        vm.expectEmit(true, true, true, true);
+        emit PaidInChip(alice, cost, 4 * USD10);
         vm.prank(alice);
-        uint256 first = boxes.buyWithChipBatch(SKU10, bob, 4);
+        uint256 first = boxes.buyWithChipBatch(SKU10, bob, 4, w, cost * 101 / 100, block.timestamp);
+
         assertEq(first, 1);
         assertEq(boxes.ownerOf(4), bob);
         assertEq(boxes.sealedSupply(SKU10), 4);
-        assertEq(chip.balanceOf(address(converter)), 4 * uint256(CHIP10));
+        assertEq(alice0 - chip.balanceOf(alice), cost);
+        assertEq(cost, 4 * uint256(CHIP10));
+        assertEq(usdc.balanceOf(treasury) - tre0, 4 * 500_000);
+        assertEq(usdc.balanceOf(address(vault)) - vault0, 4 * 9_500_000);
         assertEq(chip.balanceOf(address(vault)), 0);
+        assertEq(usdc.balanceOf(address(boxes)), 0);
+        _assertConverterEmpty();
+    }
+
+    function test_chipBatchRevertsWhenMaxChipInTooLow() public {
+        (uint256 w, uint256 cost) = _chipQuote(3 * USD1);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.ChipCostAboveMax.selector, cost, cost - 1));
+        boxes.buyWithChipBatch(SKU1, alice, 3, w, cost - 1, block.timestamp);
+        assertEq(boxes.nextId(), 1);
     }
 
     function test_batchLimits() public {
         uint256 max = boxes.MAX_BATCH();
+        (uint256 w, uint256 c) = _chipQuote(USD1);
+        (uint256 wm, uint256 cm) = _chipQuote(max * USD1);
         vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(Box.BatchTooLarge.selector, uint256(0)));
         boxes.buyWithUsdcBatch(SKU1, alice, 0);
         vm.expectRevert(abi.encodeWithSelector(Box.BatchTooLarge.selector, max + 1));
         boxes.buyWithUsdcBatch(SKU1, alice, max + 1);
         vm.expectRevert(abi.encodeWithSelector(Box.BatchTooLarge.selector, uint256(0)));
-        boxes.buyWithChipBatch(SKU1, alice, 0);
+        boxes.buyWithChipBatch(SKU1, alice, 0, w, c, block.timestamp);
         vm.expectRevert(abi.encodeWithSelector(Box.BatchTooLarge.selector, max + 1));
-        boxes.buyWithChipBatch(SKU1, alice, max + 1);
+        boxes.buyWithChipBatch(SKU1, alice, max + 1, w * (max + 1), c * (max + 1), block.timestamp);
         uint256 first = boxes.buyWithUsdcBatch(SKU1, alice, max);
+        uint256 firstChip = boxes.buyWithChipBatch(SKU1, alice, max, wm, cm, block.timestamp);
         vm.stopPrank();
         assertEq(first, 1);
-        assertEq(boxes.sealedSupply(SKU1), max);
+        assertEq(firstChip, max + 1);
+        assertEq(boxes.sealedSupply(SKU1), 2 * max);
     }
 
     function test_buyRevertsWhenPaused() public {
+        (uint256 w, uint256 c) = _chipQuote(USD1);
         vm.prank(multisig);
         boxes.setPaused(true);
         vm.startPrank(alice);
         vm.expectRevert(Box.PausedError.selector);
         boxes.buyWithUsdc(SKU1, alice);
         vm.expectRevert(Box.PausedError.selector);
-        boxes.buyWithChip(SKU1, alice);
+        boxes.buyWithChip(SKU1, alice, w, c * 2, block.timestamp);
         vm.expectRevert(Box.PausedError.selector);
         boxes.buyWithUsdcBatch(SKU1, alice, 2);
+        vm.expectRevert(Box.PausedError.selector);
+        boxes.buyWithChipBatch(SKU1, alice, 2, w * 2, c * 4, block.timestamp);
         vm.stopPrank();
     }
 
@@ -269,12 +387,15 @@ contract BoxTest is BoxTestBase {
 
     function test_skuPauseBlocksBuyAndOpen() public {
         uint256 id = _buy1(alice);
+        (uint256 w, uint256 c) = _chipQuote(USD1);
         vm.prank(multisig);
         boxes.setSkuPaused(SKU1, true);
         uint128 fee = boxes.quoteOpenFee();
         vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(Box.SkuPausedError.selector, SKU1));
         boxes.buyWithUsdc(SKU1, alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuPausedError.selector, SKU1));
+        boxes.buyWithChip(SKU1, alice, w, c * 2, block.timestamp);
         vm.expectRevert(abi.encodeWithSelector(Box.SkuPausedError.selector, SKU1));
         boxes.open{value: fee}(id);
         // Other SKUs are unaffected.
@@ -291,46 +412,86 @@ contract BoxTest is BoxTestBase {
         boxes.setSkuPaused(SKU1, true);
     }
 
-    function test_chipDisabledWhenPriceZero() public {
-        (PrizeVault v, ChipConverter c) = _freshVaultAndConverter(address(chip));
-        Box bare = new Box(
-            multisig, address(usdc), address(chip), treasury, address(v), address(c), address(entropy), 0, CHIP10, CHIP25
-        );
-        vm.startPrank(multisig);
-        v.setBox(address(bare));
-        c.setBox(address(bare));
-        vm.stopPrank();
-        usdc.mint(address(v), 200e6); // covers the $36 SKU1 top prize at 25%
+    /// @notice Was `test_chipDisabledWhenPriceZero`: CHIP is now a per-SKU switch (timelocked).
+    function test_chipDisabledPerSku() public {
+        vm.prank(multisig);
+        boxes.queueSku(SKU1, true, uint96(USD1), false);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        boxes.executeSku();
+        assertFalse(boxes.sku(SKU1).chipEnabled);
 
+        (uint256 w, uint256 c) = _chipQuote(USD1);
         vm.startPrank(alice);
-        usdc.approve(address(bare), type(uint256).max);
-        chip.approve(address(bare), type(uint256).max);
         vm.expectRevert(Box.ChipDisabled.selector);
-        bare.buyWithChip(SKU1, alice);
+        boxes.buyWithChip(SKU1, alice, w, c * 2, block.timestamp);
         vm.expectRevert(Box.ChipDisabled.selector);
-        bare.buyWithChipBatch(SKU1, alice, 1);
-        uint256 id = bare.buyWithUsdc(SKU1, alice);
+        boxes.buyWithChipBatch(SKU1, alice, 1, w, c * 2, block.timestamp);
+        uint256 id = boxes.buyWithUsdc(SKU1, alice);
         vm.stopPrank();
         assertEq(id, 1);
+        // Other SKUs still take CHIP.
+        _buyChip(alice, SKU10);
     }
 
     function test_noChipBoxDisablesChipPath() public {
         (PrizeVault v,) = _freshVaultAndConverter(address(0));
-        Box bare = new Box(
-            multisig, address(usdc), address(0), treasury, address(v), address(0), address(entropy), CHIP1, CHIP10, CHIP25
-        );
+        Box bare = new Box(multisig, address(usdc), address(0), treasury, address(v), address(0), address(entropy));
         vm.prank(multisig);
         v.setBox(address(bare));
         usdc.mint(address(v), 200e6);
 
         assertEq(bare.rtpBps(), 9_100, "same table with or without a CHIP path");
+        assertFalse(bare.sku(SKU1).chipEnabled);
+        assertFalse(bare.sku(SKU10).chipEnabled);
+        assertFalse(bare.sku(SKU25).chipEnabled);
+
+        // A no-converter Box cannot switch CHIP on.
+        vm.prank(multisig);
+        vm.expectRevert(Box.BadConfig.selector);
+        bare.queueSku(SKU1, true, uint96(USD1), true);
 
         vm.startPrank(alice);
         usdc.approve(address(bare), type(uint256).max);
         vm.expectRevert(Box.ChipDisabled.selector);
-        bare.buyWithChip(SKU1, alice);
+        bare.buyWithChip(SKU1, alice, 1, 1, block.timestamp);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        bare.buyWithChipBatch(SKU1, alice, 1, 1, 1, block.timestamp);
         bare.buyWithUsdc(SKU1, alice);
         vm.stopPrank();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                           CONVERTER                                  */
+    /* ------------------------------------------------------------------ */
+
+    function test_converterSwapIsBoxOnly() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.NotBox.selector, alice));
+        converter.swapToUsdc(USD1, 1, 1, alice);
+    }
+
+    function test_converterRescueIsOwnerOnlyAndAnyToken() public {
+        chip.mint(address(converter), 5 ether);
+        usdc.mint(address(converter), 7e6);
+        vm.prank(alice);
+        vm.expectRevert();
+        converter.rescue(address(chip), alice, 5 ether);
+
+        vm.startPrank(multisig);
+        converter.rescue(address(chip), multisig, 5 ether);
+        converter.rescue(address(usdc), multisig, 7e6);
+        vm.stopPrank();
+        assertEq(chip.balanceOf(multisig), 5 ether);
+        assertEq(usdc.balanceOf(multisig), 7e6);
+        _assertConverterEmpty();
+    }
+
+    function _assertConverterEmpty() internal view {
+        (uint256 c, uint256 w, uint256 u) = converter.sweepZero();
+        assertEq(c, 0, "converter holds no CHIP");
+        assertEq(w, 0, "converter holds no WETH");
+        assertEq(u, 0, "converter holds no USDC");
     }
 
     /* ------------------------------------------------------------------ */
@@ -480,7 +641,7 @@ contract BoxTest is BoxTestBase {
         boxes.retryOpen{value: fee}(id);
         uint64 newSeq = boxes.boxInfo(id).sequence;
         assertTrue(newSeq != oldSeq);
-        assertEq(boxes.tokenIdOfSequence(oldSeq), 0);
+        assertEq(boxes.tokenIdOfRequest(address(entropy), oldSeq), 0);
 
         entropy.fulfill(oldSeq, bytes32(uint256(1)));
         assertEq(boxes.ownerOf(id), alice, "orphan callback does not burn");
@@ -500,7 +661,7 @@ contract BoxTest is BoxTestBase {
         (PrizeVault v, ChipConverter c) = _freshVaultAndConverter(address(chip));
         address dflt = boxes.DEFAULT_FEE_RECIPIENT();
         Box launch = new Box(
-            multisig, address(usdc), address(chip), dflt, address(v), address(c), address(entropy), CHIP1, CHIP10, CHIP25
+            multisig, address(usdc), address(chip), dflt, address(v), address(c), address(entropy)
         );
         assertEq(launch.treasury(), dflt);
         assertEq(launch.feeRecipient(), dflt);
@@ -509,7 +670,7 @@ contract BoxTest is BoxTestBase {
     function test_constructorCanOverrideFeeRecipient() public {
         (PrizeVault v, ChipConverter c) = _freshVaultAndConverter(address(chip));
         Box other = new Box(
-            multisig, address(usdc), address(chip), alice, address(v), address(c), address(entropy), CHIP1, CHIP10, CHIP25
+            multisig, address(usdc), address(chip), alice, address(v), address(c), address(entropy)
         );
         assertEq(other.feeRecipient(), alice);
         assertTrue(other.feeRecipient() != other.DEFAULT_FEE_RECIPIENT());
@@ -559,7 +720,7 @@ contract BoxTest is BoxTestBase {
         flat[0] = IBox.PrizeTier({weight: 10_000, prizeBps: 9_000});
 
         vm.startPrank(multisig);
-        boxes.queueSku(SKU1, true, uint96(2 * USD1), CHIP1);
+        boxes.queueSku(SKU1, true, uint96(2 * USD1), true);
         boxes.queueOdds(flat);
         vm.expectRevert();
         boxes.executeSku();
@@ -602,9 +763,9 @@ contract BoxTest is BoxTestBase {
         assertEq(boxes.sku(SKU1).usdcPrice, USD1);
         assertEq(boxes.sku(SKU10).usdcPrice, USD10);
         assertEq(boxes.sku(SKU25).usdcPrice, USD25);
-        assertEq(boxes.sku(SKU1).chipPrice, CHIP1);
-        assertEq(boxes.sku(SKU10).chipPrice, CHIP10);
-        assertEq(boxes.sku(SKU25).chipPrice, CHIP25);
+        assertTrue(boxes.sku(SKU1).chipEnabled);
+        assertTrue(boxes.sku(SKU10).chipEnabled);
+        assertTrue(boxes.sku(SKU25).chipEnabled);
         assertFalse(boxes.sku(3).exists, "$5 slot removed; id 3 is unused");
         assertEq(boxes.DEFAULT_CHIP(), 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3);
         assertEq(boxes.DEFAULT_USDC(), 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
@@ -616,7 +777,7 @@ contract BoxTest is BoxTestBase {
         boxes.buyWithUsdc(3, alice);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(3)));
-        boxes.buyWithChip(3, alice);
+        boxes.buyWithChip(3, alice, 1, 1, block.timestamp);
     }
 
 }

@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IUniswapV3SwapRouter, ISlipstreamSwapRouter} from "../../src/interfaces/ISwapRouters.sol";
+import {IUniswapV3ExactOutput} from "../../src/interfaces/IUniswapV4.sol";
 
 /// @notice Swap router test double. Pulls tokenIn, pays tokenOut at a configured rate from
 ///         its own inventory, and enforces amountOutMinimum the way a real router does.
@@ -27,6 +28,7 @@ contract MockSwapRouter {
     }
 
     error TooLittleReceived();
+    error TooMuchRequested();
     error RouterDown();
 
     function setRate(address tokenIn, address tokenOut, uint256 num, uint256 den) external {
@@ -56,6 +58,23 @@ contract MockSwapRouter {
         returns (uint256)
     {
         return _swap(p.tokenIn, p.tokenOut, p.recipient, p.amountIn, p.amountOutMinimum);
+    }
+
+    /// @notice Uniswap v3 SwapRouter02 exact-output-single: charges the input that buys exactly
+    ///         `amountOut` at the configured rate, rounded up, and enforces `amountInMaximum`.
+    function exactOutputSingle(IUniswapV3ExactOutput.ExactOutputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountIn)
+    {
+        if (failAlways) revert RouterDown();
+        uint256 num = rateNum[p.tokenIn][p.tokenOut];
+        uint256 den = rateDen[p.tokenIn][p.tokenOut];
+        require(den != 0, "no rate");
+        amountIn = (p.amountOut * den + num - 1) / num;
+        if (amountIn > p.amountInMaximum) revert TooMuchRequested();
+        IERC20(p.tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        IERC20(p.tokenOut).safeTransfer(p.recipient, p.amountOut);
     }
 
     function _swap(address tokenIn, address tokenOut, address to, uint256 amountIn, uint256 minOut)

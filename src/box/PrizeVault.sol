@@ -149,6 +149,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     error BadConfig();
     error AlreadyWired();
     error OnlyBox();
+    error OnlySelf();
     error NotKeeper(address caller);
     error AlreadyRegistered(address token);
     error NotRegistered(address token);
@@ -690,7 +691,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
 
     /// @notice Self-call only, so {settle} can try/catch a SafeERC20 transfer.
     function extTransfer(address token, address to, uint256 amount) external {
-        if (msg.sender != address(this)) revert OnlyBox();
+        if (msg.sender != address(this)) revert OnlySelf();
         IERC20(token).safeTransfer(to, amount);
     }
 

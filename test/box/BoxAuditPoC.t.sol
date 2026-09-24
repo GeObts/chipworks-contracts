@@ -42,6 +42,9 @@ contract BoxAuditPoCTest is BoxTestBase {
     function test_H04_BuyRevertsIfVaultBoxUnset_NoPaymentTaken() public {
         (PrizeVault unwired, ChipConverter c) = _freshVaultAndConverter(address(chip));
         Box b = _newBox(address(unwired), address(chip), address(c));
+        vm.prank(multisig);
+        c.setBox(address(b)); // converter wired, VAULT not: the vault check must still stop the buy
+        (uint256 w25, uint256 c25) = _chipQuote(USD25);
         assertEq(unwired.box(), address(0));
         usdc.mint(address(unwired), 200e6);
 
@@ -54,7 +57,10 @@ contract BoxAuditPoCTest is BoxTestBase {
         vm.expectRevert(Box.VaultNotWired.selector);
         b.buyWithUsdc(SKU1, alice);
         vm.expectRevert(Box.VaultNotWired.selector);
-        b.buyWithChip(SKU25, alice);
+        b.buyWithChip(SKU25, alice, w25, c25 * 2, block.timestamp);
+        (uint256 w2, uint256 c2) = _chipQuote(2 * USD1);
+        vm.expectRevert(Box.VaultNotWired.selector);
+        b.buyWithChipBatch(SKU1, alice, 2, w2, c2 * 2, block.timestamp);
         vm.expectRevert(Box.VaultNotWired.selector);
         b.buyWithUsdcBatch(SKU1, alice, 2);
         vm.stopPrank();
@@ -108,7 +114,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertEq(v.owedUsd, 200_000);
         assertEq(b2.sealedSupply(SKU1), 1, "not retired");
         assertEq(b2.outstandingLiabilityUsd(), 200_000, "liability is now the exact owed prize");
-        assertEq(b2.tokenIdOfSequence(seq), 0, "the sequence is spent: no second draw");
+        assertEq(b2.tokenIdOfRequest(address(entropy), seq), 0, "the sequence is spent: no second draw");
 
         // A late duplicate callback is an orphan, not a re-roll.
         entropy.fulfill(seq, bytes32(uint256(9_999)));
@@ -132,7 +138,7 @@ contract BoxAuditPoCTest is BoxTestBase {
     function test_H03_CannotRetireSkuWithSealedSupply() public {
         uint256 id = _buy1(alice);
         vm.prank(multisig);
-        boxes.queueSku(SKU1, false, 0, 0);
+        boxes.queueSku(SKU1, false, 0, false);
         vm.warp(block.timestamp + 48 hours);
         vm.prank(multisig);
         vm.expectRevert(abi.encodeWithSelector(Box.SealedSupplyOutstanding.selector, SKU1));
@@ -146,7 +152,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         _openAndFulfill(alice, id, _rollForTier(2));
         assertEq(boxes.sealedSupply(SKU1), 0);
         vm.prank(multisig);
-        boxes.queueSku(SKU1, false, 0, 0);
+        boxes.queueSku(SKU1, false, 0, false);
         vm.warp(block.timestamp + 48 hours);
         vm.prank(multisig);
         boxes.executeSku();
@@ -168,7 +174,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertEq(b2.boxInfo(id).state, b2.STATE_OWED());
 
         vm.prank(multisig);
-        b2.queueSku(SKU1, false, 0, 0);
+        b2.queueSku(SKU1, false, 0, false);
         vm.warp(block.timestamp + 48 hours);
         vm.prank(multisig);
         vm.expectRevert(abi.encodeWithSelector(Box.SealedSupplyOutstanding.selector, SKU1));
@@ -234,28 +240,40 @@ contract BoxAuditPoCTest is BoxTestBase {
     /*  H-01  (redone) $CHIP never reaches the vault; never stock           */
     /* ------------------------------------------------------------------ */
 
-    /// @notice Replaces `test_H01_RescueCannotDrainChipWorkingCapital`: there is no CHIP working
-    ///         capital any more. A $CHIP buy lands whole on the converter; the vault gets none.
-    function test_H01_ChipBuyNeverReachesVault() public {
+    /// @notice Was `test_H01_ChipBuyNeverReachesVault` (whole payment parked on the converter).
+    ///         Swap-at-buy: a $CHIP buy funds the vault with 95% of face in USDC and the fee
+    ///         recipient with 5% in USDC, in the same transaction. No CHIP lands anywhere.
+    function test_H01_ChipBuyFundsVaultInUsdcNeverChip() public {
         uint256 vaultUsdc0 = usdc.balanceOf(address(vault));
+        uint256 tre0 = usdc.balanceOf(treasury);
         uint256 inv0 = vault.inventoryUsd();
+        uint256 alice0 = chip.balanceOf(alice);
         uint8[3] memory skus = [SKU1, SKU10, SKU25];
-        uint256 total;
-        vm.startPrank(alice);
+        uint256 face;
+        uint256 cost;
         for (uint256 i; i < skus.length; ++i) {
-            boxes.buyWithChip(skus[i], alice);
-            total += _skuChip(skus[i]);
+            (, uint256 c) = _chipQuote(_skuUsd(skus[i]));
+            cost += c;
+            face += _skuUsd(skus[i]);
+            _buyChip(alice, skus[i]);
         }
-        boxes.buyWithChipBatch(SKU10, alice, 3);
-        total += 3 * uint256(CHIP10);
-        vm.stopPrank();
+        (uint256 w3, uint256 c3) = _chipQuote(3 * USD10);
+        vm.prank(alice);
+        boxes.buyWithChipBatch(SKU10, alice, 3, w3, c3 * 101 / 100, block.timestamp);
+        face += 3 * USD10;
+        cost += c3;
 
+        uint256 fee = face * 500 / 10_000;
+        assertEq(usdc.balanceOf(address(vault)) - vaultUsdc0, face - fee, "95% of face in USDC, at once");
+        assertEq(usdc.balanceOf(treasury) - tre0, fee, "5% fee in USDC, at once");
+        assertEq(vault.inventoryUsd() - inv0, face - fee);
+        assertEq(alice0 - chip.balanceOf(alice), cost, "buyer paid the swap cost, the rest refunded");
         assertEq(chip.balanceOf(address(vault)), 0, "vault never receives CHIP");
         assertEq(chip.balanceOf(address(boxes)), 0);
         assertEq(chip.balanceOf(treasury), 0);
-        assertEq(chip.balanceOf(address(converter)), total, "whole payment on the converter");
-        assertEq(usdc.balanceOf(address(vault)), vaultUsdc0, "no USDC until the keeper sells");
-        assertEq(vault.inventoryUsd(), inv0);
+        (uint256 cc, uint256 cw, uint256 cu) = converter.sweepZero();
+        assertEq(cc + cw + cu, 0, "converter holds nothing between calls");
+        assertEq(usdc.balanceOf(address(boxes)), 0);
     }
 
     function test_H01_ChipBuyRevertsIfConverterUnwired() public {
@@ -265,12 +283,13 @@ contract BoxAuditPoCTest is BoxTestBase {
         v.setBox(address(b)); // converter deliberately NOT wired
         usdc.mint(address(v), 200e6);
 
+        (uint256 w1, uint256 c1) = _chipQuote(USD1);
         vm.startPrank(alice);
         usdc.approve(address(b), type(uint256).max);
         chip.approve(address(b), type(uint256).max);
         uint256 chip0 = chip.balanceOf(alice);
         vm.expectRevert(Box.ConverterNotWired.selector);
-        b.buyWithChip(SKU1, alice);
+        b.buyWithChip(SKU1, alice, w1, c1 * 2, block.timestamp);
         assertEq(chip.balanceOf(alice), chip0);
         b.buyWithUsdc(SKU1, alice); // USDC path unaffected
         vm.stopPrank();
@@ -398,7 +417,7 @@ contract BoxAuditPoCTest is BoxTestBase {
 
         // Raise SKU 0 to $25 and invert the table so the same roll is a 36x jackpot live.
         vm.startPrank(multisig);
-        boxes.queueSku(SKU1, true, uint96(25_000_000), CHIP1);
+        boxes.queueSku(SKU1, true, uint96(25_000_000), true);
         boxes.queueOdds(_inverted());
         vm.stopPrank();
         vm.warp(block.timestamp + 48 hours);
@@ -428,10 +447,9 @@ contract BoxAuditPoCTest is BoxTestBase {
     }
 
     function test_H05_TenAndTwentyFiveOpenUsesMintSnapshot() public {
-        vm.startPrank(alice);
+        vm.prank(alice);
         uint256 id10 = boxes.buyWithUsdc(SKU10, alice);
-        uint256 id25 = boxes.buyWithChip(SKU25, alice);
-        vm.stopPrank();
+        uint256 id25 = _buyChip(alice, SKU25);
 
         IBox.BoxView memory m10 = boxes.boxInfo(id10);
         IBox.BoxView memory m25 = boxes.boxInfo(id25);
@@ -446,7 +464,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         uint256 dust25 = USD25 * 2_000 / 10_000; // $5.00
 
         vm.startPrank(multisig);
-        boxes.queueSku(SKU10, true, uint96(USD1), CHIP1);
+        boxes.queueSku(SKU10, true, uint96(USD1), true);
         boxes.queueOdds(_inverted());
         vm.stopPrank();
         vm.warp(block.timestamp + 48 hours);
@@ -565,10 +583,7 @@ contract BoxAuditPoCTest is BoxTestBase {
             treasury,
             address(forkVault),
             address(0),
-            realEntropy,
-            CHIP1,
-            CHIP10,
-            CHIP25
+            realEntropy
         );
         vm.prank(multisig);
         forkVault.setBox(address(forkBox));
@@ -624,7 +639,6 @@ contract BoxAuditPoCTest is BoxTestBase {
             address(usdc),
             address(pm),
             address(v3),
-            address(ethFeed),
             500,
             PoolKey({currency0: c0, currency1: c1, fee: 0x800000, tickSpacing: 200, hooks: address(0)})
         );

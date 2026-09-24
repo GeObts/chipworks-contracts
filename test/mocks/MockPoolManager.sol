@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IUnlockCallback, PoolKey, SwapParams} from "../../src/interfaces/IUniswapV4.sol";
 
-/// @notice Uniswap v4 PoolManager test double for exact-INPUT swaps on one pair.
+/// @notice Uniswap v4 PoolManager test double for exact-input and exact-output swaps on one pair.
 /// @dev Enforces the same accounting shape the real one does: work happens inside
 ///      {unlock}, the input is paid by sync -> transfer -> settle, the output is {take}n,
 ///      and the lock reverts if either side is left unbalanced. Must hold output inventory.
@@ -40,13 +40,22 @@ contract MockPoolManager {
 
     function swap(PoolKey memory key, SwapParams memory p, bytes calldata) external returns (int256) {
         require(_unlocked, "not unlocked");
-        require(p.amountSpecified < 0, "mock: exact-input only");
         address tokenIn = p.zeroForOne ? key.currency0 : key.currency1;
         address tokenOut = p.zeroForOne ? key.currency1 : key.currency0;
-        uint256 amountIn = uint256(-p.amountSpecified);
         uint256 den = rateDen[tokenIn][tokenOut];
+        uint256 num = rateNum[tokenIn][tokenOut];
         require(den != 0, "no rate");
-        uint256 amountOut = amountIn * rateNum[tokenIn][tokenOut] / den;
+        uint256 amountIn;
+        uint256 amountOut;
+        if (p.amountSpecified < 0) {
+            // Exact input.
+            amountIn = uint256(-p.amountSpecified);
+            amountOut = amountIn * num / den;
+        } else {
+            // Exact output: charge the input that buys it, rounded up, as a pool would.
+            amountOut = uint256(p.amountSpecified);
+            amountIn = (amountOut * den + num - 1) / num;
+        }
         _inToken = tokenIn;
         _owedIn = amountIn;
         _outToken = tokenOut;

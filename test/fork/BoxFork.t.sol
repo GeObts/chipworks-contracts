@@ -54,6 +54,7 @@ contract BoxForkTest is Test {
     bytes32 constant CHIP_POOL_ID = 0xbcdd8383e38069f626846b94e93ee4d2c00cadfcce4b9457b0b8b04289030345;
     address constant NVDA = 0xb20000000000000000000078ee7ce2fE4908108C;
     address constant NVDA_POOL = 0x853F5f1B92b16714Fe6CDA67CAad0856B83C7ab9;
+    address constant V3_QUOTER = 0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a;
 
     Box boxes;
     PrizeVault vault;
@@ -85,7 +86,6 @@ contract BoxForkTest is Test {
             USDC,
             POOL_MANAGER,
             UNI_ROUTER,
-            ETH_FEED,
             500,
             PoolKey({currency0: WETH, currency1: CHIP, fee: 0x800000, tickSpacing: 200, hooks: CHIP_HOOK})
         );
@@ -96,10 +96,7 @@ contract BoxForkTest is Test {
             FEE_SPLITTER,
             address(vault),
             address(converter),
-            ENTROPY,
-            uint128(chipPerUsd),
-            uint128(10 * chipPerUsd),
-            uint128(25 * chipPerUsd)
+            ENTROPY
         );
 
         vm.startPrank(multisig);
@@ -107,9 +104,7 @@ contract BoxForkTest is Test {
         converter.setBox(address(boxes));
         vault.addStock(NVDA);
         vault.setKeeper(keeper);
-        converter.setKeeper(keeper);
         vault.setRestockParams(1_000e6, 5_000e6, 200, 3_000);
-        converter.setLimits(type(uint128).max, type(uint128).max);
         vm.stopPrank();
 
         // Seed: $4,000 USDC covers the $25 box's $900 jackpot ($3,600 pool needed).
@@ -133,11 +128,8 @@ contract BoxForkTest is Test {
         uint256 split0 = IERC20(USDC).balanceOf(FEE_SPLITTER);
         vm.prank(alice);
         uint256 idUsdc = boxes.buyWithUsdc(1, alice);
-        vm.prank(bob);
-        uint256 idChip = boxes.buyWithChip(1, bob);
         assertEq(IERC20(USDC).balanceOf(FEE_SPLITTER) - split0, 500_000, "5% of the USDC box to FeeSplitter");
-        assertEq(IERC20(CHIP).balanceOf(address(converter)), 10 * chipPerUsd, "CHIP box whole to converter");
-        assertEq(IERC20(CHIP).balanceOf(address(vault)), 0, "vault never holds CHIP");
+        uint256 idChip = _buyWithChipLive();
 
         // ---- 1b. The keeper stocks the pool from its own USDC, through the real Slipstream pool.
         vm.prank(keeper);
@@ -173,22 +165,45 @@ contract BoxForkTest is Test {
         (uint256 nvdaPx,) = IStockRegistry(REGISTRY).priceUsd(NVDA);
         console2.log("NVDA won (8dp)         :", nvdaWon, " value USD e-6:", nvdaWon * nvdaPx / 1e20);
 
-        _stepSell();
         _stepRestockAndSweep();
     }
 
-    function _stepSell() internal {
-        // ---- 3. Keeper sells the box CHIP through the real v4 + v3 pools ------------
+    /// @dev Swap-at-buy through the REAL pools: bob's $CHIP -> WETH on the v4 pool behind the
+    ///      Doppler hook -> exactly $10 USDC on the v3 pool, delivered to the Box and split 5/95 in
+    ///      the same transaction. wethNeeded is quoted the way the site will (QuoterV2, +0.5%).
+    function _buyWithChipLive() internal returns (uint256 id) {
+        uint256 wethNeeded = _quoteWethFor(10e6);
+        uint256 maxChipIn = 20 * chipPerUsd; // bob's bound: twice the mark
         uint256 split0 = IERC20(USDC).balanceOf(FEE_SPLITTER);
-        uint256 vaultUsdc0 = IERC20(USDC).balanceOf(address(vault));
-        vm.prank(keeper);
-        uint256 usdcOut = converter.sellChip(10 * chipPerUsd, 9e6, block.timestamp + 600);
-        uint256 fee = IERC20(USDC).balanceOf(FEE_SPLITTER) - split0;
-        console2.log("sold $10 of CHIP for USDC e-6:", usdcOut);
-        assertEq(fee, usdcOut * 500 / 10_000, "5% of the proceeds to FeeSplitter");
-        assertEq(IERC20(USDC).balanceOf(address(vault)) - vaultUsdc0, usdcOut - fee, "95% to the vault");
-        assertEq(IERC20(CHIP).balanceOf(address(converter)), 0, "no CHIP left on the converter");
-        assertEq(IERC20(USDC).balanceOf(address(converter)), 0, "and no USDC either");
+        uint256 vault0 = IERC20(USDC).balanceOf(address(vault));
+        uint256 chip0 = IERC20(CHIP).balanceOf(bob);
+        uint256 weth0 = IERC20(WETH).balanceOf(bob);
+
+        vm.prank(bob);
+        id = boxes.buyWithChip(1, bob, wethNeeded, maxChipIn, block.timestamp + 600);
+
+        uint256 spent = chip0 - IERC20(CHIP).balanceOf(bob);
+        assertEq(IERC20(USDC).balanceOf(FEE_SPLITTER) - split0, 500_000, "5% of the CHIP box to FeeSplitter, in USDC");
+        assertEq(IERC20(USDC).balanceOf(address(vault)) - vault0, 9_500_000, "95% into the pool, in the same tx");
+        assertLt(spent, maxChipIn, "the unspent CHIP came back");
+        (uint256 c, uint256 w, uint256 u) = converter.sweepZero();
+        assertEq(c + w + u, 0, "the converter holds nothing afterwards");
+        assertEq(IERC20(CHIP).balanceOf(address(vault)) + IERC20(CHIP).balanceOf(address(boxes)), 0, "no CHIP anywhere in the Box");
+        console2.log("CHIP buy: spent (whole)           :", spent / 1e18);
+        console2.log("  vs $10 at the mark (whole)       :", 10 * chipPerUsd / 1e18);
+        console2.log("  buyer's cost over the mark, bps  :", (spent * 10_000) / (10 * chipPerUsd) - 10_000);
+        console2.log("  WETH dust refunded (wei)         :", IERC20(WETH).balanceOf(bob) - weth0);
+    }
+
+    /// @dev QuoterV2's true exact-output input for WETH -> USDC (0.05%), +0.5%, as ChipLottery.t.sol.
+    function _quoteWethFor(uint256 usdcOut) internal returns (uint256) {
+        (bool ok, bytes memory ret) = V3_QUOTER.call(
+            abi.encodeWithSignature(
+                "quoteExactOutputSingle((address,address,uint256,uint24,uint160))", WETH, USDC, usdcOut, uint24(500), uint160(0)
+            )
+        );
+        require(ok && ret.length >= 32, "v3 exact-output quote failed");
+        return (abi.decode(ret, (uint256)) * 1005) / 1000;
     }
 
     function _stepRestockAndSweep() internal {

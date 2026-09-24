@@ -4,25 +4,36 @@ pragma solidity ^0.8.24;
 import {IEntropyV2} from "../../src/interfaces/IEntropyV2.sol";
 
 /// @notice Pyth Entropy v2 test double. Records the requester and lets tests fulfill.
-/// @dev Tracks the callback status the way Entropy does: 1 NOT_STARTED on request, cleared
-///      (all zero) after a successful callback, 3 FAILED after a reverting one. {fulfill} calls
-///      `_entropyCallback`, the selector the real Entropy calls.
+/// @dev Like Entropy, sequence numbers are PER PROVIDER, and the default provider can change.
+///      Tracks the callback status the way Entropy does: 1 NOT_STARTED on request, cleared
+///      (all zero) after a successful callback, 3 FAILED after a reverting one. Fulfilment calls
+///      `_entropyCallback`, the selector the real Entropy calls. {fulfill} and {setStatus} act on
+///      the current default provider; {fulfillFrom} names one.
 contract MockEntropyV2 {
     uint128 public fee = 0.001 ether;
-    uint64 public nextSeq = 1;
-    mapping(uint64 => address) public requester;
-    mapping(uint64 => uint32) public gasLimitOf;
-    mapping(uint64 => uint8) public statusOf;
+    address public defaultProvider;
+    mapping(address => uint64) internal _nextSeq;
+    mapping(address => mapping(uint64 => address)) internal _requester;
+    mapping(address => mapping(uint64 => uint32)) internal _gasLimit;
+    mapping(address => mapping(uint64 => uint8)) internal _status;
 
     error Underpaid();
+
+    constructor() {
+        defaultProvider = address(this);
+    }
 
     function setFee(uint128 v) external {
         fee = v;
     }
 
+    function setDefaultProvider(address p) external {
+        defaultProvider = p;
+    }
+
     /// @notice Force a status, e.g. 3 to model a callback that failed and published its number.
     function setStatus(uint64 sequence, uint8 status) external {
-        statusOf[sequence] = status;
+        _status[defaultProvider][sequence] = status;
     }
 
     function getFeeV2() external view returns (uint128) {
@@ -38,50 +49,55 @@ contract MockEntropyV2 {
     }
 
     function getDefaultProvider() external view returns (address) {
-        return address(this);
+        return defaultProvider;
     }
 
     function requestV2() external payable returns (uint64) {
-        return _request(0);
+        return _request(defaultProvider, 0);
     }
 
     function requestV2(uint32 gasLimit) external payable returns (uint64) {
-        return _request(gasLimit);
+        return _request(defaultProvider, gasLimit);
     }
 
-    function requestV2(address, uint32 gasLimit) external payable returns (uint64) {
-        return _request(gasLimit);
+    function requestV2(address provider, uint32 gasLimit) external payable returns (uint64) {
+        return _request(provider, gasLimit);
     }
 
-    function requestV2(address, bytes32, uint32 gasLimit) external payable returns (uint64) {
-        return _request(gasLimit);
+    function requestV2(address provider, bytes32, uint32 gasLimit) external payable returns (uint64) {
+        return _request(provider, gasLimit);
     }
 
     function getRequestV2(address provider, uint64 sequence) external view returns (IEntropyV2.RequestV2 memory r) {
-        uint8 st = statusOf[sequence];
+        uint8 st = _status[provider][sequence];
         if (st == 0) return r; // cleared, or never requested: all zero, as on Entropy
         r.provider = provider;
         r.sequenceNumber = sequence;
-        r.requester = requester[sequence];
+        r.requester = _requester[provider][sequence];
         r.callbackStatus = st;
-        r.gasLimit10k = uint16(gasLimitOf[sequence] / 10_000);
+        r.gasLimit10k = uint16(_gasLimit[provider][sequence] / 10_000);
     }
 
     function fulfill(uint64 sequence, bytes32 randomNumber) external {
-        address target = requester[sequence];
-        try IEntropyCallback(target)._entropyCallback(sequence, address(this), randomNumber) {
-            statusOf[sequence] = 0;
+        fulfillFrom(defaultProvider, sequence, randomNumber);
+    }
+
+    function fulfillFrom(address provider, uint64 sequence, bytes32 randomNumber) public {
+        address target = _requester[provider][sequence];
+        try IEntropyCallback(target)._entropyCallback(sequence, provider, randomNumber) {
+            _status[provider][sequence] = 0;
         } catch {
-            statusOf[sequence] = 3;
+            _status[provider][sequence] = 3;
         }
     }
 
-    function _request(uint32 gasLimit) internal returns (uint64 seq) {
+    function _request(address provider, uint32 gasLimit) internal returns (uint64 seq) {
         if (msg.value < fee) revert Underpaid();
-        seq = nextSeq++;
-        requester[seq] = msg.sender;
-        gasLimitOf[seq] = gasLimit;
-        statusOf[seq] = 1;
+        seq = _nextSeq[provider] + 1;
+        _nextSeq[provider] = seq;
+        _requester[provider][seq] = msg.sender;
+        _gasLimit[provider][seq] = gasLimit;
+        _status[provider][seq] = 1;
     }
 }
 

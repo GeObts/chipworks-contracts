@@ -19,12 +19,13 @@ This is the **rebuild** of the first draft (PRs #8/#9). What changed and why is 
 |---|---|
 | `Box` | ERC-721. Buy, gift, open, odds table, fee split, Entropy request/callback, owed prizes. |
 | `PrizeVault` | The prize pool: USDC + B20 stocks. Pays draws all-or-nothing. Keeper restock. House-take sweep. |
-| `ChipConverter` | Receives every `$CHIP` payment whole and, on the keeper's call, sells it for pool USDC. |
+| `ChipConverter` | Swaps a `$CHIP` buyer's `$CHIP` to the box's exact USDC price **inside the buy** (the deployed ChipLottery's swap). Holds nothing between calls. |
 
 Deploy: `PrizeVault` → `ChipConverter` → `Box(vault, converter)` → the Safe calls
-`vault.setBox(box)` and `converter.setBox(box)` once each, lists stocks, sets keepers and limits, seeds
-the vault. `script/box/DeployBox.s.sol` refuses to run without `BOX_MAINNET_WRITTEN_OK=true` and
-has no default `$CHIP` price (the price moves; pass `BOX_CHIP_PER_USD`).
+`vault.setBox(box)` and `converter.setBox(box)` once each, lists stocks, sets the vault keeper and
+restock limits, and seeds the vault. `script/box/DeployBox.s.sol` refuses to run without
+`BOX_MAINNET_WRITTEN_OK=true`. There is no `$CHIP` price anywhere: a `$CHIP` buy pays whatever
+`$CHIP` buys the USDC price at that moment.
 
 ## Money flow
 
@@ -32,8 +33,8 @@ has no default `$CHIP` price (the price moves; pass `BOX_CHIP_PER_USD`).
 USDC buy  ── 5% ──► fee recipient (FeeSplitter: 80% Pot / 20% ops)
           └─ 95% ─► PrizeVault
 
-$CHIP buy ─ 100% ─► ChipConverter ──keeper sellChip──► USDC ── 5% ──► fee recipient
-                                                           └─ 95% ─► PrizeVault
+$CHIP buy ─► ChipConverter: $CHIP ─v4─► WETH ─v3─► exactly the USDC price ─► Box ── 5% ──► fee recipient
+            (same transaction; unspent $CHIP/WETH back to the buyer)          └─ 95% ─► PrizeVault
 
 open ──► Pyth Entropy ──► callback ──► PrizeVault.settle (all or nothing)
             paid      ─► a B20 stock from the vault (USDC if no stock can cover it)
@@ -89,21 +90,25 @@ tier = first tier whose cumulative weight > roll
 
 ## Keeper powers (and their bounds)
 
-The keeper can move value only by swapping, never to itself.
+The keeper has exactly one power over value: it can swap vault USDC into stocks, into the vault. It
+cannot withdraw anything, and it has no part in `$CHIP` payments at all.
 
 | Call | Where output goes | Bounded by |
 |---|---|---|
 | `PrizeVault.restock(stock, usdcIn)` | the vault | Chainlink mark from the StockRegistry less `restockSlippageBps` (≤5%); stale mark refused; per-call + per-day caps; USDC must stay ≥ `minUsdcBps` of inventory (≤90%) |
-| `ChipConverter.sellChip(chipIn, minUsdcOut)` | 5% fee recipient / 95% vault | **keeper `minUsdcOut`** + owner price floor; per-call + per-day caps; ETH leg Chainlink-bounded |
 
-### ⚠ AUDIT FOCUS: `$CHIP` has no on-chain price
+### `$CHIP` payments: swapped at buy, bounded by the buyer
 
-`$CHIP` trades only on a Uniswap v4 pool behind a Doppler hook with no oracle, no cumulatives and
-no Chainlink feed. The `$CHIP` → WETH leg of `sellChip` is therefore bounded by a
-**keeper-supplied minimum**, not an oracle. A compromised keeper key could sell box `$CHIP` too
-cheap. The loss is bounded by the caps and the optional owner price floor
-(`minUsdcPerMillionChip`); nothing lets the keeper withdraw, and output goes only to the fee
-recipient and the vault. This is the Box's primary trust assumption.
+`$CHIP` has no on-chain price (a Uniswap v4 pool behind a Doppler hook; no oracle, no Chainlink).
+The first rebuild priced boxes in a fixed amount of `$CHIP` and had a keeper sell it later; audit
+round 1 (H-1) showed that when `$CHIP` halved, a "$10" box put **$4.75** into the pool against
+$9.10 of liability. Now `buyWithChip(skuId, to, wethNeeded, maxChipIn, deadline)` swaps the buyer's
+`$CHIP` to the **exact** USDC price in the same transaction (exact-output on both legs, the
+deployed ChipLottery's code), so the pool is funded at face whatever `$CHIP` does. The buyer bounds
+their own cost with `maxChipIn` and gets every unspent `$CHIP` and WETH back; a sandwich can cost
+the buyer at most their own bound and can never short the pool. The pool's swap cost (~2.3%
+measured) is the buyer's, and **the UI must disclose it**. There is no keeper, owner floor, cap or
+recovery on this path: the audited keeper trust point is gone.
 
 ## House take → fee recipient
 
@@ -125,8 +130,8 @@ exit, so it sat there forever and `$CHIP` boxes were paid for by USDC buyers. No
 
 - the vault never takes `$CHIP` in and never pays it out: `addStock`, `deposit` and `settle`
   refuse it; a stray transfer is an ordinary stray and `rescue` can return it;
-- box `$CHIP` sits on the converter only until `sellChip`; if the pool route ever breaks, the owner
-  can recover it after a 48h timelock (`queueChipRecovery`). `rescue` never takes `$CHIP`.
+- `$CHIP` never rests anywhere: it goes from the buyer to the converter, into the v4 pool, and the
+  unspent remainder back to the buyer, all in one transaction (`sweepZero()` reads (0,0,0)).
 
 ## Entropy (Pyth v2)
 
@@ -151,7 +156,7 @@ boxes are out (H-03). Payment and opens revert until the vault and converter are
 
 | Draft | Rebuild |
 |---|---|
-| 95% of `$CHIP` payments stranded in the vault | 100% to `ChipConverter`, sold for USDC 5/95 |
+| 95% of `$CHIP` payments stranded in the vault | Swapped to the exact USDC price inside the buy, split 5/95 |
 | Manual restock (owner 48h withdraw, buy off-chain, deposit) | Keeper `restock`, oracle-bounded, into the vault |
 | Owner-set price feeds per stock | StockRegistry Chainlink marks (same as ChipRounds) |
 | Prize over the cap paid short (`shortfall`) | Sell gate + all-or-nothing settle + owed prizes |

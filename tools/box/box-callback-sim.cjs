@@ -42,7 +42,6 @@ const UNI_ROUTER = '0x2626664c2603336E57B271c5C0b26F421741e481';
 const SLIP_ROUTER_B = '0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F';
 const POOL_MANAGER = '0x498581fF718922c3f8e6A244956aF099B2652b2b';
 const CHIP_HOOK = '0xBDF938149ac6a781F94FAa0ed45E6A0e984c6544';
-const ETH_FEED = '0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70';
 const NVDA = '0xb20000000000000000000078ee7ce2fE4908108C';
 // A fresh address: owner, keeper and buyer at once. Nothing is ever signed for it.
 const ME = '0x00000000000000000000000000000000B0c50001';
@@ -113,8 +112,8 @@ async function simulate(calls) {
   const key = { currency0: WETH, currency1: CHIP, fee: 0x800000, tickSpacing: 200, hooks: CHIP_HOOK };
   const pre = [
     deploy(ME, VAULT_ART, [ME, USDC, CHIP, REGISTRY, UNI_ROUTER, SLIP_ROUTER_B, 2_500]),
-    deploy(ME, CONV_ART, [ME, CHIP, WETH, USDC, POOL_MANAGER, UNI_ROUTER, ETH_FEED, 500, key]),
-    deploy(ME, BOX_ART, [ME, USDC, CHIP, FEE_SPLITTER, vault, conv, ENTROPY, 556_250n * 10n ** 18n, 5_562_500n * 10n ** 18n, 13_906_250n * 10n ** 18n]),
+    deploy(ME, CONV_ART, [ME, CHIP, WETH, USDC, POOL_MANAGER, UNI_ROUTER, 500, key]),
+    deploy(ME, BOX_ART, [ME, USDC, CHIP, FEE_SPLITTER, vault, conv, ENTROPY]),
     call(ME, vault, VAULT_ART.abi, 'setBox', [box]),
     call(ME, conv, CONV_ART.abi, 'setBox', [box]),
     ...stocks.map((t) => call(ME, vault, VAULT_ART.abi, 'addStock', [t])),
