@@ -1,0 +1,1133 @@
+CHIPWORKS BOX AUDIT PACKAGE - PASTE-1-brief-and-box.txt
+source commit c98ee57 (chipworks-contracts, branch box-rebuild). Priority 1: the brief and Box.sol. Files in this paste: 2.
+Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
+marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
+
+  1. AUDIT_BRIEF.md  (228 lines, sha256 607838e0dd02e33bd60ee332c1d33f21adf2dad03c457911923e834cffa9bb8a)
+  2. contracts/Box.sol  (890 lines, sha256 671fbd315d220b6df8b23f4337c8e27c4d23736fda0b27c7f0a7793493997567)
+
+===== BEGIN FILE AUDIT_BRIEF.md | 228 lines | sha256 607838e0dd02e33bd60ee332c1d33f21adf2dad03c457911923e834cffa9bb8a =====
+# Audit brief: ChipWorks Box (Box + PrizeVault + ChipConverter)
+
+**Chain:** Base mainnet (8453). **Solidity:** 0.8.24, EVM `cancun`, OpenZeppelin 5.1.0, optimizer 200 runs, no `via_ir`.
+**Source commit:** `c98ee57` in `chipworks-contracts`, branch `box-rebuild`. The packaged files are byte-identical to that commit after CRLF→LF.
+**Pastes:** 1 = this brief + `Box.sol` · 2 = `PrizeVault`, `ChipConverter` and every interface (1 and 2 are the priority) · 3 = the rebuild tests, audit PoCs, the Base fork test and the live-node gas simulation · 4 = remaining tests and mocks · 5 = reference (optional: the v4 swap pattern the converter follows, and Pyth's own `revealWithCallback`).
+**Nothing here is deployed.** Your review gates deployment. **User funds and on-chain randomness are involved.**
+
+You are one of two independent reviewers. Please don't look for or use the other review.
+We want two separate readings, not one reading twice.
+
+---
+
+## 0. Before you start: prove you received every file whole
+
+An earlier review was done on a paste that had been cut off. Before any findings, reply with
+**this table filled in** for every file you were given:
+
+| file | line count you see | SHA-256 you compute (or "cannot hash") | last non-empty line, verbatim |
+|---|---|---|---|
+
+The expected line count and SHA-256 of each file are on its `===== BEGIN FILE` marker line (and in
+`SHA256SUMS` / `MANIFEST.md`). Hashes are over the exact bytes: UTF-8, LF line endings, trailing newline
+included, i.e. everything strictly between the BEGIN and END marker lines. Each paste ends with an
+`===== END OF` line: if you can't see it, the paste was truncated. If a count or a last line does not
+match, **stop and say which file**. A review of a truncated file is worse than none.
+
+---
+
+## 1. What this is, in one paragraph
+
+Sealed, giftable ERC-721 "gacha" boxes. A buyer pays **$1, $10 or $25** in **USDC or $CHIP** for a
+sealed box, then opens it: the Box requests randomness from **Pyth Entropy v2**, and Entropy's
+callback draws a prize tier from a published on-chain odds table (91% expected return) and has the
+**PrizeVault** pay it in a **Coinbase B20 tokenized stock** at its Chainlink mark (USDC if no stock
+can cover it). Prizes are **never** paid in $CHIP; $CHIP is a payment option only. A USDC payment is
+split 5% fee / 95% vault in the buy transaction. A $CHIP payment goes **whole** to the
+**ChipConverter**, which a keeper later sells for USDC and splits the same way. The vault funds
+itself from sales: a keeper converts vault USDC into stocks (`restock`), and a permissionless
+`sweepSurplus` sends the house's margin to the fee recipient (the FeeSplitter → Pot). Box is
+isolated from the rest of Chipworks: it only READS the StockRegistry and uses the same two stock
+routers the rounds engine uses.
+
+**Contracts (paste 1):** `src/box/Box.sol` (ERC-721, buy/open/callback/owed prizes), `src/box/PrizeVault.sol`
+(the pool: settle, restock, sweep), `src/box/ChipConverter.sol` ($CHIP → USDC), plus interfaces.
+
+---
+
+## 2. ⚠ THE ONE KEEPER TRUST POINT: the minimum accepted when selling box $CHIP
+
+**Start here.** `ChipConverter.sellChip(chipIn, minUsdcOut, deadline)` is keeper-only. **$CHIP has
+no on-chain price**: its only market is a Uniswap v4 pool behind a Doppler hook with no oracle, no
+cumulatives, no Chainlink feed. So the $CHIP→WETH leg is bounded by the **keeper-supplied**
+`minUsdcOut`, not an oracle. The WETH→USDC leg IS bounded by Chainlink ETH/USD (`_wethToUsdc`).
+A compromised keeper key could sell box $CHIP too cheap (e.g. sandwich itself). What is meant to
+bound the loss:
+
+- the keeper can only **sell**: USDC out goes only to `box.treasury()` (5%) and `box.vault()` (95%),
+  both read live from the Box; there is no path from the converter to the keeper;
+- per-call and per-UTC-day caps (`maxChipPerSell`, `maxChipSoldPerDay`), owner-set;
+- an optional owner floor `minUsdcPerMillionChip` no keeper number can go under;
+- `rescue` can never take $CHIP; only a 48h-timelocked owner recovery (`queueChipRecovery`) can, for
+  a broken pool route.
+
+**Attack this hardest:**
+- **Q1.** Can the keeper, the owner, or anyone else make `sellChip` send value anywhere except the
+  fee recipient and the vault, or move more $CHIP than the caps allow (day-boundary tricks, reentrancy
+  through the v4 unlock, a partial fill at the price limit, `chipSpent` vs `chipIn`)?
+- **Q2.** Can anyone reach `unlockCallback` other than through our own `poolManager.unlock` (it checks
+  `msg.sender == poolManager`)? Is the v4 delta decoding correct for both currency orders
+  (`chipIsCurrency0`)? Is `sync → transfer → settle → take` complete, so nothing is left unsettled?
+- **Q3.** Is the floor check (`usdcOut * 1e24 / chipSpent`) sound, and can it be bypassed?
+- **Q4.** Is the ETH leg's Chainlink bound correct (decimals, staleness, `answer <= 0`)?
+
+The keeper's off-chain price source is a sampled median (the pool has no TWAP); it is out of scope
+here, but tell us if the on-chain bounds assume anything about it that they should not.
+
+---
+
+## 3. The Pyth callback: gas, gaming, and what happens when it fails
+
+This is the second priority. **A callback that runs out of gas or can be steered is how a gacha
+gets broken.**
+
+**How it works.** `open` requests Entropy with an explicit provider and `callbackGasLimit`, and
+records the provider (`_providerOf`). Entropy later calls `_entropyCallback` (verified against the
+live Entropy implementation `0x4ced698548f7d068f2f6e92d66f404a8a10db83b`), capped at the request's gas limit.
+The callback must never revert: `settle` is wrapped in `try`, and anything unpaid becomes **owed**
+(§4). Nothing is swapped inside the callback.
+
+**Measured gas, with real B20s on the live node** (`tools/box/box-callback-sim.cjs`, `eth_simulateV1`;
+output in paste 2). B20 stocks are node precompiles that cannot run in a forge fork, so this is the
+only real measurement:
+
+| stocks listed in the vault | callback gas, pays first stock | callback gas, skips all others first |
+|---|---|---|
+| 10 (all currently enabled) | 466,322 | 464,193 |
+| 13 (all registered) | 565,717 | 573,350 |
+
+The cost is **pricing the pool** (`PrizeVault._snapshot`: ~22.5k per registry mark, ~36k per listed
+stock in total), not the B20 transfer (a B20 `balanceOf` is 2.6k). The first build priced every stock
+twice per payout and measured **529k against a 500k limit**. It now prices once, and:
+
+- `PrizeVault.MAX_STOCKS = 16` is a **hard gas bound**: ~683k at 16 by the measured slope. Stocks can
+  be disabled but never removed, so the cap counts every stock ever listed.
+- `Box.callbackGasLimit` defaults to **1,000,000**, and the owner cannot set it below
+  `MIN_CALLBACK_GAS = 900,000` or above 2,000,000.
+
+**When a callback fails anyway.** Pyth publishes the random number in `CallbackFailed` and marks the
+request `CALLBACK_FAILED` (3). Anyone can call Entropy's `revealWithCallback` again, which re-runs our
+callback with the **same** number and all remaining gas. `Box.retryOpen` asks for NEW randomness, so it
+would be a **re-roll**. It is therefore allowed only when the request is still `CALLBACK_NOT_STARTED`
+(1, never revealed), only by the opener, and only after `REVEAL_TIMEOUT = 30 days`.
+
+**Attack this:**
+- **Q5.** Can **anyone** (an opener, a gift recipient, a stock token, the registry owner, the Box or
+  vault owner, a Chainlink feed) make the callback use more gas than it was measured at, or make it
+  revert? Consider: the opener being a contract (does anything call into it?), 16 listed stocks,
+  stale/reverting feeds, disabled stocks, a stock whose transfer reverts, the `try` around `settle`
+  and the self-call `extTransfer` pattern, the 63/64 rule.
+- **Q6.** Can an opener **choose their outcome** or re-roll by any path? Consider the reveal being
+  computable off-chain before the callback lands (Pyth's Fortuna serves revelations over HTTP),
+  `retryOpen`'s status gate (can `getRequestV2` be made to read `NOT_STARTED` for a revealed request,
+  e.g. provider change, sequence reuse, a cleared request?), orphan callbacks after a retry, and
+  transferring or re-opening a box mid-flight.
+- **Q7.** Is the cap in Q5 enforced everywhere it needs to be? (`addStock` is owner-only and bounded
+  by `MAX_STOCKS`; `setCallbackGasLimit` is bounded by `MIN_CALLBACK_GAS`.) Is anything else in the
+  callback path unbounded?
+
+---
+
+## 4. The owed-prize path ("never paid short")
+
+`PrizeVault.settle` is **all-or-nothing**: if the drawn prize exceeds `prizeCapUsd()` (25% of
+inventory) or nothing can cover it, **nothing moves** and it returns `paid == false`. The Box then marks
+the box `STATE_OWED` with the **exact drawn prize** (`owedUsd`), moves liability from the box's EV to
+that exact prize, and keeps the NFT (bound to the opener; not transferable). `claimOwed(tokenId)` is
+permissionless, re-attempts `settle` for exactly `owedUsd`, pays the **opener**, and reverts (moving
+nothing) while it still cannot. Separately, a **sell gate** refuses to sell a SKU while the pool could
+not pay its top prize (`SkuNotCovered`).
+
+**Attack this:**
+- **Q8.** Can an owed prize be paid twice, paid to the wrong address, paid more or less than `owedUsd`,
+  or become larger/smaller after the draw? Can a box be both owed and paid?
+- **Q9.** Is `outstandingLiabilityUsd` exact through every path (buy, callback paid, callback owed,
+  settle revert, claimOwed, retryOpen, orphan callback)? Can it underflow or drift?
+- **Q10.** Can someone force a prize into the owed path on purpose (e.g. by moving inventory just
+  before a reveal: donations, restock, sweep, a feed going stale), and gain from it?
+
+---
+
+## 5. Pool solvency, restock and the sweep
+
+- **Cap.** One prize ≤ `maxPrizeBps` (25%) of `inventoryUsd()` (USDC + enabled, fresh-marked stocks).
+  Raising the cap is 48h-timelocked; ceiling 50%.
+- **Restock (keeper).** `restock(stock, usdcIn)` swaps vault USDC into a registered stock via the
+  registry's venue (Slipstream router B or Uniswap v3), minimum out = Chainlink mark from the registry
+  less `restockSlippageBps` (≤5%), stale mark refused, per-call/per-day caps, and afterwards USDC must be
+  ≥ `minUsdcBps` of inventory (the USDC fallback draws on it). Output lands in the vault.
+- **Sweep (permissionless).** `sweepSurplus` pays only `box.treasury()`, and only USDC that clears all
+  three floors: USDC ≥ 110% of liability; inventory ≥ `jackpotReserveUsd()` = the pool the largest
+  prize needs (the larger of every SKU on sale at the current table, and `Box.maxSoldPrizeUsd`, the
+  largest prize any **already-sold** box can win); USDC ≥ `minUsdcBps` of what remains. A reverting read
+  sweeps nothing.
+- **Owner wind-down.** `queueSurplusWithdraw` → 48h → `executeSurplusWithdraw`, checked against the
+  same liability and reserve floors.
+
+**Attack this:**
+- **Q11.** Can the keeper drain value through `restock` (wrong router, wrong venue, stale or manipulated
+  mark, recipient, approvals left behind, the USDC-share check)?
+- **Q12.** Can anyone make `sweepSurplus` or the owner withdraw take the pool below what sold boxes are
+  owed or could win? (Odds or price changes after a sale, paused SKUs, owed prizes, stale marks
+  inflating or deflating inventory, rounding in `sweepableUsdc`.)
+- **Q13.** Can inventory be inflated to pass the sell gate or cap and then deflated (donations are
+  irreversible; stock marks come from the registry's Chainlink feeds, not the owner)?
+
+---
+
+## 6. $CHIP is never inventory (H-01, redone)
+
+The first draft sent 95% of every $CHIP payment into the vault and then refused $CHIP on every exit,
+stranding it. Now: a $CHIP buy transfers the whole price to the converter (`Box._buy`); the vault's
+`addStock`, `deposit` and `settle` refuse $CHIP (configured CHIP and the live `DEFAULT_CHIP`); a stray
+$CHIP transfer into the vault can be `rescue`d. **Q14.** Can $CHIP end up stuck, or paid as a prize, by
+any path?
+
+---
+
+## 7. Everything the owner (the Safe) can do
+
+Immediate: `setPaused`, `setSkuPaused`, `setBaseURI`, `setCallbackGasLimit` (900k–2M), vault
+`setKeeper`, `setRestockParams` (slippage ≤5%, USDC share ≤90%), `setMaxFeedAge` (≥1h), `addStock`
+(≤16, registry-registered, never CHIP/USDC), `setStockEnabled`, `rescue` (never USDC or a listed stock);
+converter `setKeeper`, `setLimits`, `setPriceFloor`, `setEthLeg` (≤3%), `rescue` (never CHIP).
+48h timelock, 14-day grace: fee recipient (`queueTreasury`), SKU price/existence, odds table, raising
+`maxPrizeBps`, vault surplus withdraw, converter $CHIP recovery. Once only: `vault.setBox`,
+`converter.setBox`. **Q15.** Can the owner take user funds or break a sold box's promise with an
+immediate action? (Pausing and disabling stocks are accepted liveness levers.)
+
+---
+
+## 8. Known and accepted (tell us if you disagree)
+
+1. **The keeper's $CHIP minimum (§2).** The accepted trust point, bounded as described.
+2. **B20 marks hold the last close over weekends.** `maxFeedAge` defaults to 5 days; a stock whose
+   mark is older is skipped everywhere (not counted, not paid, not bought).
+3. **Pyth.** Liveness depends on the provider revealing; the keeper also completes stuck reveals via
+   `revealWithCallback` (same number). Only if the provider never reveals for 30 days can the opener
+   `retryOpen`.
+4. **`maxSoldPrizeUsd` only rises.** After the last big-jackpot box is opened, the reserve stays higher
+   than necessary. Conservative by design.
+5. **Owed prizes can wait.** If the pool shrinks, an owed prize waits until sales (or a deposit) grow it.
+6. **Buys are gas-heavy** (~640k with 10 stocks) because the sell gate values the whole pool. Accepted on Base.
+7. **Box.sol is 22,955 bytes** (limit 24,576). Proposed fixes to Box must fit in ~1.6 KB.
+
+---
+
+## 9. What we need back
+
+For each finding: **severity**, **file and line**, **the exact calls that exploit it** (who calls what,
+in what order, with what values), and **a fix**. If you find nothing on a question, **say so explicitly
+for each** (Q1–Q15). "No finding on Q6" is a result we need.
+
+We will **reproduce every finding with a test before changing anything**, and we will not apply a fix
+we cannot show is needed. (A previous review's suggested fix broke a working path; we check each one.)
+
+Reproduce locally: `forge test --match-path 'test/box/*'` (no RPC); `forge test --match-contract BoxForkTest -vv`
+(needs `BASE_RPC_URL`); `node tools/box/box-callback-sim.cjs` and `STOCKS=all node tools/box/box-callback-sim.cjs`
+(needs `BASE_RPC_URL`, sends nothing).
+===== END FILE AUDIT_BRIEF.md =====
+
+===== BEGIN FILE contracts/Box.sol | 890 lines | sha256 671fbd315d220b6df8b23f4337c8e27c4d23736fda0b27c7f0a7793493997567 =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+
+import {IBox} from "../interfaces/IBox.sol";
+import {IChipConverter} from "../interfaces/IChipConverter.sol";
+import {IEntropyV2} from "../interfaces/IEntropyV2.sol";
+import {IPrizeVault} from "../interfaces/IPrizeVault.sol";
+
+/// @title Box
+/// @notice Sealed, giftable ERC-721 ChipWorks boxes. Buy with USDC or $CHIP; open for a
+///         random Coinbase B20 prize sized by a published on-chain odds table.
+///
+/// @dev UNAUDITED. Do not treat this as part of the Anvil / rounds review surface.
+///
+///      THIS IS A NEW PRODUCT FAMILY. It shares no storage, no inheritance and no call
+///      path with Anvil. Anvil's {buyNext} is a FIFO shelf of known Nouns; this is a
+///      gacha. The two must not be bolted together — a bug in the draw cannot touch the
+///      Noun shelf, and a bug on the shelf cannot mint a Box.
+///
+///      FEE SPLIT IS STRUCTURAL. A USDC payment is split in the same transaction: 5%
+///      (`FEE_BPS`) to {feeRecipient} / {treasury}, 95% to {vault}. A $CHIP payment goes
+///      WHOLE to the {converter}, which sells it for USDC and applies the same 5/95 split
+///      (the old path parked 95% of every $CHIP payment in the vault forever — H-01, redone).
+///      The Box holds no USDC or $CHIP between calls. Launch recipient is the FeeSplitter
+///      ({DEFAULT_FEE_RECIPIENT}: 80% Pot / 20% ops); retarget is 48h-timelocked.
+///
+///      RTP IS THE TABLE. {oddsTable} is the only source of prize weights. The UI MUST
+///      render that table and {previewDraw}, not a parallel copy. Constructor table is
+///      91.00% EV of face price. The house take is 9% of face: the 5% fee, plus ~4% that
+///      stays in the vault and reaches the fee recipient through {PrizeVault.sweepSurplus}.
+///      Every tier pays a B20 stock, or USDC when no stock can cover it; never $CHIP.
+///      Changing the table is timelocked.
+///
+///      HONEST ODDS: NEVER PAID SHORT. A SKU cannot be bought while the vault could not pay
+///      its top prize in full ({isSkuCovered}). If a drawn prize still cannot be paid at
+///      callback time (the pool shrank between buy and open), NOTHING is paid and the box
+///      becomes OWED at exactly the drawn size; anyone can {claimOwed} it later and it is
+///      paid to the opener in full. It is never re-rolled.
+///
+///      RANDOMNESS IS PYTH ENTROPY V2. {open} is payable. It reads {getFeeV2} for the
+///      configured callback gas limit, forwards that exact fee, and refunds any excess
+///      ETH (M-08). {buy*}/{open}/{retryOpen} revert unless {IPrizeVault.box} == this
+///      (H-04 / H-01: no payment into an unwired vault).
+///      The Entropy contract later calls {_entropyCallback}. That callback must not
+///      revert: an unpaid or reverting {IPrizeVault.settle} leaves the NFT OWED with the
+///      drawn prize fixed (no silent burn, no re-roll). Basescan sees
+///      {BoxOpeningRequested}, then {BoxOpened} (paid) or {PrizeOwed}.
+///
+///      MINT TERMS ARE SNAPSHOTTED (H-05). Each box stores face USDC, odds version and
+///      EV at mint. {executeSku}/{executeOdds} cannot rewrite a sealed ticket. Retiring
+///      a SKU ({exists: false}) while {sealedSupply} > 0 reverts (H-03).
+///
+///      $CHIP AND USDC ARE BOTH LIVE PAYMENT ASSETS. Launch token is {DEFAULT_CHIP} on Base.
+///      {IPrizeVault.chip} and the converter's chip MUST equal {chip} at construct.
+///      `chip == address(0)` (with `converter == address(0)`) or a SKU `chipPrice == 0`
+///      disables the CHIP path without affecting USDC. {buy*} revert unless the vault is
+///      wired to this Box. $CHIP is a payment asset only: it is never a prize.
+contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+    using Strings for uint256;
+
+    uint16 public constant override FEE_BPS = 500;
+    uint16 public constant override WEIGHT_DENOM = 10_000;
+    uint8 public constant MAX_SKUS = 3;
+    uint8 public constant MAX_TIERS = 8;
+    uint8 public constant STATE_SEALED = 1;
+    uint8 public constant STATE_OPENING = 2;
+    uint8 public constant STATE_OWED = 3;
+    uint256 public constant MAX_BATCH = 20;
+    uint64 public constant CONFIG_TIMELOCK = 48 hours;
+    uint64 public constant CONFIG_GRACE = 14 days;
+    /// @notice How long an open must go completely unrevealed before {retryOpen}. See there.
+    uint64 public constant REVEAL_TIMEOUT = 30 days;
+    /// @dev EntropyStatusConstants.CALLBACK_NOT_STARTED: requested, never revealed.
+    uint8 internal constant CALLBACK_NOT_STARTED = 1;
+    /// @notice The owner cannot set the callback gas below what a payout needs with the vault's
+    ///         maximum stock list ({PrizeVault.MAX_STOCKS} = 16). Measured with real B20s on the
+    ///         live node (tools/box/box-callback-sim.cjs): ~36k gas per listed stock, 573k with 13
+    ///         listed, so ~683k at 16. 900k keeps ~30% over that; the 1M default keeps ~46%.
+    uint32 public constant MIN_CALLBACK_GAS = 900_000;
+    uint32 public constant MAX_CALLBACK_GAS = 2_000_000;
+
+    uint8 public constant SKU_ONE_USD = 0;
+    uint8 public constant SKU_TEN_USD = 1;
+    uint8 public constant SKU_TWENTY_FIVE_USD = 2;
+
+    /// @notice Default fee recipient: the live FeeSplitter (80% Pot / 20% ops). It splits any
+    ///        ERC-20 permissionlessly; the Pot's round currency is USDC, which is why every
+    ///        fee reaches it as USDC and never as $CHIP (the Pot has no $CHIP route).
+    /// @dev Constructor still takes `treasury_` so a deploy can override. Changing a live
+    ///      recipient is {queueTreasury}.
+    address public constant DEFAULT_FEE_RECIPIENT = 0xb9b76e1835afE05e5A73065FE01A19B14869F8A3;
+
+    /// @notice $CHIP on Base. Scripts default the constructor `chip_` to this.
+    address public constant DEFAULT_CHIP = 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3;
+
+    /// @notice USDC on Base (6 decimals). Scripts default `usdc_` to this.
+    address public constant DEFAULT_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+
+    address public immutable override usdc;
+    address public immutable override chip;
+    address public immutable override vault;
+    address public immutable override converter;
+    address public immutable override entropy;
+
+    address public override treasury;
+    /// @dev 1M, not 500k: with real B20s and ten stocks listed the callback measured 529k before
+    ///      {PrizeVault._snapshot} (tools/box/box-callback-sim.cjs). Pyth charges little for the
+    ///      headroom: 0.000020 ETH at 1M against 0.000015 at 500k.
+    uint32 public override callbackGasLimit = 1_000_000;
+    bool public paused;
+    string public baseURI;
+    uint256 public nextId = 1;
+
+    mapping(uint8 => Sku) internal _skus;
+    mapping(uint8 => uint256) public override sealedSupply;
+    mapping(uint256 => BoxView) internal _info;
+    mapping(uint64 => uint256) internal _tokenIdOfSequence;
+    /// @dev The Entropy provider each open was requested from.
+    mapping(uint256 => address) internal _providerOf;
+
+    /// @notice Largest single prize any box ever sold can win (6 dp). Only ever rises; see
+    ///         {maxLivePrizeUsd}. Conservative on purpose: after the last such box is opened it
+    ///         keeps the sweep's reserve higher than it needs to be, never lower.
+    uint256 public maxSoldPrizeUsd;
+
+    /// @notice USD EV of every sealed + opening box, snapshotted at mint (6 decimals).
+    uint256 public override outstandingLiabilityUsd;
+
+    /// @notice Current odds-table version. Mint snapshots this onto each box (H-05).
+    uint64 public oddsVersion;
+
+    struct OddsSnapshot {
+        uint8 count;
+        PrizeTier[MAX_TIERS] tiers;
+    }
+
+    mapping(uint64 => OddsSnapshot) internal _oddsSnapshots;
+
+    struct PendingAddress {
+        bool queued;
+        uint64 executableAt;
+        address target;
+    }
+
+    struct PendingSku {
+        bool queued;
+        uint64 executableAt;
+        uint8 id;
+        Sku sku;
+    }
+
+    struct PendingOdds {
+        bool queued;
+        uint64 executableAt;
+        uint8 count;
+        PrizeTier[MAX_TIERS] tiers;
+    }
+
+    PendingAddress internal _pendingTreasury;
+    PendingSku internal _pendingSku;
+    PendingOdds internal _pendingOdds;
+
+    event BoxPurchased(
+        address indexed buyer,
+        address indexed to,
+        uint256 indexed tokenId,
+        uint8 skuId,
+        address paymentToken,
+        uint256 price,
+        uint256 fee,
+        uint256 toVault,
+        uint256 toConverter
+    );
+    event BoxOpeningRequested(
+        address indexed opener, uint256 indexed tokenId, uint64 indexed sequence, uint8 skuId, uint128 entropyFee
+    );
+    event BoxOpened(
+        address indexed opener,
+        uint256 indexed tokenId,
+        uint64 indexed sequence,
+        uint8 skuId,
+        uint8 tierId,
+        uint32 prizeBps,
+        uint256 prizeUsd,
+        address stock,
+        uint256 stockAmount,
+        uint256 usdcAmount,
+        bool fallbackStock,
+        bool usdcFallback
+    );
+    event OrphanCallback(uint64 indexed sequence, address indexed provider);
+    /// @notice Drawn but not paid: the pool could not cover it in full. Fixed at `prizeUsd`;
+    ///         {claimOwed} pays exactly this to `opener` once the pool can.
+    event PrizeOwed(
+        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
+    );
+    event PausedSet(bool paused);
+    event SkuPaused(uint8 indexed skuId, bool paused);
+    event TreasuryQueued(address indexed treasury, uint64 executableAt);
+    event TreasurySet(address indexed previous, address indexed current);
+    event TreasuryCancelled();
+    event SkuQueued(uint8 indexed skuId, uint96 usdcPrice, uint128 chipPrice, uint64 executableAt);
+    event SkuExecuted(uint8 indexed skuId, uint96 usdcPrice, uint128 chipPrice);
+    event SkuCancelled();
+    event OddsQueued(uint8 count, uint64 executableAt);
+    event OddsExecuted(uint8 count, uint256 rtpBps);
+    event OddsCancelled();
+    event CallbackGasLimitSet(uint32 gasLimit);
+    event BaseURISet(string baseURI);
+
+    error ZeroAddress();
+    error BadConfig();
+    error PausedError();
+    error SkuPausedError(uint8 skuId);
+    error UnknownSku(uint8 skuId);
+    error ChipDisabled();
+    error NotOwner();
+    error NotSealed(uint256 tokenId);
+    error NotOpening(uint256 tokenId);
+    error NotOwed(uint256 tokenId);
+    error StillUnpayable(uint256 tokenId, uint256 prizeUsd);
+    error SkuNotCovered(uint8 skuId, uint256 topPrizeUsd, uint256 prizeCapUsd);
+    error RevealNotTimedOut(uint64 nowTs, uint64 readyAt);
+    error RevealAlreadyPublic(uint256 tokenId, uint8 callbackStatus);
+    error BoxLocked(uint256 tokenId);
+    error Underpaid(uint256 sent, uint256 required);
+    error RefundFailed();
+    error OnlyEntropy();
+    error VaultNotWired();
+    error ConverterNotWired();
+    error SealedSupplyOutstanding(uint8 skuId);
+    error BatchTooLarge(uint256 n);
+    error NothingQueued();
+    error TimelockNotElapsed(uint64 nowTs, uint64 executableAt);
+    error TimelockExpired(uint64 nowTs, uint64 expiredAt);
+
+    /// @param multisig       Owner. Two-step.
+    /// @param usdc_          USDC on Base. 6 decimals. Launch default {DEFAULT_USDC}.
+    /// @param chip_          $CHIP token. Launch default {DEFAULT_CHIP}. `address(0)`
+    ///                       disables {buyWithChip} without affecting USDC.
+    /// @param treasury_      5% recipient ({feeRecipient}). Launch default is
+    ///                       {DEFAULT_FEE_RECIPIENT} (Goyabean's Safe). Retarget is 48h-timelocked.
+    /// @param vault_         PrizeVault. 95% of a USDC payment; every payout.
+    /// @param converter_     ChipConverter. Receives all of a $CHIP payment and sells it for USDC.
+    ///                       `address(0)` only together with `chip_ == address(0)`.
+    /// @param entropy_       Pyth Entropy v2. Base: 0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb.
+    /// @param chipPrice1     $CHIP charged for the $1 SKU. 0 disables CHIP on that SKU.
+    /// @param chipPrice10    $CHIP charged for the $10 SKU. 0 disables CHIP on that SKU.
+    /// @param chipPrice25    $CHIP charged for the $25 SKU. 0 disables CHIP on that SKU.
+    constructor(
+        address multisig,
+        address usdc_,
+        address chip_,
+        address treasury_,
+        address vault_,
+        address converter_,
+        address entropy_,
+        uint128 chipPrice1,
+        uint128 chipPrice10,
+        uint128 chipPrice25
+    ) ERC721("ChipWorks Box", "CBOX") Ownable(multisig) {
+        if (multisig == address(0) || usdc_ == address(0) || treasury_ == address(0)) {
+            revert ZeroAddress();
+        }
+        if (vault_ == address(0) || entropy_ == address(0)) revert ZeroAddress();
+        if (chip_ == usdc_) revert BadConfig();
+        // The vault refuses {chip} as stock, so it must know which token that is.
+        if (IPrizeVault(vault_).chip() != chip_) revert BadConfig();
+        if (IPrizeVault(vault_).usdc() != usdc_) revert BadConfig();
+        // A CHIP path needs a converter for the same CHIP and USDC; no CHIP path, no converter.
+        if ((chip_ == address(0)) != (converter_ == address(0))) revert BadConfig();
+        if (converter_ != address(0)) {
+            if (IChipConverter(converter_).chip() != chip_ || IChipConverter(converter_).usdc() != usdc_) {
+                revert BadConfig();
+            }
+        }
+        usdc = usdc_;
+        chip = chip_;
+        treasury = treasury_;
+        vault = vault_;
+        converter = converter_;
+        entropy = entropy_;
+
+        _skus[SKU_ONE_USD] = Sku({exists: true, paused: false, usdcPrice: 1_000_000, chipPrice: chipPrice1});
+        _skus[SKU_TEN_USD] = Sku({exists: true, paused: false, usdcPrice: 10_000_000, chipPrice: chipPrice10});
+        _skus[SKU_TWENTY_FIVE_USD] = Sku({exists: true, paused: false, usdcPrice: 25_000_000, chipPrice: chipPrice25});
+
+        _loadLaunchOdds();
+        emit TreasurySet(address(0), treasury_);
+        emit SkuExecuted(SKU_ONE_USD, 1_000_000, chipPrice1);
+        emit SkuExecuted(SKU_TEN_USD, 10_000_000, chipPrice10);
+        emit SkuExecuted(SKU_TWENTY_FIVE_USD, 25_000_000, chipPrice25);
+        emit OddsExecuted(_oddsSnapshots[0].count, rtpBps());
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                               BUY                                    */
+    /* ------------------------------------------------------------------ */
+
+    function buyWithUsdc(uint8 skuId, address to) external override nonReentrant returns (uint256 tokenId) {
+        tokenId = _buy(skuId, to, usdc, _liveSku(skuId).usdcPrice);
+    }
+
+    function buyWithChip(uint8 skuId, address to) external override nonReentrant returns (uint256 tokenId) {
+        if (chip == address(0)) revert ChipDisabled();
+        uint128 price = _liveSku(skuId).chipPrice;
+        if (price == 0) revert ChipDisabled();
+        tokenId = _buy(skuId, to, chip, price);
+    }
+
+    function buyWithUsdcBatch(uint8 skuId, address to, uint256 n)
+        external
+        override
+        nonReentrant
+        returns (uint256 firstId)
+    {
+        if (n == 0 || n > MAX_BATCH) revert BatchTooLarge(n);
+        Sku memory s = _liveSku(skuId);
+        firstId = nextId;
+        for (uint256 i; i < n; ++i) {
+            _buy(skuId, to, usdc, s.usdcPrice);
+        }
+    }
+
+    function buyWithChipBatch(uint8 skuId, address to, uint256 n)
+        external
+        override
+        nonReentrant
+        returns (uint256 firstId)
+    {
+        if (chip == address(0)) revert ChipDisabled();
+        if (n == 0 || n > MAX_BATCH) revert BatchTooLarge(n);
+        Sku memory s = _liveSku(skuId);
+        if (s.chipPrice == 0) revert ChipDisabled();
+        firstId = nextId;
+        for (uint256 i; i < n; ++i) {
+            _buy(skuId, to, chip, s.chipPrice);
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                               OPEN                                   */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Burn the seal: request Entropy, pay the Pyth fee in ETH, wait for the callback.
+    /// @dev Reads {getFeeV2} for `callbackGasLimit` on every call. Excess ETH is refunded;
+    ///      Entropy itself does not refund. The box is locked (not transferable) until the
+    ///      callback burns it.
+    function open(uint256 tokenId) external payable override nonReentrant {
+        if (paused) revert PausedError();
+        if (ownerOf(tokenId) != msg.sender) revert NotOwner();
+        BoxView storage b = _info[tokenId];
+        if (b.state != STATE_SEALED) revert NotSealed(tokenId);
+        if (_skus[b.skuId].paused) revert SkuPausedError(b.skuId);
+        _requestEntropy(tokenId, b);
+    }
+
+    /// @notice Last resort: ask Entropy for NEW randomness, only if the original request was never
+    ///         revealed at all within {REVEAL_TIMEOUT} (the provider is gone).
+    /// @dev NOT A RE-ROLL. When a callback fails, Pyth publishes the random number in
+    ///      `CallbackFailed` and marks the request CALLBACK_FAILED; the fix for that is Pyth's own
+    ///      permissionless `revealWithCallback`, which re-runs this Box's callback with the SAME
+    ///      number (the keeper does it). Allowing fresh randomness there would let a holder read a
+    ///      bad draw and roll again, so this refuses anything but CALLBACK_NOT_STARTED. The 30-day
+    ///      timeout covers the remaining case: Fortuna serves revelations over HTTP, so an
+    ///      unrevealed draw is computable off chain, and the keeper completes stuck reveals long
+    ///      before any holder could wait out the clock.
+    function retryOpen(uint256 tokenId) external payable override nonReentrant {
+        if (paused) revert PausedError();
+        BoxView storage b = _info[tokenId];
+        if (b.state != STATE_OPENING) revert NotOpening(tokenId);
+        if (b.opener != msg.sender) revert NotOwner();
+        uint64 readyAt = b.openingStartedAt + REVEAL_TIMEOUT;
+        if (block.timestamp < readyAt) revert RevealNotTimedOut(uint64(block.timestamp), readyAt);
+        IEntropyV2.RequestV2 memory r = IEntropyV2(entropy).getRequestV2(_providerOf[tokenId], b.sequence);
+        if (r.sequenceNumber != b.sequence || r.callbackStatus != CALLBACK_NOT_STARTED) {
+            revert RevealAlreadyPublic(tokenId, r.callbackStatus);
+        }
+        delete _tokenIdOfSequence[b.sequence];
+        _requestEntropy(tokenId, b);
+    }
+
+    /// @notice Pay an OWED box its drawn prize, in full, to the address that opened it.
+    ///         Permissionless: the recipient is fixed, so anyone may push it through once
+    ///         the pool can cover it. Reverts (moving nothing) while it still cannot.
+    function claimOwed(uint256 tokenId) external override nonReentrant {
+        BoxView memory b = _info[tokenId];
+        if (b.state != STATE_OWED) revert NotOwed(tokenId);
+        IPrizeVault.Payout memory payout =
+            IPrizeVault(vault).settle(b.opener, b.owedUsd, keccak256(abi.encode(tokenId, b.sequence)));
+        if (!payout.paid) revert StillUnpayable(tokenId, b.owedUsd);
+        outstandingLiabilityUsd -= b.owedUsd;
+        _retire(tokenId, b.skuId);
+        _emitOpened(b.opener, tokenId, b.sequence, b.skuId, type(uint8).max, 0, b.owedUsd, payout);
+    }
+
+    /// @notice Pyth Entropy v2 callback body. Entropy itself calls {_entropyCallback}
+    ///         (IEntropyConsumer._entropyCallback, read from the verified Base implementation).
+    /// @dev Never reverts on a failed payout. A revert here would stall the keeper.
+    function entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) public {
+        if (msg.sender != entropy) revert OnlyEntropy();
+        _fulfill(sequence, provider, randomNumber);
+    }
+
+    /// @dev THE SELECTOR PYTH CALLS: Entropy.revealWithCallback invokes this on
+    ///      the requester, gas-capped at the request's limit. On failure Pyth publishes the number
+    ///      and marks the request CALLBACK_FAILED; re-running revealWithCallback calls this again
+    ///      with the SAME number and all remaining gas. See {retryOpen}.
+    function _entropyCallback(uint64 sequence, address provider, bytes32 randomNumber) external {
+        entropyCallback(sequence, provider, randomNumber);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                               VIEWS                                  */
+    /* ------------------------------------------------------------------ */
+
+    function feeRecipient() public view override returns (address) {
+        return treasury;
+    }
+
+    function sku(uint8 id) public view override returns (Sku memory) {
+        return _skus[id];
+    }
+
+    function oddsTierCount() public view override returns (uint256) {
+        return _oddsSnapshots[oddsVersion].count;
+    }
+
+    function oddsTable() public view override returns (PrizeTier[] memory tiers) {
+        OddsSnapshot storage snap = _oddsSnapshots[oddsVersion];
+        uint256 n = snap.count;
+        tiers = new PrizeTier[](n);
+        for (uint256 i; i < n; ++i) {
+            tiers[i] = snap.tiers[i];
+        }
+    }
+
+    /// @notice Player RTP of the published table, in bps. Launch table is 9100 (91.00%).
+    function rtpBps() public view override returns (uint256) {
+        return _rtpBpsAt(oddsVersion);
+    }
+
+    function expectedValueUsd(uint8 skuId) public view override returns (uint256) {
+        Sku memory s = _skus[skuId];
+        if (!s.exists) revert UnknownSku(skuId);
+        return uint256(s.usdcPrice) * rtpBps() / WEIGHT_DENOM;
+    }
+
+    /// @inheritdoc IBox
+    function maxPrizeUsd(uint8 skuId) public view override returns (uint256) {
+        Sku memory s = _skus[skuId];
+        if (!s.exists) revert UnknownSku(skuId);
+        return uint256(s.usdcPrice) * _maxTierBpsAt(oddsVersion) / WEIGHT_DENOM;
+    }
+
+    /// @inheritdoc IBox
+    /// @dev Two sources, the larger wins. (1) Every SKU on sale, at the current table: what the
+    ///      next sale could owe. (2) {maxSoldPrizeUsd}: the largest prize any box ALREADY SOLD
+    ///      can win. A sold box keeps its mint face and odds version (H-05), so pausing a SKU,
+    ///      cutting its price or lowering the top tier must not shrink the reserve under it.
+    function maxLivePrizeUsd() public view override returns (uint256 m) {
+        m = maxSoldPrizeUsd;
+        uint32 top = _maxTierBpsAt(oddsVersion);
+        for (uint8 i; i < MAX_SKUS; ++i) {
+            Sku memory s = _skus[i];
+            if (!s.exists || s.paused) continue;
+            uint256 p = uint256(s.usdcPrice) * top / WEIGHT_DENOM;
+            if (p > m) m = p;
+        }
+    }
+
+    /// @inheritdoc IBox
+    function isSkuCovered(uint8 skuId) public view override returns (bool) {
+        return IPrizeVault(vault).prizeCapUsd() >= maxPrizeUsd(skuId);
+    }
+
+    function quoteOpenFee() public view override returns (uint128) {
+        return IEntropyV2(entropy).getFeeV2(callbackGasLimit);
+    }
+
+    function previewDraw(bytes32 randomNumber, uint8 skuId)
+        public
+        view
+        override
+        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd)
+    {
+        Sku memory s = _skus[skuId];
+        if (!s.exists) revert UnknownSku(skuId);
+        (tierId, weight, prizeBps, prizeUsd) = _drawAt(randomNumber, s.usdcPrice, oddsVersion);
+    }
+
+    function boxInfo(uint256 tokenId) external view override returns (BoxView memory) {
+        return _info[tokenId];
+    }
+
+    /// @notice The Entropy provider an opening box was requested from. The keeper needs it to
+    ///         complete a stuck reveal through Entropy.revealWithCallback.
+    function openingProvider(uint256 tokenId) external view returns (address) {
+        return _providerOf[tokenId];
+    }
+
+    function tokenIdOfSequence(uint64 sequence) external view override returns (uint256) {
+        return _tokenIdOfSequence[sequence];
+    }
+
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
+        _requireOwned(tokenId);
+        return string.concat(baseURI, tokenId.toString());
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                          ADMIN: SAFETY                               */
+    /* ------------------------------------------------------------------ */
+
+    function setPaused(bool v) external onlyOwner {
+        paused = v;
+        emit PausedSet(v);
+    }
+
+    function setSkuPaused(uint8 skuId, bool v) external onlyOwner {
+        if (!_skus[skuId].exists) revert UnknownSku(skuId);
+        _skus[skuId].paused = v;
+        emit SkuPaused(skuId, v);
+    }
+
+    function setCallbackGasLimit(uint32 gasLimit) external onlyOwner {
+        if (gasLimit < MIN_CALLBACK_GAS || gasLimit > MAX_CALLBACK_GAS) revert BadConfig();
+        callbackGasLimit = gasLimit;
+        emit CallbackGasLimitSet(gasLimit);
+    }
+
+    function setBaseURI(string calldata v) external onlyOwner {
+        baseURI = v;
+        emit BaseURISet(v);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                     ADMIN: TREASURY (48h)                            */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Queue a change of the 5% recipient. 48h notice, 14d grace.
+    /// @dev Redirects protocol take. Immediate pause is the safety lever while this matures.
+    function queueTreasury(address v) external onlyOwner {
+        if (v == address(0)) revert ZeroAddress();
+        uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
+        _pendingTreasury = PendingAddress({queued: true, executableAt: executableAt, target: v});
+        emit TreasuryQueued(v, executableAt);
+    }
+
+    function executeTreasury() external onlyOwner {
+        PendingAddress memory p = _pendingTreasury;
+        if (!p.queued) revert NothingQueued();
+        _requireInWindow(p.executableAt);
+        emit TreasurySet(treasury, p.target);
+        treasury = p.target;
+        delete _pendingTreasury;
+    }
+
+    function cancelTreasury() external onlyOwner {
+        if (!_pendingTreasury.queued) revert NothingQueued();
+        delete _pendingTreasury;
+        emit TreasuryCancelled();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                       ADMIN: SKUS / ODDS                             */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Queue a SKU price (and whether it exists). Launch SKUs are $1 / $10 / $25.
+    function queueSku(uint8 id, bool exists, uint96 usdcPrice, uint128 chipPrice) external onlyOwner {
+        if (id >= MAX_SKUS) revert UnknownSku(id);
+        if (exists && usdcPrice == 0) revert BadConfig();
+        uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
+        _pendingSku = PendingSku({
+            queued: true,
+            executableAt: executableAt,
+            id: id,
+            sku: Sku({exists: exists, paused: _skus[id].paused, usdcPrice: usdcPrice, chipPrice: chipPrice})
+        });
+        emit SkuQueued(id, usdcPrice, chipPrice, executableAt);
+    }
+
+    function executeSku() external onlyOwner {
+        PendingSku memory p = _pendingSku;
+        if (!p.queued) revert NothingQueued();
+        _requireInWindow(p.executableAt);
+        // H-03: retiring a SKU while tickets remain would make live EV revert and, before
+        // mint snapshots, zero the surplus floor / pay a $0 prize.
+        if (!p.sku.exists && sealedSupply[p.id] != 0) revert SealedSupplyOutstanding(p.id);
+        _skus[p.id] = p.sku;
+        emit SkuExecuted(p.id, p.sku.usdcPrice, p.sku.chipPrice);
+        delete _pendingSku;
+    }
+
+    function cancelSku() external onlyOwner {
+        if (!_pendingSku.queued) revert NothingQueued();
+        delete _pendingSku;
+        emit SkuCancelled();
+    }
+
+    /// @notice Queue a replacement odds table. Weights must sum to {WEIGHT_DENOM}.
+    function queueOdds(PrizeTier[] calldata tiers) external onlyOwner {
+        uint8 n = uint8(tiers.length);
+        if (n == 0 || n > MAX_TIERS) revert BadConfig();
+        uint256 w;
+        for (uint256 i; i < n; ++i) {
+            if (tiers[i].weight == 0 || tiers[i].prizeBps == 0) revert BadConfig();
+            w += tiers[i].weight;
+        }
+        if (w != WEIGHT_DENOM) revert BadConfig();
+        uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
+        PendingOdds storage q = _pendingOdds;
+        q.queued = true;
+        q.executableAt = executableAt;
+        q.count = n;
+        for (uint256 i; i < n; ++i) {
+            q.tiers[i] = tiers[i];
+        }
+        emit OddsQueued(n, executableAt);
+    }
+
+    function executeOdds() external onlyOwner {
+        PendingOdds storage q = _pendingOdds;
+        if (!q.queued) revert NothingQueued();
+        _requireInWindow(q.executableAt);
+        uint64 v = oddsVersion + 1;
+        OddsSnapshot storage snap = _oddsSnapshots[v];
+        snap.count = q.count;
+        for (uint256 i; i < q.count; ++i) {
+            snap.tiers[i] = q.tiers[i];
+        }
+        oddsVersion = v;
+        delete _pendingOdds;
+        emit OddsExecuted(snap.count, rtpBps());
+    }
+
+    function cancelOdds() external onlyOwner {
+        if (!_pendingOdds.queued) revert NothingQueued();
+        delete _pendingOdds;
+        emit OddsCancelled();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                              INTERNAL                                */
+    /* ------------------------------------------------------------------ */
+
+    function _liveSku(uint8 skuId) internal view returns (Sku memory s) {
+        if (paused) revert PausedError();
+        s = _skus[skuId];
+        if (!s.exists) revert UnknownSku(skuId);
+        if (s.paused) revert SkuPausedError(skuId);
+    }
+
+    function _buy(uint8 skuId, address to, address token, uint256 price) internal returns (uint256 tokenId) {
+        if (to == address(0)) revert ZeroAddress();
+        if (price == 0) revert BadConfig();
+        // H-04: do not take payment until this Box can settle.
+        if (IPrizeVault(vault).box() != address(this)) revert VaultNotWired();
+        // Honest odds: no sale the pool could not pay the top prize of, in full.
+        {
+            uint256 top = maxPrizeUsd(skuId);
+            uint256 cap = IPrizeVault(vault).prizeCapUsd();
+            if (cap < top) revert SkuNotCovered(skuId, top, cap);
+            if (top > maxSoldPrizeUsd) maxSoldPrizeUsd = top;
+        }
+
+        uint256 fee;
+        uint256 toVault;
+        uint256 toConverter;
+        if (token == usdc) {
+            fee = price * FEE_BPS / WEIGHT_DENOM;
+            toVault = price - fee;
+            IERC20(token).safeTransferFrom(msg.sender, address(this), price);
+            IERC20(token).safeTransfer(treasury, fee);
+            IERC20(token).safeTransfer(vault, toVault);
+        } else {
+            // $CHIP: whole payment to the converter, which sells it and applies the same
+            // 5/95 split in USDC. Nothing in the vault or the Pot ever holds $CHIP.
+            if (IChipConverter(converter).box() != address(this)) revert ConverterNotWired();
+            toConverter = price;
+            IERC20(token).safeTransferFrom(msg.sender, converter, price);
+        }
+
+        uint96 faceUsd = _skus[skuId].usdcPrice;
+        uint64 ver = oddsVersion;
+        uint256 ev = uint256(faceUsd) * _rtpBpsAt(ver) / WEIGHT_DENOM;
+        outstandingLiabilityUsd += ev;
+
+        tokenId = nextId++;
+        _info[tokenId] = BoxView({
+            skuId: skuId,
+            state: STATE_SEALED,
+            opener: address(0),
+            sequence: 0,
+            openingStartedAt: 0,
+            faceUsd: faceUsd,
+            oddsVersion: ver,
+            mintEvUsd: ev,
+            owedUsd: 0
+        });
+        unchecked {
+            ++sealedSupply[skuId];
+        }
+        _safeMint(to, tokenId);
+        emit BoxPurchased(msg.sender, to, tokenId, skuId, token, price, fee, toVault, toConverter);
+    }
+
+    function _requestEntropy(uint256 tokenId, BoxView storage b) internal {
+        // H-04: do not request Entropy (and later silently burn) if this Box cannot settle.
+        if (IPrizeVault(vault).box() != address(this)) revert VaultNotWired();
+
+        uint32 gasLimit = callbackGasLimit;
+        // The provider is named explicitly and remembered: {retryOpen} must ask Entropy about
+        // THIS request, even if the default provider has changed since.
+        address provider = IEntropyV2(entropy).getDefaultProvider();
+        uint128 fee = IEntropyV2(entropy).getFeeV2(provider, gasLimit);
+        if (msg.value < fee) revert Underpaid(msg.value, fee);
+
+        uint64 sequence = IEntropyV2(entropy).requestV2{value: fee}(provider, gasLimit);
+        _providerOf[tokenId] = provider;
+        b.state = STATE_OPENING;
+        b.opener = msg.sender;
+        b.sequence = sequence;
+        b.openingStartedAt = uint64(block.timestamp);
+        _tokenIdOfSequence[sequence] = tokenId;
+
+        uint256 excess = msg.value - fee;
+        if (excess != 0) {
+            (bool ok,) = msg.sender.call{value: excess}("");
+            if (!ok) revert RefundFailed();
+        }
+
+        emit BoxOpeningRequested(msg.sender, tokenId, sequence, b.skuId, fee);
+    }
+
+    function _fulfill(uint64 sequence, address provider, bytes32 randomNumber) internal {
+        uint256 tokenId = _tokenIdOfSequence[sequence];
+        if (tokenId == 0) {
+            emit OrphanCallback(sequence, provider);
+            return;
+        }
+        BoxView memory b = _info[tokenId];
+        if (b.state != STATE_OPENING || b.sequence != sequence) {
+            emit OrphanCallback(sequence, provider);
+            return;
+        }
+
+        // H-05: mint snapshot, not live SKU price or live odds table.
+        (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = _drawAt(randomNumber, b.faceUsd, b.oddsVersion);
+
+        IPrizeVault.Payout memory payout;
+        try IPrizeVault(vault).settle(b.opener, prizeUsd, randomNumber) returns (
+            IPrizeVault.Payout memory paid
+        ) {
+            payout = paid;
+        } catch {}
+
+        delete _tokenIdOfSequence[sequence];
+        outstandingLiabilityUsd -= b.mintEvUsd;
+
+        if (!payout.paid) {
+            // Never paid short, never re-rolled, never silently burned (H-04): the drawn
+            // prize is now owed at exactly this size and counts in full toward liability.
+            BoxView storage s = _info[tokenId];
+            s.state = STATE_OWED;
+            s.owedUsd = prizeUsd;
+            outstandingLiabilityUsd += prizeUsd;
+            emit PrizeOwed(b.opener, tokenId, tierId, prizeUsd, payout.capped);
+            return;
+        }
+
+        _retire(tokenId, b.skuId);
+        _emitOpened(b.opener, tokenId, sequence, b.skuId, tierId, prizeBps, prizeUsd, payout);
+    }
+
+    function _retire(uint256 tokenId, uint8 skuId) internal {
+        delete _info[tokenId];
+        delete _providerOf[tokenId];
+        if (sealedSupply[skuId] != 0) {
+            unchecked {
+                --sealedSupply[skuId];
+            }
+        }
+        _burn(tokenId);
+    }
+
+    function _emitOpened(
+        address opener,
+        uint256 tokenId,
+        uint64 sequence,
+        uint8 skuId,
+        uint8 tierId,
+        uint32 prizeBps,
+        uint256 prizeUsd,
+        IPrizeVault.Payout memory payout
+    ) internal {
+        emit BoxOpened(
+            opener,
+            tokenId,
+            sequence,
+            skuId,
+            tierId,
+            prizeBps,
+            prizeUsd,
+            payout.stock,
+            payout.stockAmount,
+            payout.usdcAmount,
+            payout.fallbackStock,
+            payout.usdcFallback
+        );
+    }
+
+    /// @dev Published mapping: `roll = uint256(randomNumber) % 10_000`, then the first
+    ///      tier whose cumulative weight exceeds `roll`. The UI must use this exact rule.
+    function _drawAt(bytes32 randomNumber, uint256 usdcPrice, uint64 version)
+        internal
+        view
+        returns (uint8 tierId, uint16 weight, uint32 prizeBps, uint256 prizeUsd)
+    {
+        OddsSnapshot storage snap = _oddsSnapshots[version];
+        uint256 roll = uint256(randomNumber) % WEIGHT_DENOM;
+        uint256 acc;
+        uint256 n = snap.count;
+        for (uint256 i; i < n; ++i) {
+            PrizeTier memory t = snap.tiers[i];
+            acc += t.weight;
+            if (roll < acc) {
+                prizeUsd = usdcPrice * t.prizeBps / WEIGHT_DENOM;
+                return (uint8(i), t.weight, t.prizeBps, prizeUsd);
+            }
+        }
+        PrizeTier memory last = snap.tiers[n - 1];
+        prizeUsd = usdcPrice * last.prizeBps / WEIGHT_DENOM;
+        return (uint8(n - 1), last.weight, last.prizeBps, prizeUsd);
+    }
+
+    function _maxTierBpsAt(uint64 version) internal view returns (uint32 top) {
+        OddsSnapshot storage snap = _oddsSnapshots[version];
+        uint256 n = snap.count;
+        for (uint256 i; i < n; ++i) {
+            if (snap.tiers[i].prizeBps > top) top = snap.tiers[i].prizeBps;
+        }
+    }
+
+    function _rtpBpsAt(uint64 version) internal view returns (uint256 acc) {
+        OddsSnapshot storage snap = _oddsSnapshots[version];
+        uint256 n = snap.count;
+        for (uint256 i; i < n; ++i) {
+            acc += uint256(snap.tiers[i].weight) * snap.tiers[i].prizeBps;
+        }
+        acc /= WEIGHT_DENOM;
+    }
+
+    function _loadLaunchOdds() internal {
+        // weight, prizeBps. EV = sum(w * prizeBps) / 10_000 = 9_100 bps = 91.00% RTP.
+        OddsSnapshot storage s = _oddsSnapshots[0];
+        s.tiers[0] = PrizeTier({weight: 4_500, prizeBps: 2_000}); // 45% → 0.20×
+        s.tiers[1] = PrizeTier({weight: 3_000, prizeBps: 5_000}); // 30% → 0.50×
+        s.tiers[2] = PrizeTier({weight: 1_500, prizeBps: 10_000}); // 15% → 1.00×
+        s.tiers[3] = PrizeTier({weight: 700, prizeBps: 20_000}); //  7% → 2.00×
+        s.tiers[4] = PrizeTier({weight: 250, prizeBps: 80_000}); // 2.5% → 8.00×
+        s.tiers[5] = PrizeTier({weight: 50, prizeBps: 360_000}); // 0.5% → 36.00×
+        s.count = 6;
+    }
+
+    function _update(address to, uint256 tokenId, address auth) internal override returns (address from) {
+        from = _ownerOf(tokenId);
+        // Opening and owed boxes are bound to the opener, who is who the prize is paid to.
+        uint8 st = _info[tokenId].state;
+        if (from != address(0) && to != address(0) && (st == STATE_OPENING || st == STATE_OWED)) {
+            revert BoxLocked(tokenId);
+        }
+        return super._update(to, tokenId, auth);
+    }
+
+    function _requireInWindow(uint64 executableAt) internal view {
+        if (block.timestamp < executableAt) revert TimelockNotElapsed(uint64(block.timestamp), executableAt);
+        uint64 expiresAt = executableAt + CONFIG_GRACE;
+        if (block.timestamp > expiresAt) revert TimelockExpired(uint64(block.timestamp), expiresAt);
+    }
+}
+===== END FILE contracts/Box.sol =====
+
+===== END OF PASTE-1-brief-and-box.txt: 2 files. If you can read this line, nothing was cut off. =====

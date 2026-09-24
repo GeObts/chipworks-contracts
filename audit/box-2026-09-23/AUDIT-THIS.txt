@@ -1,0 +1,25 @@
+AUDIT REQUEST: ChipWorks Box (Box.sol, PrizeVault.sol, ChipConverter.sol; Solidity 0.8.24, Base mainnet, not yet deployed)
+
+What it is: sealed ERC-721 gacha boxes ($1/$10/$25, paid in USDC or $CHIP). Opening requests Pyth Entropy v2;
+the callback draws a prize from an on-chain odds table (91% RTP) and a prize vault pays it in a tokenized stock
+(USDC fallback). Prizes are never $CHIP. A $CHIP payment goes whole to ChipConverter, which a keeper sells for
+USDC (5% fee / 95% vault). A keeper restocks the vault with stocks; a permissionless sweep sends surplus to the
+fee recipient. Unpayable prizes are never paid short: the box becomes "owed" at the exact prize.
+
+Attack hardest:
+1. THE ONE KEEPER TRUST POINT: $CHIP has no on-chain price, so ChipConverter.sellChip's $CHIP leg is bounded only
+   by the keeper's minUsdcOut plus caps and an owner floor. Can the keeper (or anyone) send value anywhere but the
+   fee recipient and the vault, exceed the caps, or bypass the floor? Is the Uniswap v4 unlock/settle correct?
+2. THE PYTH CALLBACK: can anyone make it exceed its gas limit or revert (we measured ~466k-573k with real B20s
+   against a 1,000,000 limit; the vault's stock list is capped at 16 as a gas bound and the limit cannot be set
+   below 900,000)? Can an opener choose or re-roll an outcome (retryOpen is gated on the Pyth request never having
+   been revealed and a 30-day timeout)?
+3. THE OWED PATH: can an owed prize be paid twice, to the wrong address, or at the wrong size? Is the liability
+   accounting exact on every path? Can someone force a prize into "owed" for gain?
+4. SOLVENCY: can restock, the sweep, or the owner take the pool below what sold boxes are owed or could win?
+
+For each finding: severity, file and line, the exact calls that exploit it, and a fix. If you find nothing on a
+question, say so for that question. The full brief (15 questions) is the first file of paste 1; the contracts are pastes 1 and 2.
+
+Before any findings, fill in the receipt table from section 0 of the brief for every file, so we know nothing
+was cut off.
