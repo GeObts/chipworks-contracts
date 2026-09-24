@@ -13,7 +13,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '../..');
-const PKG = path.join(ROOT, 'audit/box-2026-09-23');
+// The package folder: BOX_AUDIT_DIR, default round 2. Round 1 was audit/box-2026-09-23.
+const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-24');
 const commit = process.argv[2];
 if (!commit) throw new Error('usage: node tools/box/audit-pack.cjs <commit> [entropy-src.json]');
 
@@ -36,6 +37,8 @@ const P1 = [
 ];
 const P2 = [
   ...['BoxRebuild.t.sol', 'BoxAuditPoC.t.sol', 'BoxVault.t.sol', 'Box.t.sol', 'BoxTestBase.sol'].map((n) => [`test/box/${n}`, `tests/${n}`]),
+  ['test/box/BoxAuditRound1.t.sol', 'tests/BoxAuditRound1.t.sol'],
+  [null, 'TRIAGE-ROUND1.md'],
   ['test/fork/BoxFork.t.sol', 'tests/BoxFork.t.sol'],
   ...['MockEntropyV2.sol', 'MockPoolManager.sol', 'MockStockRegistry.sol', 'MockSwapRouter.sol'].map((n) => [`test/mocks/${n}`, `tests/mocks/${n}`]),
   ['tools/box/box-callback-sim.cjs', 'gas/box-callback-sim.cjs'],
@@ -43,7 +46,7 @@ const P2 = [
 ];
 const P3 = [['src/lottery/ChipLottery.sol', 'reference/ChipLottery.sol']];
 
-for (const [src, rel] of [...P1, ...P2, ...P3]) if (rel) copy(src, rel);
+for (const [src, rel] of [...P1, ...P2, ...P3]) if (rel && src) copy(src, rel);
 
 // Pyth's own code, extracted from the verified implementation's sources.
 if (process.argv[3]) {
@@ -72,7 +75,7 @@ const meta = (rel) => {
   const last = text.trimEnd().split('\n').pop();
   return { rel, text, lines, sha: crypto.createHash('sha256').update(buf).digest('hex'), last };
 };
-const relOf = ([src, rel]) => rel || src;
+const relOf = ([src, rel]) => rel || src; // [null, rel] = a file already in the package
 const all = [];
 const paste = (name, title, list) => {
   const ms = list.map((f) => meta(relOf(f)));
@@ -91,11 +94,12 @@ const paste = (name, title, list) => {
 // Kept under ~75k characters each: a paste cut off in transit is the failure section 0 exists for.
 paste('PASTE-1-brief-and-box.txt', 'Priority 1: the brief and Box.sol.', P1.slice(0, 2));
 paste('PASTE-2-vault-converter-interfaces.txt', 'Priority 1: PrizeVault, ChipConverter and every interface.', P1.slice(2));
-paste('PASTE-3-key-tests-and-gas.txt', 'The rebuild tests, the audit PoCs, the Base fork test, and the live-node gas simulation with its output.',
-  [P2[0], P2[1], P2[5], P2[10], P2[11]]);
-paste('PASTE-4-remaining-tests-and-mocks.txt', 'The remaining unit tests, the shared fixture and the mocks.',
-  [P2[2], P2[3], P2[4], P2[6], P2[7], P2[8], P2[9]]);
-paste('PASTE-5-reference-optional.txt', 'Optional reference: the v4 swap pattern the converter follows, and Pyth\'s own Entropy code.', P3);
+paste('PASTE-3-triage-and-rebuild-tests.txt', 'Round 1 triage, its verification tests, and the rebuild tests.', [P2[6], P2[5], P2[0]]);
+paste('PASTE-4-poc-fork-and-gas.txt', 'The audit PoCs, the Base fork test, and the live-node gas simulation with its output.',
+  [P2[1], P2[7], P2[12], P2[13]]);
+paste('PASTE-5-remaining-tests-and-mocks.txt', 'The remaining unit tests, the shared fixture and the mocks.',
+  [P2[2], P2[3], P2[4], P2[8], P2[9], P2[10], P2[11]]);
+paste('PASTE-6-reference-optional.txt', 'Optional reference: the v4 swap pattern the converter follows, and Pyth\'s own Entropy code.', P3);
 
 const seen = new Set();
 const uniq = all.filter((m) => !seen.has(m.rel) && seen.add(m.rel));

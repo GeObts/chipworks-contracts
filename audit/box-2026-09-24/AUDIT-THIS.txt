@@ -1,0 +1,29 @@
+AUDIT REQUEST, ROUND 2: ChipWorks Box (Box.sol, PrizeVault.sol, ChipConverter.sol; Solidity 0.8.24, Base mainnet, not yet deployed)
+
+What it is: sealed, giftable ERC-721 gacha boxes ($1/$10/$25, paid in USDC or $CHIP). Opening requests Pyth
+Entropy v2; the callback draws a prize from an on-chain odds table (91% RTP) and a prize vault pays it in a
+tokenized stock (USDC fallback). Prizes are never $CHIP. Unpayable prizes are never paid short: the box becomes
+"owed" at the exact prize. A keeper restocks the vault with stocks; a permissionless sweep sends surplus to the
+fee recipient.
+
+WHAT CHANGED SINCE ROUND 1 (details: section R of the brief, and TRIAGE-ROUND1.md in paste 3):
+- Round 1 confirmed a fixed-$CHIP-price arbitrage (a "$10" box funded the pool $4.75 when $CHIP halved). $CHIP
+  buys now SWAP TO THE EXACT USDC PRICE INSIDE THE BUY (the deployed ChipLottery's exact-output route). The keeper
+  $CHIP sale, its caps, the owner price floor and the $CHIP recovery are all gone.
+- Entropy requests are keyed by (provider, sequence); the coverage gate runs before any payment.
+
+Attack hardest:
+1. THE NEW $CHIP BUY: can anyone make a $CHIP buy mint a box while the pool gets less than 95% of the price, leave
+   tokens on the converter or Box, take more from a buyer than their own swap spent, or re-enter mid-buy? Is the
+   v4 exact-output swap and settle correct?
+2. THE PYTH CALLBACK: can anyone make it exceed its gas limit (measured ~466k-574k with real B20s against
+   1,000,000; the stock list is capped at 16) or revert? Can an opener choose or re-roll an outcome? Is the F-2
+   fix (provider-keyed requests) complete?
+3. THE OWED PATH and SOLVENCY: can an owed prize be paid twice, to the wrong address, or at the wrong size? Can
+   restock, the sweep or the owner take the pool below what sold boxes are owed or could win?
+
+For each finding: severity, file and line, the exact calls that exploit it, and a fix. If you find nothing on a
+question, say so for that question (Q1-Q17 in the brief). The brief is the first file of paste 1; the contracts
+are pastes 1 and 2.
+
+Before any findings, fill in the receipt table from section 0 of the brief for every file.
