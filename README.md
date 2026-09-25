@@ -1,6 +1,6 @@
 # ChipWorks contracts
 
-ChipWorks on Base lets holders of Lil Based Nouns, Based Nouns, DarkNOUNs, and Chiplets earn Coinbase B20 tokenized stocks. Burn `$CHIP` to activate a Noun without moving it; activation dies the moment the Noun is sold (a Noun locked as loan collateral is the deliberate exception and keeps earning for the borrower). Protocol fee streams fund permissionless 24-hour rounds. Around that core: Box gacha, Noun-backed `$CHIP` loans, a Morpho helper to borrow USDC against tokenized stocks, Anvil (FIFO Noun sales), the Chiplet Furnace, and a `$CHIP` lottery wrapper.
+ChipWorks on Base lets holders of four seperate NFT collections on Base (Lil Based Nouns, Based Nouns, DarkNOUNs, and Chiplets) earn Coinbase B20 tokenized stocks. Burn `$CHIP` to activate an NFT without moving it; activation dies the moment the Noun is sold (a Noun locked as loan collateral is the deliberate exception and keeps earning for the borrower). Protocol fee streams fund permissionless 24-hour rounds. Around that core: Box gacha, Noun-backed `$CHIP` loans, a Morpho helper to borrow USDC against tokenized stocks, Anvil (FIFO Noun sales), the Chiplet Furnace, and a `$CHIP` lottery wrapper for Megapot Lottery integration.
 
 **This repo is the contracts.** The product site is [getchipped.xyz](https://getchipped.xyz); its app source is [`GeObts/chipworks`](https://github.com/GeObts/chipworks) (may be private). Contracts live here. The site lives there.
 
