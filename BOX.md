@@ -146,8 +146,10 @@ nine others, against a **1,000,000** `callbackGasLimit` (~35k more per extra sto
 stuck and re-rolled by `retryOpen`; the fix prices each stock once per payout (`_snapshot`) and
 raised the limit. Pyth charges 0.000020 ETH at 1M against 0.000015 at 500k. The cost is the pool
 valuation (~35k/stock), not the B20 transfer (a B20 `balanceOf` is 2.6k). A buy costs ~640k gas
-for the same reason (the sell gate values the pool). `retryOpen` re-requests only if no callback
-arrived within `REVEAL_TIMEOUT` (3 days).
+for the same reason (the sell gate values the pool). `retryOpen` asks Entropy for new randomness
+only if the request was NEVER revealed (`CALLBACK_NOT_STARTED`) after `REVEAL_TIMEOUT` (30 days); a
+failed callback is recovered with Pyth's `revealWithCallback`, which reuses the same number, so a
+holder can never re-roll a draw they have seen. The keeper completes stuck reveals that way.
 
 Mint terms are snapshotted per box (face, odds version, EV: H-05). A SKU cannot be retired while
 boxes are out (H-03). Payment and opens revert until the vault and converter are wired (H-04).
