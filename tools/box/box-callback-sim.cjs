@@ -100,10 +100,11 @@ async function simulate(calls) {
   if (nvdaIdx < 0) throw new Error('NVDA is not enabled in the registry');
   const n = BigInt(stocks.length);
 
-  // Rolls 7500..8999 are all Uncommon ($10). Step through them until `roll % n` lands where we
-  // want the stock walk to start (n <= 16, so this is reached within 16 steps).
+  // Rolls 7500..8999 are all Uncommon ($10). Step through them until the vault's start index,
+  // keccak(entropy) % n (audit round 2, BOX-I4), lands where we want the stock walk to start.
+  const startOf = (r) => BigInt(keccak256(encodeAbiParameters([{ type: 'bytes32' }], [pad(toHex(r), { size: 32 })]))) % n;
   const rollStartingAt = (idx) => {
-    for (let r = 7500n; r < 9000n; r++) if (r % n === BigInt(idx)) return r;
+    for (let r = 7500n; r < 9000n; r++) if (startOf(r) === BigInt(idx)) return r;
     throw new Error('no Uncommon roll starts the walk at ' + idx);
   };
   const best = rollStartingAt(nvdaIdx);
