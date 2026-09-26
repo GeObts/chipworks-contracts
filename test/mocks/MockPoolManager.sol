@@ -25,6 +25,13 @@ contract MockPoolManager {
     address internal _outToken;
     uint256 internal _owedOut;
 
+    /// @notice Exact-output partial fill (audit round 2, mutant M16): deliver this much less.
+    uint256 public shortOut;
+
+    function setShortOut(uint256 v) external {
+        shortOut = v;
+    }
+
     function setRate(address tokenIn, address tokenOut, uint256 num, uint256 den) external {
         rateNum[tokenIn][tokenOut] = num;
         rateDen[tokenIn][tokenOut] = den;
@@ -55,6 +62,7 @@ contract MockPoolManager {
             // Exact output: charge the input that buys it, rounded up, as a pool would.
             amountOut = uint256(p.amountSpecified);
             amountIn = (amountOut * den + num - 1) / num;
+            amountOut -= shortOut;
         }
         _inToken = tokenIn;
         _owedIn = amountIn;

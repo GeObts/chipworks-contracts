@@ -68,6 +68,17 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     uint32 public constant MAX_MIN_USDC_BPS = 9_000;
     /// @notice Floor on {maxFeedAge}. B20 feeds hold the last close over a weekend.
     uint64 public constant MIN_FEED_AGE = 1 hours;
+    /// @notice Ceiling on {maxFeedAge} (audit round 2, BOX-L3). This is the ONLY staleness gate: the
+    ///         registry does not judge age. The longest US market closure (a holiday weekend) is under
+    ///         4 days, and the default is 5, so 7 leaves headroom. Past 7 days a frozen feed could not
+    ///         keep counting in the pool's value, cap, gate or reserve.
+    uint64 public constant MAX_FEED_AGE = 7 days;
+    /// @notice Stock transfers the prize walk tries before going to USDC (audit round 2, BOX-L6).
+    ///         A transfer that reverts (a frozen stock, or an opener the stock refuses) is the
+    ///         walk's only expensive step. With 16 stocks all refusing, the callback came to
+    ///         ~0.8-1.0M gas, against the 900k floor. Bounding it keeps the worst case near the
+    ///         happy path. A skip for "unpriced", "thin" or "empty" costs no call and is not counted.
+    uint256 public constant MAX_FAILED_TRANSFERS = 2;
 
     /// @notice $CHIP on Base. Refused as stock even if a constructor was passed another CHIP.
     address public constant DEFAULT_CHIP = 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3;
@@ -230,7 +241,11 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         external
         onlyOwner
     {
-        if (slippageBps > MAX_RESTOCK_SLIPPAGE_BPS || minUsdcBps_ > MAX_MIN_USDC_BPS) revert BadConfig();
+        // minUsdcBps >= maxPrizeBps (BOX-L4): the USDC kept back always covers the largest prize
+        // the cap allows, so the USDC fallback can pay any prize the gate sold.
+        if (
+            slippageBps > MAX_RESTOCK_SLIPPAGE_BPS || minUsdcBps_ > MAX_MIN_USDC_BPS || minUsdcBps_ < maxPrizeBps
+        ) revert BadConfig();
         maxRestockPerCall = perCall;
         maxRestockPerDay = perDay;
         restockSlippageBps = slippageBps;
@@ -239,7 +254,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     }
 
     function setMaxFeedAge(uint64 v) external onlyOwner {
-        if (v < MIN_FEED_AGE) revert BadConfig();
+        if (v < MIN_FEED_AGE || v > MAX_FEED_AGE) revert BadConfig();
         maxFeedAge = v;
         emit MaxFeedAgeSet(v);
     }
@@ -297,7 +312,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     {
         uint256 n = _stockList.length;
         if (n == 0) return false;
-        uint256 start = uint256(entropy) % n;
+        // Hashed, not `entropy % n` (BOX-I4): Box draws the tier from `entropy % 10_000`, so
+        // wherever n divides 10,000 the first stock tried would be a function of the tier.
+        uint256 start = uint256(keccak256(abi.encode(entropy))) % n;
+        uint256 failed;
         for (uint256 i; i < n; ++i) {
             uint256 k = _wrap(start + i, n);
             address token = _stockList[k];
@@ -305,6 +323,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
             if (!ok) continue;
             if (!_tryTransfer(token, to, amount)) {
                 emit StockSkipped(token, bytes32("transfer"));
+                if (++failed == MAX_FAILED_TRANSFERS) return false;
                 continue;
             }
             p.paid = true;
@@ -541,7 +560,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /* ------------------------------------------------------------------ */
 
     function queueMaxPrizeBps(uint32 bps) external onlyOwner {
-        if (bps == 0 || bps > MAX_PRIZE_BPS_CEILING) revert BadConfig();
+        if (bps == 0 || bps > MAX_PRIZE_BPS_CEILING || bps > minUsdcBps) revert BadConfig();
         uint64 executableAt = uint64(block.timestamp) + CONFIG_TIMELOCK;
         _pendingMaxPrizeBps = PendingBps({queued: true, executableAt: executableAt, bps: bps});
         emit MaxPrizeBpsQueued(bps, executableAt);
@@ -551,6 +570,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         PendingBps memory p = _pendingMaxPrizeBps;
         if (!p.queued) revert NothingQueued();
         _requireInWindow(p.executableAt);
+        if (p.bps > minUsdcBps) revert BadConfig(); // minUsdcBps may have moved while queued
         emit MaxPrizeBpsExecuted(maxPrizeBps, p.bps);
         maxPrizeBps = p.bps;
         delete _pendingMaxPrizeBps;

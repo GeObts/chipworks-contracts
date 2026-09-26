@@ -36,6 +36,14 @@ contract MockSwapRouter {
         rateDen[tokenIn][tokenOut] = den;
     }
 
+    /// @notice A lying router (audit round 2, mutants M4/M8): ignores the minimum and delivers
+    ///         half on exact input, and one unit short on exact output, without reverting.
+    bool public lie;
+
+    function setLie(bool v) external {
+        lie = v;
+    }
+
     function setFailNext(bool v) external {
         failNext = v;
     }
@@ -74,7 +82,7 @@ contract MockSwapRouter {
         amountIn = (p.amountOut * den + num - 1) / num;
         if (amountIn > p.amountInMaximum) revert TooMuchRequested();
         IERC20(p.tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        IERC20(p.tokenOut).safeTransfer(p.recipient, p.amountOut);
+        IERC20(p.tokenOut).safeTransfer(p.recipient, lie ? p.amountOut - 1 : p.amountOut);
     }
 
     function _swap(address tokenIn, address tokenOut, address to, uint256 amountIn, uint256 minOut)
@@ -90,7 +98,8 @@ contract MockSwapRouter {
         uint256 den = rateDen[tokenIn][tokenOut];
         require(den != 0, "no rate");
         out = (amountIn * rateNum[tokenIn][tokenOut]) / den;
-        if (out < minOut) revert TooLittleReceived();
+        if (lie) out /= 2;
+        else if (out < minOut) revert TooLittleReceived();
         IERC20(tokenOut).safeTransfer(to, out);
     }
 }

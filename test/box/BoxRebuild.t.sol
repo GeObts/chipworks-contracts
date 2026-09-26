@@ -261,7 +261,7 @@ contract BoxRebuildTest is BoxTestBase {
 
     function test_restock_buysIntoTheVault_withinBounds() public {
         vm.prank(multisig);
-        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_000);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_500);
         uint256 n0 = nvda.balanceOf(address(vault));
         uint256 u0 = usdc.balanceOf(address(vault));
 
@@ -276,7 +276,7 @@ contract BoxRebuildTest is BoxTestBase {
 
     function test_restock_refusals() public {
         vm.prank(multisig);
-        vault.setRestockParams(1_000e6, 1_500e6, 200, 2_000);
+        vault.setRestockParams(1_000e6, 1_500e6, 200, 2_500);
 
         vm.expectRevert(abi.encodeWithSelector(PrizeVault.NotKeeper.selector, alice));
         vm.prank(alice);
@@ -336,18 +336,33 @@ contract BoxRebuildTest is BoxTestBase {
         assertEq(usdc.balanceOf(bob), 1_000e6, "caller gets nothing");
     }
 
+    /// @dev The USDC share can no longer be set below maxPrizeBps (BOX-L4), so each floor is
+    ///      isolated by the pool's shape instead: stock off the books makes the share floor trivial.
     function test_sweep_respectsLiabilityAndJackpotReserve() public {
-        vm.prank(multisig);
-        vault.setRestockParams(5_000e6, 20_000e6, 200, 0); // isolate the other two floors
-        // Liability floor: 20 x $25 boxes = $455 EV -> $500.50 of USDC stays.
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false); // inventory = USDC: the share floor is moot
+        boxes.setSkuPaused(SKU10, true);
+        boxes.setSkuPaused(SKU25, true); // unsold, so the reserve is the $1 jackpot's alone
+        vm.stopPrank();
+
+        // Liability floor: 400 x $1 boxes = $364 EV -> $400.40 of USDC stays.
+        for (uint256 i; i < 400; ++i) {
+            vm.prank(alice);
+            boxes.buyWithUsdc(SKU1, alice);
+        }
+        uint256 usdcNow = usdc.balanceOf(address(vault));
+        assertLt(vault.jackpotReserveUsd(), 400_400_000, "the reserve is below the liability floor here");
+        assertEq(vault.sweepableUsdc(), usdcNow - 400_400_000, "liability floor binds");
+    }
+
+    function test_sweep_reserveFloorBinds_whenStockIsGone() public {
+        // 20 x $25 boxes: liability floor $500.50, under the $3,600 reserve for the $900 jackpot.
         for (uint256 i; i < 20; ++i) {
             vm.prank(alice);
             boxes.buyWithUsdc(SKU25, alice);
         }
         uint256 usdcNow = usdc.balanceOf(address(vault));
-        assertEq(vault.sweepableUsdc(), usdcNow - 500_500_000, "liability floor binds");
-
-        // Reserve floor: the $900 jackpot needs a $3,600 pool. Leave only $4,000 of stock...
         vm.prank(multisig);
         vault.setStockEnabled(address(tsla), false); // inventory: USDC + $10k NVDA
         registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - 6 days); // + $0 NVDA
@@ -355,6 +370,18 @@ contract BoxRebuildTest is BoxTestBase {
         assertEq(inv, usdcNow);
         assertEq(vault.jackpotReserveUsd(), 3_600e6);
         assertEq(vault.sweepableUsdc(), usdcNow - 3_600e6, "reserve floor binds when stock is gone");
+    }
+
+    /// @dev BOX-L4: with stock on the books the kept-USDC share binds, and it is never below the
+    ///      prize cap's share, so USDC alone covers the largest prize the gate can sell.
+    function test_sweep_usdcShareFloor_coversTheLargestPrize() public {
+        vm.prank(multisig);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_500);
+        // $10k USDC + $20k stock. Keep x: (10k - x) >= 25% of (30k - x) -> x <= 3,333.33.
+        uint256 sweepable = vault.sweepableUsdc();
+        assertApproxEqAbs(sweepable, 3_333_333_333, 1);
+        uint256 usdcAfter = usdc.balanceOf(address(vault)) - sweepable;
+        assertGe(usdcAfter, vault.prizeCapUsd() / 1e12, "USDC left covers the cap");
     }
 
     function test_sweep_pausingASkuDoesNotReleaseItsJackpotReserve() public {

@@ -165,13 +165,18 @@ contract BoxTestBase is Test {
         entropy.fulfill(seq, rand);
     }
 
-    /// @dev A random number that lands exactly on the first roll of `tierId`.
+    /// @dev A random number that lands exactly on the first roll of `tierId` AND whose prize walk
+    ///      starts on stock #0 (NVDA). The vault picks the first stock from keccak(entropy) % n
+    ///      (audit round 2, BOX-I4), so step by 10,000, which keeps the tier, until the hash picks #0.
     function _rollForTier(uint8 tierId) internal view returns (bytes32) {
         IBox.PrizeTier[] memory tiers = boxes.oddsTable();
         uint256 acc;
         for (uint256 i; i < tierId; ++i) {
             acc += tiers[i].weight;
         }
+        uint256 n = vault.stockCount();
+        if (n == 0) return bytes32(acc);
+        while (uint256(keccak256(abi.encode(bytes32(acc)))) % n != 0) acc += 10_000;
         return bytes32(acc);
     }
 
