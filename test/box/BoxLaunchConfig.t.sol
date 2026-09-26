@@ -105,4 +105,32 @@ contract BoxLaunchConfigTest is BoxTestBase {
         assertEq(boxes.boxInfo(id100).faceUsd, 100e6);
         assertEq(boxes.maxLivePrizeUsd(), 3_600e6, "the $100 jackpot is now the live reserve");
     }
+
+    /// @dev Mutation gap (round 5): unpausing a big size must raise the sweep reserve AT ONCE, before
+    ///      any box of that size sells. The unlock test above only saw it after a sale (maxSoldPrizeUsd).
+    function test_unpausingABigSizeRaisesTheReserveBeforeAnySale() public {
+        assertEq(boxes.maxLivePrizeUsd(), 900e6, "launch: the $25 jackpot, big sizes paused");
+        assertEq(vault.jackpotReserveUsd(), 3_600e6);
+
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU100, false);
+        assertEq(boxes.sealedSupply(SKU100), 0, "nothing sold");
+        assertEq(boxes.maxLivePrizeUsd(), 3_600e6, "on sale: the $100 jackpot is reserved");
+        assertEq(vault.jackpotReserveUsd(), 14_400e6, "so the sweep keeps a $14,400 pool");
+
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU100, true);
+        assertEq(boxes.maxLivePrizeUsd(), 900e6, "paused again, never sold: released");
+    }
+
+    /// @dev Mutation gap (round 5): only slots 0..MAX_SKUS-1 exist. A ninth slot would be sellable
+    ///      but outside the reserve loop, so it must be refused.
+    function test_onlyEightSizeSlots() public {
+        uint8 max = boxes.MAX_SKUS();
+        vm.startPrank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, max));
+        boxes.queueSku(max, true, 5e6, true);
+        boxes.queueSku(max - 1, true, 5e6, true); // the last slot is fine
+        vm.stopPrank();
+    }
 }
