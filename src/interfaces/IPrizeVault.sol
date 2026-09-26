@@ -29,5 +29,8 @@ interface IPrizeVault {
     function prizeCapUsd() external view returns (uint256);
     function stockCount() external view returns (uint256);
     function stockAt(uint256 index) external view returns (address);
-    function settle(address to, uint256 prizeUsd, bytes32 entropy) external returns (Payout memory);
+    /// @param gasBounded true inside the Pyth callback (a fixed gas budget): the stock walk stops
+    ///        after MAX_FAILED_TRANSFERS refused transfers. false from {IBox-claimOwed}, an ordinary
+    ///        transaction: every stock is tried.
+    function settle(address to, uint256 prizeUsd, bytes32 entropy, bool gasBounded) external returns (Payout memory);
 }

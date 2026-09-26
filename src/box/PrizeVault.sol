@@ -241,8 +241,9 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         external
         onlyOwner
     {
-        // minUsdcBps >= maxPrizeBps (BOX-L4): the USDC kept back always covers the largest prize
-        // the cap allows, so the USDC fallback can pay any prize the gate sold.
+        // minUsdcBps >= maxPrizeBps (BOX-L4): right after a restock or a sweep, the USDC kept back
+        // covers the largest prize the cap allows. USDC payouts and the wind-down withdraw can take
+        // it lower in between (round 3, BOX-R3-I1); a prize no asset covers then goes OWED, never short.
         if (
             slippageBps > MAX_RESTOCK_SLIPPAGE_BPS || minUsdcBps_ > MAX_MIN_USDC_BPS || minUsdcBps_ < maxPrizeBps
         ) revert BadConfig();
@@ -279,7 +280,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /// @dev Called from inside the Pyth callback via Box, so it must not revert on a bad
     ///      stock or a thin pool — it skips. It returns `paid == false` (nothing moved)
     ///      rather than ever paying part of a prize.
-    function settle(address to, uint256 prizeUsd, bytes32 entropy)
+    function settle(address to, uint256 prizeUsd, bytes32 entropy, bool gasBounded)
         external
         override
         nonReentrant
@@ -299,22 +300,28 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
             return p;
         }
 
-        if (_payInStock(to, prizeUsd, entropy, marks, p) || _payInUsdc(to, prizeUsd, p)) {
+        if (_payInStock(to, marks, p, _startIndex(entropy), gasBounded) || _payInUsdc(to, prizeUsd, p)) {
             _emitPaid(to, p);
             return p;
         }
         emit PrizeNotPaid(to, prizeUsd, cap, false);
     }
 
-    function _payInStock(address to, uint256 prizeUsd, bytes32 entropy, Mark[] memory marks, Payout memory p)
+    /// @dev Hashed, not `entropy % n` (BOX-I4): Box draws the tier from `entropy % 10_000`, so
+    ///      wherever n divides 10,000 the first stock tried would be a function of the tier.
+    function _startIndex(bytes32 entropy) internal view returns (uint256) {
+        uint256 n = _stockList.length;
+        return n == 0 ? 0 : uint256(keccak256(abi.encode(entropy))) % n;
+    }
+
+    /// @dev The prize is `p.requestedUsd`.
+    function _payInStock(address to, Mark[] memory marks, Payout memory p, uint256 start, bool gasBounded)
         internal
         returns (bool)
     {
         uint256 n = _stockList.length;
         if (n == 0) return false;
-        // Hashed, not `entropy % n` (BOX-I4): Box draws the tier from `entropy % 10_000`, so
-        // wherever n divides 10,000 the first stock tried would be a function of the tier.
-        uint256 start = uint256(keccak256(abi.encode(entropy))) % n;
+        uint256 prizeUsd = p.requestedUsd;
         uint256 failed;
         for (uint256 i; i < n; ++i) {
             uint256 k = _wrap(start + i, n);
@@ -323,7 +330,9 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
             if (!ok) continue;
             if (!_tryTransfer(token, to, amount)) {
                 emit StockSkipped(token, bytes32("transfer"));
-                if (++failed == MAX_FAILED_TRANSFERS) return false;
+                // Only under the callback's gas budget (round 3, BOX-R3-L1): {claimOwed} walks on,
+                // so a box sent OWED by two refusals is paid by the next stock that accepts.
+                if (++failed == MAX_FAILED_TRANSFERS && gasBounded) return false;
                 continue;
             }
             p.paid = true;

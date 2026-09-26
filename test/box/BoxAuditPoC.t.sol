@@ -664,7 +664,7 @@ contract SettleReverter {
         return type(uint128).max;
     }
 
-    function settle(address, uint256, bytes32) external pure returns (IPrizeVault.Payout memory) {
+    function settle(address, uint256, bytes32, bool) external pure returns (IPrizeVault.Payout memory) {
         revert("settle down");
     }
 }

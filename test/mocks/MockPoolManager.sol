@@ -52,6 +52,12 @@ contract MockPoolManager {
         uint256 den = rateDen[tokenIn][tokenOut];
         uint256 num = rateNum[tokenIn][tokenOut];
         require(den != 0, "no rate");
+        // v4 checks the limit's DIRECTION against the current price (audit round 3, mutant X1).
+        // The mock prices at sqrtPrice 1.0 (2^96): a zeroForOne swap moves the price DOWN, so its
+        // limit must be below; the other way, above. The real revert is PriceLimitAlreadyExceeded.
+        require(
+            p.zeroForOne ? p.sqrtPriceLimitX96 < 2 ** 96 : p.sqrtPriceLimitX96 > 2 ** 96, "PriceLimitAlreadyExceeded"
+        );
         uint256 amountIn;
         uint256 amountOut;
         if (p.amountSpecified < 0) {

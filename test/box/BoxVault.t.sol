@@ -268,7 +268,7 @@ contract BoxVaultTest is BoxTestBase {
         uint256 cap = vault.prizeCapUsd();
         uint256 usdc0 = usdc.balanceOf(address(vault));
         vm.prank(address(boxes));
-        IPrizeVault.Payout memory p = vault.settle(alice, cap + 1, bytes32(0));
+        IPrizeVault.Payout memory p = vault.settle(alice, cap + 1, bytes32(0), true);
         assertFalse(p.paid);
         assertTrue(p.capped);
         assertEq(p.paidUsd, 0);
@@ -276,7 +276,7 @@ contract BoxVaultTest is BoxTestBase {
         assertEq(nvda.balanceOf(alice) + tsla.balanceOf(alice), 0);
 
         vm.prank(address(boxes));
-        p = vault.settle(alice, cap, bytes32(0));
+        p = vault.settle(alice, cap, bytes32(0), true);
         assertTrue(p.paid);
         assertEq(p.paidUsd, cap);
     }
@@ -457,7 +457,7 @@ contract BoxVaultTest is BoxTestBase {
 
     function test_onlyBoxCanSettle() public {
         vm.expectRevert(PrizeVault.OnlyBox.selector);
-        vault.settle(alice, 1_000_000, bytes32(uint256(1)));
+        vault.settle(alice, 1_000_000, bytes32(uint256(1)), true);
     }
 
     function test_addStockReadsRegistry() public {

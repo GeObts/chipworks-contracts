@@ -420,7 +420,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         BoxView memory b = _info[tokenId];
         if (b.state != STATE_OWED) revert NotOwed(tokenId);
         IPrizeVault.Payout memory payout =
-            IPrizeVault(vault).settle(b.opener, b.owedUsd, keccak256(abi.encode(tokenId, b.sequence)));
+            IPrizeVault(vault).settle(b.opener, b.owedUsd, keccak256(abi.encode(tokenId, b.sequence)), false);
         if (!payout.paid) revert StillUnpayable(tokenId, b.owedUsd);
         outstandingLiabilityUsd -= b.owedUsd;
         _retire(tokenId, b.skuId);
@@ -803,7 +803,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = _drawAt(randomNumber, b.faceUsd, b.oddsVersion);
 
         IPrizeVault.Payout memory payout;
-        try IPrizeVault(vault).settle(b.opener, prizeUsd, randomNumber) returns (
+        try IPrizeVault(vault).settle(b.opener, prizeUsd, randomNumber, true) returns (
             IPrizeVault.Payout memory paid
         ) {
             payout = paid;
