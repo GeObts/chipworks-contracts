@@ -3,18 +3,19 @@ source commit 2943917 (chipworks-contracts, branch box-rebuild). Round 2 and rou
 Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
 marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
 
-  1. TRIAGE-ROUND2.md  (85 lines, sha256 da22ce57e5dd264b77327215aae6472ddae035a77b66550572f94982be3005b8)
+  1. TRIAGE-ROUND2.md  (86 lines, sha256 106e96932088946cb42af36a711b2551698743f304610205a1fc75c721fb0414)
   2. tests/BoxAuditRound2.t.sol  (244 lines, sha256 d0e732914c0879399b55767a07bc03507e09d06354b6154ac3d0c41997be1541)
   3. TRIAGE-ROUND1.md  (41 lines, sha256 ca69af5f20c1418e11381ab6dbb767b989159e6b71e908e4593f9f4d639e66ca)
   4. tests/BoxAuditRound1.t.sol  (118 lines, sha256 5826dd4516e682c77befb65eca88e65c3e87ad57e292a8de2f3639abcb26d58b)
   5. tests/BoxRebuild.t.sol  (530 lines, sha256 90cb9349d40ac071ec0ced6205b42e897065138ab9fc7194472f6b80c22758b2)
 
-===== BEGIN FILE TRIAGE-ROUND2.md | 85 lines | sha256 da22ce57e5dd264b77327215aae6472ddae035a77b66550572f94982be3005b8 =====
+===== BEGIN FILE TRIAGE-ROUND2.md | 86 lines | sha256 106e96932088946cb42af36a711b2551698743f304610205a1fc75c721fb0414 =====
 # Box audit round 2: triage
 
 Reviews:
 - **Grok:** `AUDIT_fdb77c4.md`, a full review of source `fdb77c4`.
-- **Bankr:** reviewed only PASTE-6 (the reference file). Pastes 1–5 must be re-sent; see the bottom of this file.
+- **Bankr:** reviewed PASTE-6 first, then PASTE-1 … PASTE-5 when they were re-sent (part 2).
+- **Grok, combined:** `ROUND2_COMBINED_fdb77c4.md` (part 2).
 
 Every finding was reproduced before anything changed:
 - Box findings were tested in `test/box/BoxAuditRound2.t.sol`.

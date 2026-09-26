@@ -2,7 +2,8 @@
 
 Reviews:
 - **Grok:** `AUDIT_fdb77c4.md`, a full review of source `fdb77c4`.
-- **Bankr:** reviewed only PASTE-6 (the reference file). Pastes 1–5 must be re-sent; see the bottom of this file.
+- **Bankr:** reviewed PASTE-6 first, then PASTE-1 … PASTE-5 when they were re-sent (part 2).
+- **Grok, combined:** `ROUND2_COMBINED_fdb77c4.md` (part 2).
 
 Every finding was reproduced before anything changed:
 - Box findings were tested in `test/box/BoxAuditRound2.t.sol`.

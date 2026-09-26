@@ -16,7 +16,7 @@ SHA-256 over the exact file bytes (UTF-8, LF, trailing newline included). Line c
 | contracts/interfaces/ISwapRouters.sol | 34 | a64912c36e4c12fa01ccd7c9d3f26c5fe08e787a264fa72edd9b9732ba535aeb | `}` |
 | contracts/interfaces/IUniswapV4.sol | 85 | 06dd33a40155dc202f20ad4e00fd8a9f75be79a60a64f0408a8049e674f110fd | `}` |
 | contracts/interfaces/IAggregatorV3.sol | 15 | d5c01ffff91b207babead0500c3406b0aed14faa56224182636c07388ad2f15d | `}` |
-| TRIAGE-ROUND2.md | 85 | da22ce57e5dd264b77327215aae6472ddae035a77b66550572f94982be3005b8 | `- Live-node callback sim (real B20s): 466,863 / 464,734 at 10 stocks, 566,259 / ` |
+| TRIAGE-ROUND2.md | 86 | 106e96932088946cb42af36a711b2551698743f304610205a1fc75c721fb0414 | `- Live-node callback sim (real B20s): 466,863 / 464,734 at 10 stocks, 566,259 / ` |
 | tests/BoxAuditRound2.t.sol | 244 | d0e732914c0879399b55767a07bc03507e09d06354b6154ac3d0c41997be1541 | `}` |
 | TRIAGE-ROUND1.md | 41 | ca69af5f20c1418e11381ab6dbb767b989159e6b71e908e4593f9f4d639e66ca | `  what the fix targets.` |
 | tests/BoxAuditRound1.t.sol | 118 | 5826dd4516e682c77befb65eca88e65c3e87ad57e292a8de2f3639abcb26d58b | `}` |
