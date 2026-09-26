@@ -9,7 +9,7 @@ import {BlacklistToken} from "../mocks/HostileTokens.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {Vm} from "forge-std/Test.sol";
 
-/// @notice Audit round 3 (Grok on 81c7e2e). See audit/box-2026-09-24/TRIAGE-ROUND2.md, part 3.
+/// @notice Audit round 3 (Grok on 81c7e2e). Triage: TRIAGE-ROUND3.md in the round-4 audit pack (audit/box-2026-09-26-r4).
 contract BoxAuditRound3Test is BoxTestBase {
     /* ---------------- BOX-R3-L1: two refusals, then OWED, then claimOwed pays ---------------- */
 
@@ -79,6 +79,7 @@ contract BoxAuditRound3Test is BoxTestBase {
     function test_L6_coldCallbackUnderTheGasCap_worstCases() public {
         (uint256 gasG, uint8 stateG) = _coldCase(1, 14);
         assertEq(stateG, 0, "G: paid (box retired)");
+        assertEq(MockERC20(lastPayer).balanceOf(alice), 1e6, "G: paid by the last stock, the only one that could");
         (uint256 gasC, uint8 stateC) = _coldCase(16, 0);
         assertEq(stateC, 3, "all refuse, no USDC: OWED");
         emit log_named_uint("G: 1 refuse + 14 thin + pay, cold, mock gas", gasG);
@@ -113,6 +114,8 @@ contract BoxAuditRound3Test is BoxTestBase {
         revert("no box starts there");
     }
 
+    address internal lastPayer;
+
     function _coldCase(uint256 refusing, uint256 thin) internal returns (uint256 used, uint8 state) {
         (Box b, PrizeVault v,) = _newWiredPair(0);
         address[] memory touched = new address[](16);
@@ -128,6 +131,7 @@ contract BoxAuditRound3Test is BoxTestBase {
             MockERC20 last = new MockERC20("Pays", "PAY", 8);
             _list(v, address(last));
             last.mint(address(v), 10e8);
+            lastPayer = address(last);
             touched[t++] = address(last);
         }
         // Enough stock value that the $1 prize is under the cap even with no USDC.
@@ -146,7 +150,8 @@ contract BoxAuditRound3Test is BoxTestBase {
         vm.cool(address(registry));
         vm.cool(alice);
 
-        uint32 cap = b.callbackGasLimit();
+        // At the FLOOR the owner can set, not the 1M default (Grok R4-I4).
+        uint32 cap = b.MIN_CALLBACK_GAS();
         vm.prank(address(entropy));
         uint256 g0 = gasleft();
         (bool ok,) = address(b).call{gas: cap}(abi.encodeCall(Box._entropyCallback, (seq, address(entropy), rand)));

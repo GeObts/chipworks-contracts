@@ -131,7 +131,7 @@ async function simulate(calls) {
 
   // Tier 2 ($10 on the $10 SKU) roll whose hashed walk starts on the first funded stock.
   const startOf = (r) => BigInt(keccak256(encodeAbiParameters([{ type: 'bytes32' }], [pad(toHex(r), { size: 32 })]))) % n;
-  let roll = 7500n;
+  let roll = 8500n; // tier 2 (1.00x) of the launch table
   while (startOf(roll) !== BigInt(funded[0])) roll += 10_000n;
 
   const tail = [

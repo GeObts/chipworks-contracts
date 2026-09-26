@@ -16,7 +16,7 @@
 //
 //   node tools/box/box-callback-sim.cjs
 const { createRequire } = require('module');
-const req = createRequire('C:/Users/1136962520/chipworks/package.json');
+const req = createRequire(process.env.VIEM_FROM || 'C:/Users/1136962520/chipworks/package.json'); // any package.json with viem
 const {
   encodeFunctionData, decodeFunctionResult, decodeErrorResult, encodeDeployData, parseAbi,
   getContractAddress, keccak256, encodeAbiParameters, pad, toHex,
@@ -100,12 +100,12 @@ async function simulate(calls) {
   if (nvdaIdx < 0) throw new Error('NVDA is not enabled in the registry');
   const n = BigInt(stocks.length);
 
-  // Rolls 7500..8999 are all Uncommon ($10). Step through them until the vault's start index,
+  // Rolls 8500..9449 are all tier 2 (1.00x, $10 on the $10 box). Step through them until the vault's start index,
   // keccak(entropy) % n (audit round 2, BOX-I4), lands where we want the stock walk to start.
   const startOf = (r) => BigInt(keccak256(encodeAbiParameters([{ type: 'bytes32' }], [pad(toHex(r), { size: 32 })]))) % n;
   const rollStartingAt = (idx) => {
-    for (let r = 7500n; r < 9000n; r++) if (startOf(r) === BigInt(idx)) return r;
-    throw new Error('no Uncommon roll starts the walk at ' + idx);
+    for (let r = 8500n; r < 9450n; r++) if (startOf(r) === BigInt(idx)) return r;
+    throw new Error('no tier-2 roll starts the walk at ' + idx);
   };
   const best = rollStartingAt(nvdaIdx);
   const worst = rollStartingAt((nvdaIdx + 1) % stocks.length); // walks every other stock before NVDA
