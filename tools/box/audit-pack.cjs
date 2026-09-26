@@ -13,8 +13,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '../..');
-// The package folder: BOX_AUDIT_DIR, default round 2. Round 1 was audit/box-2026-09-23.
-const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-24');
+// The package folder: BOX_AUDIT_DIR, default round 3. Round 1 was audit/box-2026-09-23, round 2 audit/box-2026-09-24.
+const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-26');
 const commit = process.argv[2];
 if (!commit) throw new Error('usage: node tools/box/audit-pack.cjs <commit> [entropy-src.json]');
 
@@ -43,6 +43,8 @@ const P2 = [
   ...['MockEntropyV2.sol', 'MockPoolManager.sol', 'MockStockRegistry.sol', 'MockSwapRouter.sol'].map((n) => [`test/mocks/${n}`, `tests/mocks/${n}`]),
   ['tools/box/box-callback-sim.cjs', 'gas/box-callback-sim.cjs'],
   ['tools/box/box-callback-sim.out.txt', 'gas/box-callback-sim.out.txt'],
+  [null, 'TRIAGE-ROUND2.md'],
+  ['test/box/BoxAuditRound2.t.sol', 'tests/BoxAuditRound2.t.sol'],
 ];
 const P3 = [['src/lottery/ChipLottery.sol', 'reference/ChipLottery.sol']];
 
@@ -94,7 +96,7 @@ const paste = (name, title, list) => {
 // Kept under ~75k characters each: a paste cut off in transit is the failure section 0 exists for.
 paste('PASTE-1-brief-and-box.txt', 'Priority 1: the brief and Box.sol.', P1.slice(0, 2));
 paste('PASTE-2-vault-converter-interfaces.txt', 'Priority 1: PrizeVault, ChipConverter and every interface.', P1.slice(2));
-paste('PASTE-3-triage-and-rebuild-tests.txt', 'Round 1 triage, its verification tests, and the rebuild tests.', [P2[6], P2[5], P2[0]]);
+paste('PASTE-3-triage-and-rebuild-tests.txt', 'Round 2 and round 1 triage, their verification tests, and the rebuild tests.', [P2[14], P2[15], P2[6], P2[5], P2[0]]);
 paste('PASTE-4-poc-fork-and-gas.txt', 'The audit PoCs, the Base fork test, and the live-node gas simulation with its output.',
   [P2[1], P2[7], P2[12], P2[13]]);
 paste('PASTE-5-remaining-tests-and-mocks.txt', 'The remaining unit tests, the shared fixture and the mocks.',

@@ -1,0 +1,26 @@
+# node tools/box/box-callback-sim.cjs  (default: the ENABLED registry stocks)
+block 51824593; 10 enabled registry stocks listed; NVDA is #0
+restock $1,000 -> NVDA: ok, gas 669551
+callback best  (NVDA first): ok  gas 466863  NVDA won 4436351 (8dp)
+callback worst (skip all)  : ok  gas 464734  NVDA won 4436351 (8dp)
+breakdown (execution gas, 21k intrinsic removed): B20 balanceOf 2644, registry.priceUsd 22569, vault.inventoryUsd 351853, vault.prizeCapUsd 352252
+buyWithUsdc gas 664691 (includes the sell-gate read), open gas 200994
+callbackGasLimit 1000000; liability after 0; vault inventory $5001
+
+OK: real B20 transfers inside the callback fit the gas limit on both paths.
+
+# STOCKS=all node tools/box/box-callback-sim.cjs  (all REGISTERED registry stocks)
+block 51824594; 13 registered registry stocks listed; NVDA is #0
+restock $1,000 -> NVDA: ok, gas 768951
+callback best  (NVDA first): ok  gas 566259  NVDA won 4436351 (8dp)
+callback worst (skip all)  : ok  gas 573892  NVDA won 4436351 (8dp)
+breakdown (execution gas, 21k intrinsic removed): B20 balanceOf 2644, registry.priceUsd 22569, vault.inventoryUsd 451246, vault.prizeCapUsd 451645
+buyWithUsdc gas 764084 (includes the sell-gate read), open gas 200994
+callbackGasLimit 1000000; liability after 0; vault inventory $5001
+
+OK: real B20 transfers inside the callback fit the gas limit on both paths.
+
+# Audit round 2 (2026-09-26), b20revert: a REFUSED real B20 transfer, eth_simulateV1, all 13 registry B20s
+max revert execution gas: 11086 (mock BlacklistToken: ~9.8k). PrizeVault now stops the payout walk
+after MAX_FAILED_TRANSFERS = 2 refused transfers (BOX-L6), so the refusing-opener worst case is the
+walk above plus at most two ~11k reverts (+ self-call overhead) and one USDC transfer.

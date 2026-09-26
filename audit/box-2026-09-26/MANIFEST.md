@@ -1,0 +1,38 @@
+# Manifest
+
+SHA-256 over the exact file bytes (UTF-8, LF, trailing newline included). Line count = number of newline-terminated lines.
+
+| file | lines | sha256 | last non-empty line |
+|---|---|---|---|
+| AUDIT_BRIEF.md | 268 | a8987113cdccb225a9ec24e3cdbba8ec77096bdda8ed94bbd7e0178270489f4d | `(needs `BASE_RPC_URL`, sends nothing).` |
+| contracts/Box.sol | 935 | 7db414e53642b1c7a454b4b391cc57a3dfe7d08b40653d458059ffe8a3be343e | `}` |
+| contracts/PrizeVault.sol | 729 | 09ba84bc5484f706d463bbd78c25d40e6cf21fdb8ae0a067179fac1570ad5b24 | `}` |
+| contracts/ChipConverter.sol | 242 | 38b803aed62190f7d986ff5764f251a0c5d6759c7e6489dc634befe49e34ccc1 | `}` |
+| contracts/interfaces/IBox.sol | 93 | 89b440f2bc0699a614b9f8f2b8970d790d0366f0ec8523552dd573bab2c2990e | `}` |
+| contracts/interfaces/IPrizeVault.sol | 33 | 99c6b766fabfd31294d80c26588894a4de8220a71f189a6fec5514f616a14638 | `}` |
+| contracts/interfaces/IChipConverter.sol | 19 | 35a6547d6e9908ba88a7418c8ad73ed5d33cc2881a509c8e646ed666ed2a743e | `}` |
+| contracts/interfaces/IEntropyV2.sol | 45 | 6a61847358772c396240380de1845e2a7c2b44994df1317b408e576eb25a3e23 | `}` |
+| contracts/interfaces/IStockRegistry.sol | 47 | 9c2d0a8c6b8b519d3c2378a3895f6aa7275351a86d20e41bab93f71907c4b804 | `}` |
+| contracts/interfaces/ISwapRouters.sol | 34 | a64912c36e4c12fa01ccd7c9d3f26c5fe08e787a264fa72edd9b9732ba535aeb | `}` |
+| contracts/interfaces/IUniswapV4.sol | 85 | 06dd33a40155dc202f20ad4e00fd8a9f75be79a60a64f0408a8049e674f110fd | `}` |
+| contracts/interfaces/IAggregatorV3.sol | 15 | d5c01ffff91b207babead0500c3406b0aed14faa56224182636c07388ad2f15d | `}` |
+| TRIAGE-ROUND2.md | 85 | da22ce57e5dd264b77327215aae6472ddae035a77b66550572f94982be3005b8 | `- Live-node callback sim (real B20s): 466,863 / 464,734 at 10 stocks, 566,259 / ` |
+| tests/BoxAuditRound2.t.sol | 244 | d0e732914c0879399b55767a07bc03507e09d06354b6154ac3d0c41997be1541 | `}` |
+| TRIAGE-ROUND1.md | 41 | ca69af5f20c1418e11381ab6dbb767b989159e6b71e908e4593f9f4d639e66ca | `  what the fix targets.` |
+| tests/BoxAuditRound1.t.sol | 118 | 5826dd4516e682c77befb65eca88e65c3e87ad57e292a8de2f3639abcb26d58b | `}` |
+| tests/BoxRebuild.t.sol | 530 | 90cb9349d40ac071ec0ced6205b42e897065138ab9fc7194472f6b80c22758b2 | `}` |
+| tests/BoxAuditPoC.t.sol | 691 | c7519140d92bfc5f83fe6a09bcca9f82c5649575402fa4528cdbe2f8f8446bea | `}` |
+| tests/BoxFork.t.sol | 271 | 27d5d61f0438d06ac06c0ec4a7c71cd172e62b261f2299a368dcd6997c583d1f | `}` |
+| gas/box-callback-sim.cjs | 182 | 991165336a08374646235867e44b7beea66d314bd9d73c4ed69287e5a4fc44a4 | `})().catch((e) => { console.error(e); process.exit(1); });` |
+| gas/box-callback-sim.out.txt | 26 | 1c2e9e393adc4f6ba151e2fe544489c009e753ee6f1c11b6647a30de69c0e7ad | `walk above plus at most two ~11k reverts (+ self-call overhead) and one USDC tra` |
+| tests/BoxVault.t.sol | 502 | e75fc4ac8b7f78fe3c1f122f8643a90d50cd23883498af293d9a47508ace836d | `}` |
+| tests/Box.t.sol | 794 | d594c73053efc40088517d3957dbdb0f3272802d0865d6e6a72abfab5039be9b | `}` |
+| tests/BoxTestBase.sol | 247 | 99db2b7de21f626cd9c9c7a4c001dbfaadf3f958364f43e7a4fd823932c50912 | `}` |
+| tests/mocks/MockEntropyV2.sol | 106 | 2c8f388ea8255be43a38397c42613a59f4e7c17373051f6da492f26bb1c0a3ab | `}` |
+| tests/mocks/MockPoolManager.sol | 92 | 68639bac68ea4491196f3ba9f2e376e067ca18a1e9b92fad3523b2bd237d5da6 | `}` |
+| tests/mocks/MockStockRegistry.sol | 65 | ce31d67d2e7dc99c12d164f61799ff8f87c8bd8bba5f3aef7c2e2c0915db1176 | `}` |
+| tests/mocks/MockSwapRouter.sol | 105 | 3a59ba4141f4dc52cec8f3586bec7c01b4949e38c677b0a43e019d554061e750 | `}` |
+| reference/ChipLottery.sol | 464 | b14cb92496fdcec8c885e567d26feeae82d692634b2e61f40288c02ac36b5d76 | `}` |
+| reference/pyth-entropy__revealWithCallback.excerpt.sol | 165 | 964b3ac2ed758fa79efd6884f6ad41f7e430b3fd3838bd5ceeec6af8cc2f1212 | `    }` |
+| reference/pyth-entropy__EntropyStructsV2.sol | 71 | 2d2399b9d54569f2ce4a883a2d6de4ece3525723bda84a9609c19ad53e419764 | `}` |
+| reference/pyth-entropy__EntropyStatusConstants.sol | 13 | 9bbc07fd388cfba214aa28eb844d9ae679fcf60fc4341a43cd59ca04f1f654e9 | `}` |
