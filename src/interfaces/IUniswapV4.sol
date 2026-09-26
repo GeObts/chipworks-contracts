@@ -36,7 +36,7 @@ struct PoolKey {
 struct SwapParams {
     bool zeroForOne;
     /// @dev NEGATIVE is exact-input, POSITIVE is exact-output. This contract only ever
-    ///      passes a positive value: the ticket costs an exact number of micro-USDC, so
+    ///      passes a positive value: the price (a lottery ticket, a Box) is an exact number of micro-USDC, so
     ///      the swap is specified by what must come OUT, never by what goes in.
     int256 amountSpecified;
     uint160 sqrtPriceLimitX96;
@@ -68,7 +68,7 @@ interface IUnlockCallback {
 }
 
 /// @notice Uniswap v3 SwapRouter02 exact-output-single, for the WETH -> USDC leg.
-/// @dev Deliberately the OUTPUT form. The ticket price is exact, so the last leg is
+/// @dev Deliberately the OUTPUT form. The USDC price is exact, so the last leg is
 ///      specified by its output and the leg before it by that leg's input.
 interface IUniswapV3ExactOutput {
     struct ExactOutputSingleParams {

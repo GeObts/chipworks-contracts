@@ -587,8 +587,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /* ------------------------------------------------------------------ */
 
     /// @notice Owner withdraw of USDC or a stock, for winding the product down. 48h notice.
-    ///         Execution checks the same two floors {sweepSurplus} does, so it can never take
-    ///         the pool below what sold boxes are owed.
+    ///         Execution checks the liability and jackpot-reserve floors {sweepSurplus} checks, so
+    ///         it can never take the pool below what sold boxes are owed. It does NOT keep the
+    ///         {minUsdcBps} share: a wind-down may leave only stock, and a prize no single asset
+    ///         covers then goes OWED (paid later, never short).
     function queueSurplusWithdraw(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0) || token == address(0) || amount == 0) revert BadConfig();
         if (token != usdc && !_stocks[token].registered) revert NotRegistered(token);

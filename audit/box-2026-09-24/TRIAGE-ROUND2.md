@@ -40,7 +40,35 @@ Needs the owner's OK. Until then, the keeper or monitoring should watch `sweepZe
 
 ## Bankr
 
-Only PASTE-6 was reviewed. Its F1 is LOT-L1 (above); F2–F8 are generic or already covered in round 1. Re-send PASTE-1 … PASTE-5.
+Bankr first reviewed only PASTE-6. Its F1 is LOT-L1 (above); F2–F8 are generic or already covered in round 1. PASTE-1 … PASTE-5 were re-sent and reviewed; see part 2.
+
+---
+
+# Part 2: Grok combined review (`ROUND2_COMBINED_fdb77c4.md`) and Bankr pastes 1–5
+
+Grok found no High and no new Medium, and verified the BOX-L1 fix at `b4e5b8c`. Bankr answered Q1–Q17 with "no finding" and verified every paste's hashes. The vault-side fixes below cost the Box no bytes.
+
+| ID | Source | Verdict | Action |
+|---|---|---|---|
+| BOX-L6 callback gas with refusing stocks | Grok (Bankr: "callback gas not asserted") | **CONFIRMED as unbounded.** Every refused transfer is a caught revert. Real B20 revert = **11,086 gas**, measured on all 13 registry B20s via `eth_simulateV1` (the mock costs ~9.8k), so 15 refusals ≈ 0.83M. | **FIXED.** `MAX_FAILED_TRANSFERS = 2`: after two refused transfers the walk goes to USDC. Test `test_BOXL6_sixteenRefusingStocks_twoTriesThenUsdc` covers 16 blacklisting stocks, exactly 2 tries, $1 paid in USDC and < 900k gas. Live sim rerun: 466,863 / 464,734 at 10 stocks and 566,259 / 573,892 at 13. |
+| BOX-L3 `maxFeedAge` unbounded | Grok; Bankr ("5 days too permissive") | **Grok: CONFIRMED. Bankr's "lower it": REFUTED on live data.** Saturday 2026-09-26 15:58 UTC, all 13 registry feeds last updated Fri 16:00–23:35 UTC, so they will be ~2.9 days old at Monday's open and ~3.9 days after a holiday Monday. Anything under ~4 days marks every stock unpriced on long weekends. | **FIXED:** `MAX_FEED_AGE = 7 days` ceiling; the default stays 5 days. Weekend drift is bounded by the 91% RTP: a buyer needs a >~10% weekend move in their favour to be +EV, and `setSkuPaused` is immediate. |
+| BOX-L4 gate is value-based, not deliverable | Grok | **CONFIRMED** (config). | **FIXED:** `minUsdcBps ≥ maxPrizeBps`, enforced in `setRestockParams`, in `queueMaxPrizeBps`, and re-checked at `executeMaxPrizeBps`, because the share can move during the 48h wait. Tests `test_BOXL4_*` and `test_sweep_usdcShareFloor_coversTheLargestPrize`. The wind-down withdraw deliberately does not keep the share (NatSpec now says so). |
+| BOX-I4 tier/stock correlation | Grok | **CONFIRMED.** With n dividing 10,000, the first stock was a function of the roll. | **FIXED:** start = `keccak256(abi.encode(entropy)) % n`. Test `test_BOXI4_*`. The test helper `_rollForTier` now also picks a roll whose hash starts on stock #0. |
+| M4 / M8 / M16 surviving mutants | Grok | **CONFIRMED** as test gaps (the mocks did the checks for us). | Added a lying-router mode and a partial-fill mode to the mocks, and tests `test_M4_*`, `test_M8_*`, `test_M16_*`. **Re-ran the mutants: all killed**, as were L1, L3, L4 (both), L6 and I4. Without M8's check the buy still reverts later, on the Box's USDC balance. |
+| Production currency order untested | Grok | **CONFIRMED** gap. | `test_converter_chipAsCurrency1_asOnBase`: a $CHIP that sorts after WETH, so `chipIsCurrency0 == false` as on Base. It passes. |
+| Bare `vm.expectRevert()` | Grok | CONFIRMED (test quality). | Replaced with specific errors across Box.t, BoxVault.t and BoxRebuild.t. |
+| BOX-I6 NatSpec drift | Grok | CONFIRMED. | Fixed (the withdraw floors, and the IUniswapV4 "ticket" wording). |
+| BOX-L5 registry owner is a trust root | Grok | **CONFIRMED; owner-trust.** Registry owner = the ChipWorks Safe `0xe109…73C7`, read live, the same key that owns the Box and vault. | **OWNER DECISION** (with L2): accept and document the Safe as the trust root, or timelock. |
+| BOX-L2 / H-3 residual | Grok | Unchanged. | **OWNER DECISION.** |
+| M-restock | Grok | Unchanged; leak ≤ slippage × daily cap. | **OWNER DECISION.** |
+| BOX-I5 `setSkuPaused` blocks opening sold boxes | Grok | CONFIRMED; intended as an emergency lever. | Document in the UI. |
+| Bankr: over-quoted `wethNeeded` | Bankr | Buyer's own parameter. The excess comes back as WETH in the same tx. | UI quotes +1% (`WETH_HEADROOM_BPS=100`). No change. |
+| Bankr: unbounded stock list | Bankr | **REFUTED:** `MAX_STOCKS = 16` (Bankr's own PASTE-3 notes say so). | None. |
+| Bankr: owed prize locked to an undeliverable token | Bankr | **REFUTED:** `claimOwed` calls `settle` again, which re-walks every stock and then USDC. Nothing is locked to the token that failed. An opener refused by every asset, USDC included, stays OWED. | None. |
+| Bankr: coverage (reentrancy, entropy fee change, 18 decimals) | Bankr | Fee change: `open` reads the fee live and refunds excess, and underpaying reverts `Underpaid`. Reentrancy: every entry point is `nonReentrant` (Grok agrees). | Noted. |
+| Fork not reproduced by Grok | Grok | Public RPCs rate-limited them. | Our run with a keyed RPC passes (below). |
+
+Pack: regenerated for the new head (`audit/box-2026-09-26`).
 
 ## Forge output (after the BOX-L1 fix)
 
