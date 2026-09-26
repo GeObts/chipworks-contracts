@@ -1,0 +1,1298 @@
+CHIPWORKS BOX AUDIT PACKAGE - PASTE-5-rebuild-vault-tests-and-fixture.txt
+source commit a73fa4d (chipworks-contracts, branch box-rebuild). The rebuild and vault unit tests and the shared fixture. Files in this paste: 3.
+Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
+marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
+
+  1. tests/BoxRebuild.t.sol  (530 lines, sha256 90cb9349d40ac071ec0ced6205b42e897065138ab9fc7194472f6b80c22758b2)
+  2. tests/BoxVault.t.sol  (502 lines, sha256 f786864dc69595f39f7daaa0d39a36ede97c5b6db5439c7c05e230feca78ea2a)
+  3. tests/BoxTestBase.sol  (247 lines, sha256 99db2b7de21f626cd9c9c7a4c001dbfaadf3f958364f43e7a4fd823932c50912)
+
+===== BEGIN FILE tests/BoxRebuild.t.sol | 530 lines | sha256 90cb9349d40ac071ec0ced6205b42e897065138ab9fc7194472f6b80c22758b2 =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {BoxTestBase} from "./BoxTestBase.sol";
+import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
+import {ChipConverter} from "../../src/box/ChipConverter.sol";
+import {IBox} from "../../src/interfaces/IBox.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
+
+/// @notice The rebuild's own properties: CHIP swapped to the exact price at buy, stocks-only prizes, never-short
+///         payouts, the sell gate, keeper restock and the house-take sweep. Every expected
+///         amount follows from the base's round prices (NVDA $100, TSLA $200, ETH $2,000,
+///         20,000 CHIP = $1).
+contract BoxRebuildTest is BoxTestBase {
+    uint8 internal constant DUST = 0;
+    uint8 internal constant COMMON = 1;
+    uint8 internal constant UNCOMMON = 2;
+    uint8 internal constant JACKPOT = 5;
+
+    function _deadline() internal view returns (uint256) {
+        return block.timestamp + 600;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*        1. $CHIP payments: swapped to the exact price at buy          */
+    /* ------------------------------------------------------------------ */
+
+    /// @dev The whole point of swap-at-buy: a $CHIP box funds the pool exactly like a USDC box,
+    ///      in the same transaction. 200,000 $CHIP -> 0.005 ETH -> $10 at the base's rates.
+    function test_chipBuy_fundsThePoolAtFace_inTheSameTransaction() public {
+        uint256 vault0 = usdc.balanceOf(address(vault));
+        uint256 chip0 = chip.balanceOf(alice);
+        (, uint256 cost) = _chipQuote(USD10);
+        assertEq(cost, CHIP10, "a $10 box costs 200k CHIP at these rates");
+
+        uint256 id = _buyChip(alice, SKU10); // allows 1% over the quote
+
+        assertEq(boxes.ownerOf(id), alice);
+        assertEq(usdc.balanceOf(treasury), 500_000, "5% to the fee recipient, in USDC");
+        assertEq(usdc.balanceOf(address(vault)) - vault0, 9_500_000, "95% to the vault, now");
+        assertEq(chip0 - chip.balanceOf(alice), cost, "the buyer spent the quote; the 1% headroom came back");
+        (uint256 c, uint256 w, uint256 u) = converter.sweepZero();
+        assertEq(c + w + u, 0, "the converter holds nothing afterwards");
+        assertEq(chip.balanceOf(address(vault)) + chip.balanceOf(address(boxes)) + chip.balanceOf(treasury), 0);
+        assertEq(boxes.outstandingLiabilityUsd(), 9_100_000);
+    }
+
+    function test_chipBuy_theBuyerBoundsTheirOwnCost() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD10);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.ChipCostAboveMax.selector, cost, cost - 1));
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost - 1, _deadline());
+
+        vm.expectRevert(abi.encodeWithSelector(Box.DeadlinePassed.selector, block.timestamp, block.timestamp - 1));
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost, block.timestamp - 1);
+    }
+
+    function test_chipBuy_batchIsOneSwapForNBoxes() public {
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(3 * USD10);
+        uint256 vault0 = usdc.balanceOf(address(vault));
+        vm.prank(alice);
+        uint256 first = boxes.buyWithChipBatch(SKU10, bob, 3, wethNeeded, cost, _deadline());
+        for (uint256 i; i < 3; ++i) assertEq(boxes.ownerOf(first + i), bob, "gifted: minted to bob");
+        assertEq(usdc.balanceOf(address(vault)) - vault0, 3 * 9_500_000);
+        assertEq(usdc.balanceOf(treasury), 3 * 500_000);
+    }
+
+    function test_chipBuy_canBeTurnedOffPerSku() public {
+        vm.startPrank(multisig);
+        boxes.queueSku(SKU10, true, uint96(USD10), false);
+        vm.warp(block.timestamp + 48 hours);
+        boxes.executeSku();
+        vm.stopPrank();
+        registry.setPrice(address(nvda), NVDA_PRICE);
+        registry.setPrice(address(tsla), TSLA_PRICE);
+        (uint256 wethNeeded, uint256 cost) = _chipQuote(USD10);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        vm.prank(alice);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, cost, _deadline());
+        vm.prank(alice);
+        boxes.buyWithUsdc(SKU10, alice); // USDC unaffected
+    }
+
+    function test_converter_onlyTheBoxCanSwap() public {
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.NotBox.selector, alice));
+        vm.prank(alice);
+        converter.swapToUsdc(USD10, 1, 1, alice);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                  2. Prizes are stocks, never $CHIP                    */
+    /* ------------------------------------------------------------------ */
+
+    /// @dev Every tier, Dust to Jackpot, pays a stock at the registry mark. The rolls used here
+    ///      are all even, so the stock walk starts at NVDA ($100): the raw 8-dp NVDA paid equals
+    ///      the 6-dp USD prize exactly.
+    function test_everyTier_paysAStock_neverChip() public {
+        uint256[6] memory prize = [uint256(2e6), 5e6, 10e6, 20e6, 80e6, 360e6];
+        uint256 convChip0 = chip.balanceOf(address(converter));
+        for (uint8 t; t < 6; ++t) {
+            uint256 id = _buyUsdc(alice, SKU10);
+            uint256 n0 = nvda.balanceOf(alice);
+            uint256 c0 = chip.balanceOf(alice);
+            _openAndFulfill(alice, id, _rollForTier(t));
+            assertEq(nvda.balanceOf(alice) - n0, prize[t], "the exact prize, in NVDA");
+            assertEq(chip.balanceOf(alice), c0, "never paid in CHIP");
+        }
+        assertEq(chip.balanceOf(address(converter)), convChip0, "the converter is not involved");
+        assertEq(boxes.outstandingLiabilityUsd(), 0);
+    }
+
+    function test_stockTier_paysAStock() public {
+        uint256 id = _buyUsdc(alice, SKU10);
+        uint256 n0 = nvda.balanceOf(alice);
+        uint256 t0 = tsla.balanceOf(alice);
+        _openAndFulfill(alice, id, _rollForTier(UNCOMMON)); // $10
+        uint256 gotN = nvda.balanceOf(alice) - n0;
+        uint256 gotT = tsla.balanceOf(alice) - t0;
+        assertTrue(gotN == 0.1e8 || gotT == 0.05e8, "$10 of NVDA ($100) or TSLA ($200)");
+    }
+
+    function test_noStockCanCover_paysTheUsdcFallback() public {
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false);
+        vm.stopPrank();
+        // With the stocks out of inventory the pool is $10,000 of USDC: the $10 SKU is covered.
+        uint256 id = _buyUsdc(alice, SKU10);
+        uint256 u0 = usdc.balanceOf(alice);
+        _openAndFulfill(alice, id, _rollForTier(DUST)); // $2
+        assertEq(usdc.balanceOf(alice) - u0, 2e6, "the full $2, in USDC");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*               3. Honest odds: gate and owed prizes                   */
+    /* ------------------------------------------------------------------ */
+
+    function test_sellGate_opensSkusAsThePoolGrows() public {
+        (Box b2, PrizeVault v2,) = _freshSystem(144e6); // cap $36: exactly the $1 jackpot
+        assertTrue(b2.isSkuCovered(SKU1));
+        assertFalse(b2.isSkuCovered(SKU10));
+        assertFalse(b2.isSkuCovered(SKU25));
+
+        _approveBox(alice, b2);
+        vm.prank(alice);
+        b2.buyWithUsdc(SKU1, alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU10, 360e6, v2.prizeCapUsd()));
+        vm.prank(alice);
+        b2.buyWithUsdc(SKU10, alice);
+
+        usdc.mint(address(v2), 1_440e6); // volume arrives
+        assertTrue(b2.isSkuCovered(SKU10), "the $10 box unlocks by itself");
+        vm.prank(alice);
+        b2.buyWithUsdc(SKU10, alice);
+    }
+
+    function test_owed_thenClaimedInFullOnceThePoolCan() public {
+        // $100 USDC + $100 NVDA: cap $50 covers the $36 jackpot of a $1 box.
+        (Box b2, PrizeVault v2,) = _freshSystem(100e6);
+        nvda.mint(address(v2), 1e8);
+        _approveBox(alice, b2);
+        vm.prank(alice);
+        uint256 id = b2.buyWithUsdc(SKU1, alice);
+
+        // Before the reveal, the NVDA mark goes stale: inventory ~$100.95, cap ~$25.
+        registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - 6 days);
+        uint64 seq = _openOn(b2, alice, id);
+        entropy.fulfill(seq, _rollForTierOn(b2, JACKPOT));
+
+        IBox.BoxView memory info = b2.boxInfo(id);
+        assertEq(info.state, 3, "owed, not paid short and not re-rolled");
+        assertEq(info.owedUsd, 36e6);
+        assertEq(b2.outstandingLiabilityUsd(), 36e6, "liability is now the exact prize");
+        assertEq(b2.ownerOf(id), alice, "not burned");
+
+        vm.expectRevert(abi.encodeWithSelector(Box.StillUnpayable.selector, id, 36e6));
+        b2.claimOwed(id);
+
+        // Owed boxes stay with the opener.
+        vm.expectRevert(abi.encodeWithSelector(Box.BoxLocked.selector, id));
+        vm.prank(alice);
+        b2.transferFrom(alice, bob, id);
+
+        registry.setPrice(address(nvda), NVDA_PRICE); // mark fresh again: cap ~$50
+        uint256 before = usdc.balanceOf(alice) + nvda.balanceOf(alice) * 1e6 / 1e8 * 100;
+        vm.prank(bob); // anyone may push it; it pays the opener
+        b2.claimOwed(id);
+        uint256 afterBal = usdc.balanceOf(alice) + nvda.balanceOf(alice) * 1e6 / 1e8 * 100;
+        assertEq(afterBal - before, 36e6, "the full $36, to the opener");
+        assertEq(b2.outstandingLiabilityUsd(), 0);
+    }
+
+    /// @dev The re-roll hole: a callback that FAILED has had its random number published by
+    ///      Pyth. retryOpen must refuse it however long the holder waits; the only way forward
+    ///      is Pyth's revealWithCallback, which re-runs the callback with the SAME number.
+    function test_retryOpen_refusesARevealThatFailed_evenAfterTheTimeout() public {
+        uint256 id = _buy1(alice);
+        uint64 seq = _open(alice, id);
+        entropy.setStatus(seq, 3); // CALLBACK_FAILED: the number is public
+        vm.warp(block.timestamp + boxes.REVEAL_TIMEOUT());
+        uint128 fee = boxes.quoteOpenFee();
+        vm.expectRevert(abi.encodeWithSelector(Box.RevealAlreadyPublic.selector, id, uint8(3)));
+        vm.prank(alice);
+        boxes.retryOpen{value: fee}(id);
+
+        // Recovery is the same number, delivered again: the box pays that draw, not a new one.
+        entropy.setStatus(seq, 1);
+        registry.setPrice(address(nvda), NVDA_PRICE); // 30 days on, the marks need a fresh stamp
+        registry.setPrice(address(tsla), TSLA_PRICE);
+        uint256 n0 = nvda.balanceOf(alice);
+        entropy.fulfill(seq, _rollForTier(2)); // Uncommon, $1
+        assertEq(nvda.balanceOf(alice) - n0, 1e6, "the original draw is what pays");
+    }
+
+    /// @dev The gas bound: at most 16 stocks can ever be listed, and the callback gas can never be
+    ///      set below what 16 need (measured ~683k with real B20s; the floor is 900k).
+    function test_stockListAndCallbackGasAreBothBounded() public {
+        uint256 cap = vault.MAX_STOCKS();
+        assertEq(cap, 16);
+        vm.startPrank(multisig);
+        for (uint256 i = vault.stockCount(); i < cap; ++i) {
+            MockERC20_ t = new MockERC20_();
+            registry.setStock(address(t), Venue.Slipstream, 0, 10, 8, true);
+            vault.addStock(address(t));
+        }
+        MockERC20_ extra = new MockERC20_();
+        registry.setStock(address(extra), Venue.Slipstream, 0, 10, 8, true);
+        vm.expectRevert(PrizeVault.TooManyStocks.selector);
+        vault.addStock(address(extra));
+
+        // Disabling does not free a slot: every stock ever listed is still walked.
+        vault.setStockEnabled(address(nvda), false);
+        vm.expectRevert(PrizeVault.TooManyStocks.selector);
+        vault.addStock(address(extra));
+
+        uint32 floor = boxes.MIN_CALLBACK_GAS();
+        assertEq(floor, 900_000);
+        vm.expectRevert(Box.BadConfig.selector);
+        boxes.setCallbackGasLimit(floor - 1);
+        boxes.setCallbackGasLimit(floor);
+        vm.stopPrank();
+        assertEq(boxes.callbackGasLimit(), 900_000);
+    }
+
+    function test_retryOpen_waitsThirtyDays() public {
+        uint256 id = _buy1(alice);
+        _open(alice, id);
+        assertEq(boxes.REVEAL_TIMEOUT(), 30 days);
+        uint64 readyAt = boxes.boxInfo(id).openingStartedAt + 30 days;
+        vm.warp(readyAt - 1);
+        uint128 fee = boxes.quoteOpenFee();
+        vm.expectRevert(abi.encodeWithSelector(Box.RevealNotTimedOut.selector, readyAt - 1, readyAt));
+        vm.prank(alice);
+        boxes.retryOpen{value: fee}(id);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                     4. Keeper restock                                */
+    /* ------------------------------------------------------------------ */
+
+    function test_restock_buysIntoTheVault_withinBounds() public {
+        vm.prank(multisig);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_500);
+        uint256 n0 = nvda.balanceOf(address(vault));
+        uint256 u0 = usdc.balanceOf(address(vault));
+
+        vm.prank(keeper);
+        uint256 got = vault.restock(address(nvda), 1_000e6);
+
+        assertEq(got, 10e8, "$1,000 of NVDA at $100");
+        assertEq(nvda.balanceOf(address(vault)) - n0, 10e8, "lands in the vault");
+        assertEq(u0 - usdc.balanceOf(address(vault)), 1_000e6);
+        assertEq(nvda.balanceOf(keeper), 0, "the keeper holds nothing");
+    }
+
+    function test_restock_refusals() public {
+        vm.prank(multisig);
+        vault.setRestockParams(1_000e6, 1_500e6, 200, 2_500);
+
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.NotKeeper.selector, alice));
+        vm.prank(alice);
+        vault.restock(address(nvda), 100e6);
+
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.OverCap.selector, 1_001e6, 1_000e6));
+        vm.prank(keeper);
+        vault.restock(address(nvda), 1_001e6);
+
+        vm.prank(keeper);
+        vault.restock(address(nvda), 1_000e6);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.OverDailyCap.selector, 2_000e6, 1_500e6));
+        vm.prank(keeper);
+        vault.restock(address(nvda), 1_000e6);
+
+        vm.warp(block.timestamp + 1 days);
+        registry.setPrice(address(tsla), TSLA_PRICE);
+        registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - 6 days);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.StockNotBuyable.selector, address(nvda), bytes32("no-fresh-price")));
+        vm.prank(keeper);
+        vault.restock(address(nvda), 100e6);
+
+        // A router that fills 3% under the mark is refused by the 2% bound. The vault passes
+        // that bound to the router as amountOutMinimum, so the revert comes from the router's
+        // own minimum check (the mock's TooLittleReceived), not from a vault-side error.
+        router.setRate(address(usdc), address(tsla), 97, 200);
+        vm.expectRevert(MockSwapRouter.TooLittleReceived.selector);
+        vm.prank(keeper);
+        vault.restock(address(tsla), 100e6);
+    }
+
+    function test_restock_keepsTheUsdcShare() public {
+        // Base: $10k USDC of $30k. With a 30% share, spending $1,001 leaves $8,999 < $9,000.
+        vm.prank(multisig);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 3_000);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.UsdcShareTooLow.selector, 8_999e6, 9_000e6));
+        vm.prank(keeper);
+        vault.restock(address(nvda), 1_001e6);
+        vm.prank(keeper);
+        vault.restock(address(nvda), 1_000e6);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                 5. House take -> fee recipient                       */
+    /* ------------------------------------------------------------------ */
+
+    function test_sweep_paysOnlyTheFeeRecipient_aboveAllFloors() public {
+        // Base USDC share is 33% of $30k and the kept share 50%: nothing is spare.
+        vm.expectRevert(PrizeVault.NothingToSweep.selector);
+        vault.sweepSurplus();
+
+        usdc.mint(address(vault), 50_000e6); // $60k USDC of $80k
+        // Share floor binds: 60k - x >= 0.5 * (80k - x)  =>  x <= 40k.
+        assertEq(vault.sweepableUsdc(), 40_000e6);
+        vm.prank(bob); // permissionless
+        uint256 swept = vault.sweepSurplus();
+        assertEq(swept, 40_000e6);
+        assertEq(usdc.balanceOf(treasury), 40_000e6, "all of it to the fee recipient");
+        assertEq(usdc.balanceOf(bob), 1_000e6, "caller gets nothing");
+    }
+
+    /// @dev The USDC share can no longer be set below maxPrizeBps (BOX-L4), so each floor is
+    ///      isolated by the pool's shape instead: stock off the books makes the share floor trivial.
+    function test_sweep_respectsLiabilityAndJackpotReserve() public {
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false); // inventory = USDC: the share floor is moot
+        boxes.setSkuPaused(SKU10, true);
+        boxes.setSkuPaused(SKU25, true); // unsold, so the reserve is the $1 jackpot's alone
+        vm.stopPrank();
+
+        // Liability floor: 400 x $1 boxes = $364 EV -> $400.40 of USDC stays.
+        for (uint256 i; i < 400; ++i) {
+            vm.prank(alice);
+            boxes.buyWithUsdc(SKU1, alice);
+        }
+        uint256 usdcNow = usdc.balanceOf(address(vault));
+        assertLt(vault.jackpotReserveUsd(), 400_400_000, "the reserve is below the liability floor here");
+        assertEq(vault.sweepableUsdc(), usdcNow - 400_400_000, "liability floor binds");
+    }
+
+    function test_sweep_reserveFloorBinds_whenStockIsGone() public {
+        // 20 x $25 boxes: liability floor $500.50, under the $3,600 reserve for the $900 jackpot.
+        for (uint256 i; i < 20; ++i) {
+            vm.prank(alice);
+            boxes.buyWithUsdc(SKU25, alice);
+        }
+        uint256 usdcNow = usdc.balanceOf(address(vault));
+        vm.prank(multisig);
+        vault.setStockEnabled(address(tsla), false); // inventory: USDC + $10k NVDA
+        registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - 6 days); // + $0 NVDA
+        uint256 inv = vault.inventoryUsd();
+        assertEq(inv, usdcNow);
+        assertEq(vault.jackpotReserveUsd(), 3_600e6);
+        assertEq(vault.sweepableUsdc(), usdcNow - 3_600e6, "reserve floor binds when stock is gone");
+    }
+
+    /// @dev BOX-L4: with stock on the books the kept-USDC share binds, and it is never below the
+    ///      prize cap's share, so USDC alone covers the largest prize the gate can sell.
+    function test_sweep_usdcShareFloor_coversTheLargestPrize() public {
+        vm.prank(multisig);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_500);
+        // $10k USDC + $20k stock. Keep x: (10k - x) >= 25% of (30k - x) -> x <= 3,333.33.
+        uint256 sweepable = vault.sweepableUsdc();
+        assertApproxEqAbs(sweepable, 3_333_333_333, 1);
+        uint256 usdcAfter = usdc.balanceOf(address(vault)) - sweepable;
+        assertGe(usdcAfter, vault.prizeCapUsd() / 1e12, "USDC left covers the cap");
+    }
+
+    function test_sweep_pausingASkuDoesNotReleaseItsJackpotReserve() public {
+        vm.prank(alice);
+        boxes.buyWithUsdc(SKU25, alice); // one $25 box outstanding: a $900 jackpot is live
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU25, true);
+        assertEq(boxes.maxLivePrizeUsd(), 900e6, "still reserved while a sealed $25 box exists");
+        assertEq(vault.jackpotReserveUsd(), 3_600e6);
+
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU10, true);
+        vm.prank(multisig);
+        boxes.setSkuPaused(SKU1, true);
+        // Unsold, paused SKUs release nothing they were not holding.
+        assertEq(boxes.maxLivePrizeUsd(), 900e6);
+    }
+
+    /// @dev A sold box keeps its mint face and odds (H-05). Cutting the top tier or the price
+    ///      afterwards must not shrink the reserve the sweep leaves under that box's jackpot.
+    function test_sweep_reserveCoversJackpotsAlreadySold_afterOddsAndPriceCuts() public {
+        vm.prank(alice);
+        boxes.buyWithUsdc(SKU25, alice); // this box can win $900 forever
+        assertEq(boxes.maxSoldPrizeUsd(), 900e6);
+
+        // Owner cuts the jackpot to 10x and the $25 SKU to $20 (both 48h-timelocked).
+        IBox.PrizeTier[] memory t = boxes.oddsTable();
+        t[5].prizeBps = 100_000;
+        vm.startPrank(multisig);
+        boxes.queueOdds(t);
+        boxes.queueSku(SKU25, true, 20e6, true);
+        vm.warp(block.timestamp + 48 hours);
+        boxes.executeOdds();
+        boxes.executeSku();
+        vm.stopPrank();
+
+        assertEq(boxes.maxPrizeUsd(SKU25), 200e6, "a NEW $25-slot box now tops out at $200");
+        assertEq(boxes.maxLivePrizeUsd(), 900e6, "the sold box still reserves its $900");
+        assertEq(vault.jackpotReserveUsd(), 3_600e6);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                   6. CHIP is never inventory                         */
+    /* ------------------------------------------------------------------ */
+
+    function test_chipNeverStock_butAStrayCanBeReturned() public {
+        address liveChip = vault.DEFAULT_CHIP(); // read first: expectRevert binds to the next call
+        vm.startPrank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(chip)));
+        vault.addStock(address(chip));
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, liveChip));
+        vault.addStock(liveChip);
+        vm.stopPrank();
+
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.NotRegistered.selector, address(chip)));
+        vault.deposit(address(chip), 1);
+
+        chip.mint(address(vault), 5 ether); // someone sends CHIP by mistake
+        vm.prank(multisig);
+        vault.rescue(address(chip), bob, 5 ether);
+        assertEq(chip.balanceOf(address(vault)), 0, "no CHIP can be stuck here");
+    }
+
+    function test_noConverter_disablesChipPaymentsOnly() public {
+        PrizeVault v3v = new PrizeVault(multisig, address(usdc), address(0), address(registry), address(router), address(router), 2_500);
+        Box b3 = new Box(multisig, address(usdc), address(0), treasury, address(v3v), address(0), address(entropy));
+        vm.prank(multisig);
+        v3v.setBox(address(b3));
+        usdc.mint(address(v3v), 200e6);
+        _approveBox(alice, b3);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        vm.prank(alice);
+        b3.buyWithChip(SKU1, alice, 1, 1, block.timestamp);
+        vm.prank(alice);
+        b3.buyWithUsdc(SKU1, alice); // USDC is unaffected
+    }
+
+    function test_launchTable_isStill91Pct() public view {
+        assertEq(boxes.rtpBps(), 9_100);
+        assertEq(boxes.oddsTierCount(), 6);
+        assertEq(boxes.maxPrizeUsd(SKU1), 36e6);
+        assertEq(boxes.maxPrizeUsd(SKU25), 900e6);
+        assertEq(boxes.maxLivePrizeUsd(), 900e6);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                              HELPERS                                 */
+    /* ------------------------------------------------------------------ */
+
+    function _buyUsdc(address who, uint8 skuId) internal returns (uint256 id) {
+        vm.prank(who);
+        id = boxes.buyWithUsdc(skuId, who);
+    }
+
+    function _freshSystem(uint256 seedUsdc) internal returns (Box b2, PrizeVault v2, ChipConverter c2) {
+        v2 = new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 2_500);
+        c2 = new ChipConverter(
+            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), 500, _key()
+        );
+        b2 = new Box(multisig, address(usdc), address(chip), treasury, address(v2), address(c2), address(entropy));
+        vm.startPrank(multisig);
+        v2.setBox(address(b2));
+        c2.setBox(address(b2));
+        v2.addStock(address(nvda));
+        vm.stopPrank();
+        usdc.mint(address(v2), seedUsdc);
+    }
+
+    function _approveBox(address who, Box b) internal {
+        vm.startPrank(who);
+        usdc.approve(address(b), type(uint256).max);
+        chip.approve(address(b), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function _openOn(Box b, address who, uint256 id) internal returns (uint64) {
+        uint128 fee = b.quoteOpenFee();
+        vm.prank(who);
+        b.open{value: fee}(id);
+        return b.boxInfo(id).sequence;
+    }
+
+    function _rollForTierOn(Box b, uint8 tierId) internal view returns (bytes32) {
+        IBox.PrizeTier[] memory tiers = b.oddsTable();
+        uint256 acc;
+        for (uint256 i; i < tierId; ++i) {
+            acc += tiers[i].weight;
+        }
+        return bytes32(acc);
+    }
+}
+
+/// @dev A throwaway 8-dp token for filling the stock list.
+contract MockERC20_ {
+    function decimals() external pure returns (uint8) {
+        return 8;
+    }
+
+    function balanceOf(address) external pure returns (uint256) {
+        return 0;
+    }
+}
+===== END FILE tests/BoxRebuild.t.sol =====
+
+===== BEGIN FILE tests/BoxVault.t.sol | 502 lines | sha256 f786864dc69595f39f7daaa0d39a36ede97c5b6db5439c7c05e230feca78ea2a =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
+import {IBox} from "../../src/interfaces/IBox.sol";
+import {IPrizeVault} from "../../src/interfaces/IPrizeVault.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {BoxTestBase} from "./BoxTestBase.sol";
+import {BlacklistToken} from "../mocks/HostileTokens.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+
+contract BoxVaultTest is BoxTestBase {
+    event PrizeOwed(
+        address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
+    );
+
+    /// @dev roll 7500: tier 2 (1.00x, pays a stock). Even, so with [NVDA, TSLA] NVDA is tried first.
+    bytes32 internal constant PAR_EVEN = bytes32(uint256(7_500));
+    /// @dev roll 9950: tier 5 (36x jackpot).
+    bytes32 internal constant JACKPOT = bytes32(uint256(9_950));
+
+    /* ------------------------------------------------------------------ */
+    /*                    STOCK SELECTION + FALLBACKS                       */
+    /* ------------------------------------------------------------------ */
+
+    function test_emptyStockFallsBackToNextStock() public {
+        vm.prank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+
+        uint256 id = _buy1(alice);
+        _openAndFulfill(alice, id, PAR_EVEN);
+        assertEq(tsla.balanceOf(alice), 5e5, "paid $1 of the remaining enabled stock ($200 TSLA)");
+        assertEq(nvda.balanceOf(alice), 0);
+    }
+
+    function test_allStocksEmptyFallsBackToUsdc() public {
+        vm.startPrank(multisig);
+        vault.setStockEnabled(address(nvda), false);
+        vault.setStockEnabled(address(tsla), false);
+        vm.stopPrank();
+
+        uint256 id = _buy1(alice);
+        uint256 usdc0 = usdc.balanceOf(alice);
+        _openAndFulfill(alice, id, _rollForTier(2));
+        assertEq(usdc.balanceOf(alice) - usdc0, 1_000_000, "honest USDC fallback");
+        assertEq(nvda.balanceOf(alice), 0);
+    }
+
+    function test_thinStockIsSkipped() public {
+        MockERC20 dustTok = new MockERC20("Dust", "DSTX", 8);
+        _listStock(vault, address(dustTok), 100e18);
+        dustTok.mint(address(this), 1);
+        dustTok.approve(address(vault), 1);
+        vault.deposit(address(dustTok), 1);
+
+        // Stocks are [NVDA, TSLA, DSTX]; roll 7502 is tier 2 and starts at index 2 (DSTX).
+        uint256 id = _buy1(alice);
+        _openAndFulfill(alice, id, bytes32(uint256(7_502)));
+        assertEq(dustTok.balanceOf(alice), 0);
+        assertEq(nvda.balanceOf(alice), 1e6, "wrapped to the next stock that can cover $1");
+    }
+
+    function test_blacklistedStockIsSkippedAndOpenStillSettles() public {
+        BlacklistToken blocked = new BlacklistToken("Blocked", "BLKX", 8);
+        _listStock(vault, address(blocked), 100e18);
+        blocked.mint(address(this), 100e8);
+        blocked.approve(address(vault), 100e8);
+        vault.deposit(address(blocked), 100e8);
+        blocked.setBlacklisted(alice, true);
+
+        uint256 id = _buy1(alice);
+        _openAndFulfill(alice, id, bytes32(uint256(7_502)));
+        assertEq(blocked.balanceOf(alice), 0);
+        assertEq(nvda.balanceOf(alice), 1e6);
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
+        boxes.ownerOf(id);
+    }
+
+    function test_deadFeedSkipsStock() public {
+        registry.setPriceReverts(address(nvda), true);
+        assertEq(vault.inventoryUsd(), 20_000e6, "a reverting mark is not counted");
+        uint256 id = _buy1(alice);
+        _openAndFulfill(alice, id, PAR_EVEN);
+        assertEq(nvda.balanceOf(alice), 0);
+        assertEq(tsla.balanceOf(alice), 5e5);
+    }
+
+    function test_staleFeedSkipsStock() public {
+        uint256 maxAge = vault.maxFeedAge();
+        registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - maxAge - 1);
+        assertEq(vault.inventoryUsd(), 20_000e6, "a stale mark is not counted");
+        uint256 id = _buy1(alice);
+        _openAndFulfill(alice, id, PAR_EVEN);
+        assertEq(nvda.balanceOf(alice), 0);
+        assertEq(tsla.balanceOf(alice), 5e5);
+
+        // Exactly maxFeedAge old is still fresh.
+        registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - maxAge);
+        assertEq(vault.inventoryUsd(), 30_000e6 + 950_000 - 5e5 * TSLA_PRICE / 1e20);
+    }
+
+    function test_dollarPrizePaysOneCentOfHundredDollarStock() public {
+        uint256 id = _buy1(alice);
+        _openAndFulfill(alice, id, _rollForTier(2));
+        // $1 at $100/NVDA, entropy 7500 % 2 == 0 -> NVDA first.
+        assertEq(nvda.balanceOf(alice), 1e6);
+    }
+
+    /// @notice Replaces the removed `quoteTokenAmount` view: marks come from the registry.
+    function test_inventoryUsdUsesRegistryMarks() public {
+        assertEq(vault.inventoryUsd(), 30_000e6);
+        registry.setPrice(address(nvda), 50e18);
+        assertEq(vault.inventoryUsd(), 25_000e6);
+        vm.prank(multisig);
+        vault.setStockEnabled(address(tsla), false);
+        assertEq(vault.inventoryUsd(), 15_000e6, "a disabled stock is not inventory");
+        chip.mint(address(vault), 1e30);
+        assertEq(vault.inventoryUsd(), 15_000e6, "CHIP is never priced inventory");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*               COVERAGE + ALL-OR-NOTHING (OWED) PATH                  */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Was `test_chipBuyAgainstEmptyB20AndUsdcIsHonestShortfall`. A box can no longer be
+    ///         sold against a pool that could not pay its top prize, in USDC or in $CHIP.
+    function test_emptyVaultRefusesToSell() public {
+        (Box thinBox, PrizeVault thinVault,) = _newWiredPair(0);
+        assertEq(thinVault.prizeCapUsd(), 0);
+        assertFalse(thinBox.isSkuCovered(SKU1));
+
+        uint256 usdc0 = usdc.balanceOf(alice);
+        uint256 chip0 = chip.balanceOf(alice);
+        (uint256 w, uint256 c) = _chipQuote(USD1);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), uint256(0)));
+        thinBox.buyWithChip(SKU1, alice, w, c * 2, block.timestamp);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), uint256(0)));
+        thinBox.buyWithUsdc(SKU1, alice);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(alice), usdc0);
+        assertEq(chip.balanceOf(alice), chip0);
+        assertEq(thinBox.nextId(), 1);
+    }
+
+    /// @notice Was `test_prizeCapLimitsJackpotOnThinInventory` (which asserted a capped, short
+    ///         jackpot). Now the cap gates the SALE: no SKU whose top prize exceeds it is sold.
+    function test_prizeCapBlocksSaleOnThinInventory() public {
+        (Box thinBox, PrizeVault thinVault,) = _newWiredPair(40e6);
+        uint256 cap = thinVault.prizeCapUsd();
+        assertEq(cap, thinVault.inventoryUsd() * 2_500 / 10_000);
+        assertEq(cap, 10e6);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), cap));
+        thinBox.buyWithUsdc(SKU1, alice);
+
+        usdc.mint(address(thinVault), 104e6); // $144 -> cap $36, exactly SKU1's jackpot
+        assertTrue(thinBox.isSkuCovered(SKU1));
+        assertFalse(thinBox.isSkuCovered(SKU10));
+        vm.prank(alice);
+        thinBox.buyWithUsdc(SKU1, alice);
+        uint256 capNow = thinVault.prizeCapUsd(); // read first: an inline call would eat the prank
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU10, uint256(360e6), capNow));
+        thinBox.buyWithUsdc(SKU10, alice);
+    }
+
+    /// @notice The pool shrinks between buy and open (a stock mark halves). The jackpot is
+    ///         over the cap at callback time: NOTHING is paid, the box becomes OWED at the exact
+    ///         drawn size, and a later {claimOwed} pays it in full once the pool recovers.
+    function test_cappedJackpotBecomesOwedThenClaimedInFull() public {
+        (Box thinBox, PrizeVault thinVault,) = _newWiredPair(44e6);
+        _listStock(thinVault, address(nvda), 0);
+        nvda.mint(address(this), 1e8);
+        nvda.approve(address(thinVault), 1e8);
+        thinVault.deposit(address(nvda), 1e8); // $44 + $100 = $144 -> cap $36
+
+        vm.prank(alice);
+        uint256 id = thinBox.buyWithUsdc(SKU1, alice);
+        uint128 fee = thinBox.quoteOpenFee();
+        vm.prank(alice);
+        thinBox.open{value: fee}(id);
+        uint64 seq = thinBox.boxInfo(id).sequence;
+
+        registry.setPrice(address(nvda), 50e18); // inventory $94.95 -> cap ~$23.74 < $36
+        uint256 vaultUsdc0 = usdc.balanceOf(address(thinVault));
+        uint256 vaultNvda0 = nvda.balanceOf(address(thinVault));
+
+        vm.expectEmit(true, true, true, true);
+        emit PrizeOwed(alice, id, 5, 36e6, true);
+        entropy.fulfill(seq, JACKPOT);
+
+        IBox.BoxView memory b = thinBox.boxInfo(id);
+        assertEq(b.state, thinBox.STATE_OWED());
+        assertEq(b.owedUsd, 36e6, "owed at exactly the drawn size");
+        assertEq(thinBox.ownerOf(id), alice, "not burned");
+        assertEq(thinBox.outstandingLiabilityUsd(), 36e6, "mint EV replaced by the owed prize");
+        assertEq(usdc.balanceOf(address(thinVault)), vaultUsdc0, "nothing moved: not paid short");
+        assertEq(nvda.balanceOf(address(thinVault)), vaultNvda0);
+        assertEq(nvda.balanceOf(alice), 0);
+
+        // Locked to the opener while owed.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.BoxLocked.selector, id));
+        thinBox.transferFrom(alice, bob, id);
+
+        // Still unpayable: the claim reverts and moves nothing.
+        vm.expectRevert(abi.encodeWithSelector(Box.StillUnpayable.selector, id, uint256(36e6)));
+        thinBox.claimOwed(id);
+
+        // New sales are refused while the top prize is not covered.
+        // Top prize $36 (36x of $1) vs the cap at the marked-down inventory, $23.7375.
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), uint256(23_737_500)));
+        thinBox.buyWithUsdc(SKU1, bob);
+
+        // The mark recovers; anyone can push the claim, and it pays the opener in full.
+        registry.setPrice(address(nvda), NVDA_PRICE);
+        vm.prank(bob);
+        thinBox.claimOwed(id);
+        assertEq(nvda.balanceOf(alice), 36e6, "$36 at $100/NVDA = 0.36 NVDA");
+        assertEq(nvda.balanceOf(bob), 0);
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
+        thinBox.ownerOf(id);
+        assertEq(thinBox.outstandingLiabilityUsd(), 0);
+        assertEq(thinBox.sealedSupply(SKU1), 0);
+
+        vm.expectRevert(abi.encodeWithSelector(Box.NotOwed.selector, id));
+        thinBox.claimOwed(id);
+    }
+
+    /// @notice Under the cap, but no asset can actually be delivered (the only stock blocks the
+    ///         winner and USDC is short). Owed, uncapped; paid once the block lifts.
+    function test_unpayablePrizeBecomesOwedUncapped() public {
+        (Box thinBox, PrizeVault thinVault,) = _newWiredPair(0);
+        BlacklistToken blocked = new BlacklistToken("Blocked", "BLKX", 8);
+        _listStock(thinVault, address(blocked), 100e18);
+        blocked.mint(address(this), 2e8);
+        blocked.approve(address(thinVault), 2e8);
+        thinVault.deposit(address(blocked), 2e8); // $200 -> cap $50
+        blocked.setBlacklisted(alice, true);
+
+        vm.prank(alice);
+        uint256 id = thinBox.buyWithUsdc(SKU1, alice); // vault USDC is now $0.95 < the $1 prize
+        uint128 fee = thinBox.quoteOpenFee();
+        vm.prank(alice);
+        thinBox.open{value: fee}(id);
+        uint64 seq = thinBox.boxInfo(id).sequence;
+
+        vm.expectEmit(true, true, true, true);
+        emit PrizeOwed(alice, id, 2, 1e6, false);
+        entropy.fulfill(seq, PAR_EVEN);
+        assertEq(thinBox.boxInfo(id).state, thinBox.STATE_OWED());
+        assertEq(usdc.balanceOf(address(thinVault)), 950_000, "USDC not paid short");
+
+        blocked.setBlacklisted(alice, false);
+        thinBox.claimOwed(id);
+        assertEq(blocked.balanceOf(alice), 1e6);
+        assertEq(thinBox.outstandingLiabilityUsd(), 0);
+    }
+
+    function test_settleIsAllOrNothingOverCap() public {
+        // Direct settle from the Box address: a prize over the cap moves nothing.
+        uint256 cap = vault.prizeCapUsd();
+        uint256 usdc0 = usdc.balanceOf(address(vault));
+        vm.prank(address(boxes));
+        IPrizeVault.Payout memory p = vault.settle(alice, cap + 1, bytes32(0), true);
+        assertFalse(p.paid);
+        assertTrue(p.capped);
+        assertEq(p.paidUsd, 0);
+        assertEq(usdc.balanceOf(address(vault)), usdc0);
+        assertEq(nvda.balanceOf(alice) + tsla.balanceOf(alice), 0);
+
+        vm.prank(address(boxes));
+        p = vault.settle(alice, cap, bytes32(0), true);
+        assertTrue(p.paid);
+        assertEq(p.paidUsd, cap);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                          RESCUE / SURPLUS                            */
+    /* ------------------------------------------------------------------ */
+
+    function test_cannotRescuePrizeAssets() public {
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(usdc)));
+        vault.rescue(address(usdc), alice, 1);
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(nvda)));
+        vault.rescue(address(nvda), alice, 1);
+
+        // A registered stock stays protected even while disabled.
+        vm.prank(multisig);
+        vault.setStockEnabled(address(tsla), false);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(tsla)));
+        vault.rescue(address(tsla), alice, 1);
+    }
+
+    function test_rescueStrayToken() public {
+        MockERC20 stray = new MockERC20("Stray", "STRX", 18);
+        stray.mint(address(vault), 1 ether);
+        vm.prank(multisig);
+        vault.rescue(address(stray), alice, 1 ether);
+        assertEq(stray.balanceOf(alice), 1 ether);
+    }
+
+    /// @notice The vault has no $CHIP flow, so stray $CHIP is an ordinary stray token.
+    function test_rescueStrayChipAllowed() public {
+        chip.mint(address(vault), 7 ether);
+        uint256 a0 = chip.balanceOf(alice);
+        vm.prank(multisig);
+        vault.rescue(address(chip), alice, 7 ether);
+        assertEq(chip.balanceOf(alice) - a0, 7 ether);
+        assertEq(chip.balanceOf(address(vault)), 0);
+    }
+
+    function test_rescueIsOwnerOnly() public {
+        MockERC20 stray = new MockERC20("Stray", "STRX", 18);
+        stray.mint(address(vault), 1 ether);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        vault.rescue(address(stray), alice, 1 ether);
+    }
+
+    function test_surplusWithdrawRespectsOutstandingEv() public {
+        (Box thinBox, PrizeVault thinVault,) = _newWiredPair(200e6);
+        vm.prank(alice);
+        thinBox.buyWithUsdc(SKU1, alice);
+
+        uint256 liability = thinBox.outstandingLiabilityUsd();
+        assertEq(liability, 910_000);
+        uint256 required = liability * 11_000 / 10_000;
+        uint256 usdcBal = usdc.balanceOf(address(thinVault));
+
+        vm.prank(multisig);
+        thinVault.queueSurplusWithdraw(address(usdc), multisig, usdcBal);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.InsufficientSurplus.selector, 0, required));
+        thinVault.executeSurplusWithdraw();
+        assertEq(usdc.balanceOf(address(thinVault)), usdcBal);
+    }
+
+    /// @notice Second floor: the pool must stay big enough to pay the largest prize on sale.
+    function test_surplusWithdrawRespectsJackpotReserve() public {
+        uint256 reserve = vault.jackpotReserveUsd();
+        assertEq(reserve, 3_600e6, "$900 top prize at a 25% cap");
+        // Stale marks: only the $10,000 USDC counts as inventory. No boxes, so no liability floor.
+        uint256 old = block.timestamp - vault.maxFeedAge() - 1;
+        registry.setStalePrice(address(nvda), NVDA_PRICE, old);
+        registry.setStalePrice(address(tsla), TSLA_PRICE, old);
+        uint256 inv = vault.inventoryUsd();
+        assertEq(inv, 10_000e6);
+
+        // One unit more than the spare leaves inventory $0.000001 under the reserve.
+        vm.prank(multisig);
+        vault.queueSurplusWithdraw(address(usdc), multisig, inv - reserve + 1);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.InsufficientSurplus.selector, reserve - 1, reserve));
+        vault.executeSurplusWithdraw();
+
+        // Exactly the spare is allowed.
+        vm.prank(multisig);
+        vault.queueSurplusWithdraw(address(usdc), multisig, inv - reserve);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(multisig);
+        vault.executeSurplusWithdraw();
+        assertEq(usdc.balanceOf(multisig), inv - reserve);
+        assertEq(vault.inventoryUsd(), reserve);
+    }
+
+    function test_surplusWithdrawOfDustSucceeds() public {
+        _buy1(alice);
+        vm.prank(multisig);
+        vault.queueSurplusWithdraw(address(usdc), multisig, 1);
+        vm.warp(block.timestamp + 48 hours);
+        uint256 m0 = usdc.balanceOf(multisig);
+        vm.prank(multisig);
+        vault.executeSurplusWithdraw();
+        assertEq(usdc.balanceOf(multisig) - m0, 1);
+    }
+
+    function test_surplusWithdrawIsTimelocked() public {
+        uint64 t0 = uint64(block.timestamp);
+        uint64 executableAt = t0 + 48 hours;
+        vm.prank(multisig);
+        vault.queueSurplusWithdraw(address(usdc), multisig, 1);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.TimelockNotElapsed.selector, t0, executableAt));
+        vault.executeSurplusWithdraw();
+        vm.warp(executableAt + 14 days + 1);
+        vm.prank(multisig);
+        vm.expectRevert(
+            abi.encodeWithSelector(PrizeVault.TimelockExpired.selector, executableAt + 14 days + 1, executableAt + 14 days)
+        );
+        vault.executeSurplusWithdraw();
+        vm.prank(multisig);
+        vault.cancelSurplusWithdraw();
+        vm.prank(multisig);
+        vm.expectRevert(PrizeVault.NothingQueued.selector);
+        vault.executeSurplusWithdraw();
+    }
+
+    function test_surplusWithdrawRefusesUnlistedToken() public {
+        MockERC20 stray = new MockERC20("Stray", "STRX", 18);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.NotRegistered.selector, address(stray)));
+        vault.queueSurplusWithdraw(address(stray), multisig, 1);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                        CAP (48h) / WIRING                            */
+    /* ------------------------------------------------------------------ */
+
+    function test_maxPrizeBpsIsTimelockedAndCeilinged() public {
+        vm.startPrank(multisig);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        vault.queueMaxPrizeBps(5_001);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        vault.queueMaxPrizeBps(0);
+        vault.queueMaxPrizeBps(1_000);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PrizeVault.TimelockNotElapsed.selector, uint64(block.timestamp), uint64(block.timestamp) + 48 hours
+            )
+        );
+        vault.executeMaxPrizeBps();
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 48 hours);
+        // Warping ages the registry marks by 48h; still fresh under the 5d maxFeedAge.
+        vm.prank(multisig);
+        vault.executeMaxPrizeBps();
+        assertEq(vault.maxPrizeBps(), 1_000);
+        assertEq(vault.prizeCapUsd(), 3_000e6);
+    }
+
+    function test_constructorRejectsBadMaxPrizeBps() public {
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 5_001);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 0);
+    }
+
+    function test_setBoxOnce() public {
+        vm.prank(multisig);
+        vm.expectRevert(PrizeVault.AlreadyWired.selector);
+        vault.setBox(address(boxes));
+    }
+
+    function test_onlyBoxCanSettle() public {
+        vm.expectRevert(PrizeVault.OnlyBox.selector);
+        vault.settle(alice, 1_000_000, bytes32(uint256(1)), true);
+    }
+
+    function test_addStockReadsRegistry() public {
+        MockERC20 unlisted = new MockERC20("Unlisted", "UNLX", 8);
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.NotRegistered.selector, address(unlisted)));
+        vault.addStock(address(unlisted));
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.AlreadyRegistered.selector, address(nvda)));
+        vault.addStock(address(nvda));
+
+        vm.prank(multisig);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.ProtectedAsset.selector, address(usdc)));
+        vault.addStock(address(usdc));
+
+        assertEq(vault.getStock(address(nvda)).tokenDecimals, 8);
+        assertEq(vault.stockCount(), 2);
+        assertEq(vault.stockAt(0), address(nvda));
+        assertEq(vault.stockAt(1), address(tsla));
+    }
+
+    function test_depositRefusesUnlistedAndChip() public {
+        chip.mint(address(this), 1 ether);
+        chip.approve(address(vault), 1 ether);
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.NotRegistered.selector, address(chip)));
+        vault.deposit(address(chip), 1 ether);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                              HELPERS                                 */
+    /* ------------------------------------------------------------------ */
+
+    /// @dev Register `token` in the mock registry (8 dp, Slipstream) if needed and list it on
+    ///      `v`. `price == 0` keeps the registry's current mark.
+    function _listStock(PrizeVault v, address token, uint256 price) internal {
+        if (!registry.getStock(token).registered) registry.setStock(token, Venue.Slipstream, 0, 10, 8, true);
+        if (price != 0) registry.setPrice(token, price);
+        vm.prank(multisig);
+        v.addStock(token);
+    }
+}
+===== END FILE tests/BoxVault.t.sol =====
+
+===== BEGIN FILE tests/BoxTestBase.sol | 247 lines | sha256 99db2b7de21f626cd9c9c7a4c001dbfaadf3f958364f43e7a4fd823932c50912 =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+
+import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
+import {ChipConverter} from "../../src/box/ChipConverter.sol";
+import {IBox} from "../../src/interfaces/IBox.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {PoolKey} from "../../src/interfaces/IUniswapV4.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockAggregatorV3} from "../mocks/MockAggregatorV3.sol";
+import {MockEntropyV2} from "../mocks/MockEntropyV2.sol";
+import {MockStockRegistry} from "../mocks/MockStockRegistry.sol";
+import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
+import {MockPoolManager} from "../mocks/MockPoolManager.sol";
+
+/// @notice The whole Box system on mocks. Prices are round numbers so every expected
+///         amount in a test can be worked out by hand:
+///           NVDA $100 (8 dp, Slipstream)   TSLA $200 (8 dp, Uniswap v3)
+///           ETH  $2,000                    CHIP $0.00005 (20,000 CHIP = $1)
+contract BoxTestBase is Test {
+    Box internal boxes;
+    PrizeVault internal vault;
+    ChipConverter internal converter;
+    MockEntropyV2 internal entropy;
+    MockStockRegistry internal registry;
+    MockSwapRouter internal router; // plays both the Slipstream and the Uniswap v3 stock routers
+    MockSwapRouter internal v3; // the WETH/USDC leg of the converter
+    MockPoolManager internal pm; // the $CHIP/WETH v4 pool
+    MockAggregatorV3 internal ethFeed;
+
+    MockERC20 internal usdc;
+    MockERC20 internal chip;
+    MockERC20 internal weth;
+    MockERC20 internal nvda;
+    MockERC20 internal tsla;
+
+    address internal multisig = makeAddr("multisig");
+    address internal keeper = makeAddr("keeper");
+    /// @dev Stands in for the FeeSplitter: the Box's fee recipient.
+    address internal treasury = makeAddr("feeSplitter");
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
+
+    uint8 internal constant SKU1 = 0;
+    uint8 internal constant SKU10 = 1;
+    uint8 internal constant SKU25 = 2;
+
+    uint256 internal constant USD1 = 1_000_000;
+    uint256 internal constant USD10 = 10_000_000;
+    uint256 internal constant USD25 = 25_000_000;
+
+    uint128 internal constant CHIP_PER_USD = 20_000 ether;
+    uint128 internal constant CHIP1 = CHIP_PER_USD;
+    uint128 internal constant CHIP10 = 10 * CHIP_PER_USD;
+    uint128 internal constant CHIP25 = 25 * CHIP_PER_USD;
+
+    uint256 internal constant NVDA_PRICE = 100e18;
+    uint256 internal constant TSLA_PRICE = 200e18;
+
+    function setUp() public virtual {
+        vm.warp(1_700_000_000);
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        chip = new MockERC20("Chipworks", "CHIP", 18);
+        weth = new MockERC20("Wrapped Ether", "WETH", 18);
+        nvda = new MockERC20("NVIDIA", "NVDAc", 8);
+        tsla = new MockERC20("Tesla", "TSLAc", 8);
+
+        registry = new MockStockRegistry(address(usdc));
+        registry.setStock(address(nvda), Venue.Slipstream, 0, 10, 8, true);
+        registry.setStock(address(tsla), Venue.UniswapV3, 3000, 0, 8, true);
+        registry.setPrice(address(nvda), NVDA_PRICE);
+        registry.setPrice(address(tsla), TSLA_PRICE);
+
+        router = new MockSwapRouter();
+        router.setRate(address(usdc), address(nvda), 1, 1); // $1 (1e6) -> 0.01 NVDA (1e6)
+        router.setRate(address(usdc), address(tsla), 1, 2); // $1 -> 0.005 TSLA
+        nvda.mint(address(router), 1_000_000e8);
+        tsla.mint(address(router), 1_000_000e8);
+
+        v3 = new MockSwapRouter();
+        v3.setRate(address(weth), address(usdc), 2_000e6, 1e18);
+        v3.setRate(address(usdc), address(weth), 1e18, 2_000e6);
+        usdc.mint(address(v3), 10_000_000e6);
+        weth.mint(address(v3), 10_000 ether);
+        ethFeed = new MockAggregatorV3(8, 2_000e8, "ETH / USD");
+
+        pm = new MockPoolManager();
+        // 1 CHIP = $0.00005 = 2.5e-8 ETH
+        pm.setRate(address(chip), address(weth), 25, 1e9);
+        pm.setRate(address(weth), address(chip), 1e9, 25);
+        weth.mint(address(pm), 10_000 ether);
+        chip.mint(address(pm), 1e33);
+
+        entropy = new MockEntropyV2();
+        vault = new PrizeVault(multisig, address(usdc), address(chip), address(registry), address(router), address(router), 2_500);
+        converter = new ChipConverter(
+            multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), 500, _key()
+        );
+        boxes = _newBox(address(vault), address(chip), address(converter));
+
+        vm.startPrank(multisig);
+        vault.setBox(address(boxes));
+        converter.setBox(address(boxes));
+        vault.addStock(address(nvda));
+        vault.addStock(address(tsla));
+        vault.setKeeper(keeper);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 5_000);
+        vm.stopPrank();
+
+        _fundVault();
+        _fundBuyer(alice);
+        _fundBuyer(bob);
+    }
+
+    function _key() internal view returns (PoolKey memory) {
+        (address c0, address c1) = address(chip) < address(weth) ? (address(chip), address(weth)) : (address(weth), address(chip));
+        return PoolKey({currency0: c0, currency1: c1, fee: 0x800000, tickSpacing: 200, hooks: address(0)});
+    }
+
+    function _newBox(address vault_, address chip_, address converter_) internal returns (Box) {
+        return new Box(
+            multisig, address(usdc), chip_, treasury, vault_, converter_, address(entropy)
+        );
+    }
+
+    /// @dev $10,000 USDC + 100 NVDA ($10,000) + 50 TSLA ($10,000) = $30,000 inventory,
+    ///      so the 25% cap is $7,500 and every SKU's top prize ($900 at most) is covered.
+    function _fundVault() internal {
+        usdc.mint(address(vault), 10_000e6);
+        nvda.mint(address(this), 100e8);
+        tsla.mint(address(this), 50e8);
+        nvda.approve(address(vault), type(uint256).max);
+        tsla.approve(address(vault), type(uint256).max);
+        vault.deposit(address(nvda), 100e8);
+        vault.deposit(address(tsla), 50e8);
+    }
+
+    function _fundBuyer(address who) internal {
+        usdc.mint(who, 1_000e6);
+        chip.mint(who, 100 * uint256(CHIP_PER_USD) * 100);
+        vm.deal(who, 10 ether);
+        vm.startPrank(who);
+        usdc.approve(address(boxes), type(uint256).max);
+        chip.approve(address(boxes), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function _buy1(address who) internal returns (uint256 id) {
+        vm.prank(who);
+        id = boxes.buyWithUsdc(SKU1, who);
+    }
+
+    function _open(address who, uint256 id) internal returns (uint64 seq) {
+        uint128 fee = boxes.quoteOpenFee();
+        vm.prank(who);
+        boxes.open{value: fee}(id);
+        seq = boxes.boxInfo(id).sequence;
+    }
+
+    function _openAndFulfill(address who, uint256 id, bytes32 rand) internal {
+        uint64 seq = _open(who, id);
+        entropy.fulfill(seq, rand);
+    }
+
+    /// @dev A random number that lands exactly on the first roll of `tierId` AND whose prize walk
+    ///      starts on stock #0 (NVDA). The vault picks the first stock from keccak(entropy) % n
+    ///      (audit round 2, BOX-I4), so step by 10,000, which keeps the tier, until the hash picks #0.
+    function _rollForTier(uint8 tierId) internal view returns (bytes32) {
+        IBox.PrizeTier[] memory tiers = boxes.oddsTable();
+        uint256 acc;
+        for (uint256 i; i < tierId; ++i) {
+            acc += tiers[i].weight;
+        }
+        uint256 n = vault.stockCount();
+        if (n == 0) return bytes32(acc);
+        while (uint256(keccak256(abi.encode(bytes32(acc)))) % n != 0) acc += 10_000;
+        return bytes32(acc);
+    }
+
+    /// @dev A second, UNWIRED vault on the same mocks, plus (for a CHIP box) a second converter.
+    function _freshVaultAndConverter(address chip_) internal returns (PrizeVault v, ChipConverter c) {
+        v = new PrizeVault(multisig, address(usdc), chip_, address(registry), address(router), address(router), 2_500);
+        if (chip_ != address(0)) {
+            c = new ChipConverter(
+                multisig, address(chip), address(weth), address(usdc), address(pm), address(v3), 500, _key()
+            );
+        }
+    }
+
+    /// @dev A second fully wired Box/vault/converter (CHIP enabled), vault seeded with `seedUsdc`,
+    ///      alice and bob approved. No stocks listed.
+    function _newWiredPair(uint256 seedUsdc) internal returns (Box b, PrizeVault v, ChipConverter c) {
+        (v, c) = _freshVaultAndConverter(address(chip));
+        b = _newBox(address(v), address(chip), address(c));
+        vm.startPrank(multisig);
+        v.setBox(address(b));
+        c.setBox(address(b));
+        vm.stopPrank();
+        if (seedUsdc != 0) usdc.mint(address(v), seedUsdc);
+        address[2] memory who = [alice, bob];
+        for (uint256 i; i < 2; ++i) {
+            vm.startPrank(who[i]);
+            usdc.approve(address(b), type(uint256).max);
+            chip.approve(address(b), type(uint256).max);
+            vm.stopPrank();
+        }
+    }
+
+    /// @dev What a $CHIP buy of `usdcOut` costs at the mock pools' CURRENT rates, rounded up the
+    ///      way the mocks charge: the WETH the USDC leg needs, and the $CHIP that buys that WETH.
+    function _chipQuote(uint256 usdcOut) internal view returns (uint256 wethNeeded, uint256 chipCost) {
+        uint256 n1 = v3.rateNum(address(weth), address(usdc));
+        uint256 d1 = v3.rateDen(address(weth), address(usdc));
+        wethNeeded = (usdcOut * d1 + n1 - 1) / n1;
+        uint256 n0 = pm.rateNum(address(chip), address(weth));
+        uint256 d0 = pm.rateDen(address(chip), address(weth));
+        chipCost = (wethNeeded * d0 + n0 - 1) / n0;
+    }
+
+    /// @dev Buy one box of `skuId` with $CHIP on `b`, allowing 1% over the quoted cost.
+    function _buyChipOn(Box b, address who, uint8 skuId) internal returns (uint256 id) {
+        (uint256 wethNeeded, uint256 chipCost) = _chipQuote(b.sku(skuId).usdcPrice);
+        vm.prank(who);
+        id = b.buyWithChip(skuId, who, wethNeeded, chipCost * 101 / 100, block.timestamp + 600);
+    }
+
+    function _buyChip(address who, uint8 skuId) internal returns (uint256 id) {
+        id = _buyChipOn(boxes, who, skuId);
+    }
+
+    function _skuUsd(uint8 skuId) internal pure returns (uint256) {
+        if (skuId == SKU1) return USD1;
+        if (skuId == SKU10) return USD10;
+        if (skuId == SKU25) return USD25;
+        revert("unknown sku");
+    }
+
+    function _skuChip(uint8 skuId) internal pure returns (uint128) {
+        if (skuId == SKU1) return CHIP1;
+        if (skuId == SKU10) return CHIP10;
+        if (skuId == SKU25) return CHIP25;
+        revert("unknown sku");
+    }
+}
+===== END FILE tests/BoxTestBase.sol =====
+
+===== END OF PASTE-5-rebuild-vault-tests-and-fixture.txt: 3 files. If you can read this line, nothing was cut off. =====

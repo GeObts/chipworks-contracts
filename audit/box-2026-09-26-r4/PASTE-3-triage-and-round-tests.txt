@@ -1,0 +1,727 @@
+CHIPWORKS BOX AUDIT PACKAGE - PASTE-3-triage-and-round-tests.txt
+source commit a73fa4d (chipworks-contracts, branch box-rebuild). The triage of rounds 3, 2 and 1, each with its verification tests. Files in this paste: 6.
+Every file is framed by BEGIN/END markers stating its line count and SHA-256. The content between the
+marker lines is the file, byte for byte. If an END marker is missing, the paste was truncated: say so.
+
+  1. TRIAGE-ROUND3.md  (27 lines, sha256 9861251b372a504af8cded104e3408f8ce0758a6948bf2524a89f778a4f3f545)
+  2. tests/BoxAuditRound3.t.sol  (180 lines, sha256 f7894b29b1192eab8e677fe8aba952921077f3e434d02f1c7ff7a8f8f8190cf6)
+  3. TRIAGE-ROUND2.md  (86 lines, sha256 106e96932088946cb42af36a711b2551698743f304610205a1fc75c721fb0414)
+  4. tests/BoxAuditRound2.t.sol  (244 lines, sha256 d0e732914c0879399b55767a07bc03507e09d06354b6154ac3d0c41997be1541)
+  5. TRIAGE-ROUND1.md  (41 lines, sha256 ca69af5f20c1418e11381ab6dbb767b989159e6b71e908e4593f9f4d639e66ca)
+  6. tests/BoxAuditRound1.t.sol  (118 lines, sha256 5826dd4516e682c77befb65eca88e65c3e87ad57e292a8de2f3639abcb26d58b)
+
+===== BEGIN FILE TRIAGE-ROUND3.md | 27 lines | sha256 9861251b372a504af8cded104e3408f8ce0758a6948bf2524a89f778a4f3f545 =====
+# Box audit round 3: triage
+
+**Review:** Grok, `ROUND3_81c7e2e.md`, of `81c7e2e`. Its `src/` is identical to `2943917`.
+**Verdict:** no Critical, High or Medium. One new Low (BOX-R3-L1), residual Lows, Info items, and brief/pack errors.
+Grok verified every round-3 fix, reproduced the fork test on a public RPC, and ran 19 mutants: 18 killed, and X1 is killed only on the fork.
+
+Nothing below was changed until it had been reproduced. Each fix has a test, and each guarded check was mutated and caught.
+
+| ID | Verdict | Action |
+|---|---|---|
+| **BOX-R3-L1:** the failed-transfer cap sends a box OWED although a later stock could pay, and `claimOwed` re-walks the same two refusals | **CONFIRMED.** Reproduced as Grok's scenario H: stocks [A, B, C], A and B refuse, C accepts, no USDC. | **FIXED (deterministic, not gas-gated).** `settle(to, prizeUsd, entropy, gasBounded)`: Box passes `true` from the Pyth callback and `false` from `claimOwed`. Only the callback stops after `MAX_FAILED_TRANSFERS`; `claimOwed`, an ordinary transaction, walks every stock and then USDC. I rejected Grok's option (a), `gasleft()`-gated, because the recovery path `revealWithCallback` runs with caller-chosen gas and would let the caller pick stock vs USDC. Box +13 bytes → **23,801**. Tests: `test_R3L1_twoRefusalsGoOwed_thenClaimOwedPaysTheThirdStock` (the claim's walk is forced to start on A) and `test_R3L1_claimOwedTriesEveryStock` (exactly 2 refusals in the callback, 5 in the claim). Mutants "cap ignores the flag", "cap never on", "claimOwed passes true" and "callback passes false": **all killed.** |
+| **Mainnet gate 1:** the real-node worst case with a refusing recipient | **MEASURED, no longer estimated.** B20 policies block OFAC-listed addresses. A plain NVDA transfer to `0x098B…2f96` reverts on Base (30,190 gas vs 59,046 OK), and Circle's USDC refuses it too. | New `tools/box/box-refusing-opener-sim.cjs` (paste 4), `eth_simulateV1` on the live node. Setup: 13 registered stocks listed, 10 funded by real venue restocks, the box gifted to that address, which opens it. **Callback: 580,918 gas, 2 real refused transfers, USDC refused, OWED.** Plus 3 stocks × 33.1k measured slope = **~680k at MAX_STOCKS = 16**, against the 900k floor and 1M default. `claimOwed` then walks all 10 real refusals plus USDC and reverts `StillUnpayable` (661,960 gas, as an ordinary tx). |
+| BOX-R3-I3 (tests): X1 survives in units; the L6 test was warm and uncapped | CONFIRMED. | The mock PM now enforces the price-limit **direction** (`PriceLimitAlreadyExceeded`), so X1 is killed by 25 unit tests. New `test_L6_coldCallbackUnderTheGasCap_worstCases` delivers the callback like Pyth: `call{gas: callbackGasLimit}`, every touched account `vm.cool`ed. Grok's G (1 refuse + 14 thin + pay) = 442,199 mock gas; all-16-refuse → OWED = 362,569. |
+| BOX-R3-I1: `min ≥ max` holds only at restock/sweep time | Agreed. | NatSpec softened (`setRestockParams`). No margin added: at the defaults (50/25) any single jackpot still leaves USDC ≥ the cap, and the failure mode is OWED, never short. |
+| BOX-R3-I2: the two-address stale-mark option | Agreed; accepted (weekend drift, bounded by the 91% RTP). The R3-L1 fix doesn't change it. | — |
+| **BOX-L3 residual:** the 5-day window accepts a weekday corporate-action freeze | Agreed as Low. The feed is total-return, so a split causes no jump; the exposure is market drift while frozen, the same class as a weekend. The docs name Coinbase's on-chain oracle registry (with the `paused` flag) but give **no address**, so it can't be read yet. | **OWNER DECISION:** accept, or add a calendar-aware age (~26h on weekdays plus weekend days plus one holiday day). The Coinbase pause-flag check can come once its address is published. |
+| **BOX-L5:** the registry owner is an immediate trust root (+ the gas-burning-feed brick) | Agreed. Registry owner = the ChipWorks Safe `0xe109…73C7`, read live on 2026-09-26. | **OWNER DECISION** (Grok: must be explicit before mainnet). Options: accept and document the Safe as trust root, or a vault-side 48h-timelocked feed cache per stock. |
+| BOX-L2, the H-3 residual, M-restock | Unchanged. | **OWNER DECISION.** |
+| BOX-I5, E1–E3, I1–I3, BOX-M1 | Unchanged. | — |
+| Brief/pack errors 1–10 | All agreed. | Fixed in the round-4 brief: commit naming stated per file class; MANIFEST no longer truncates; paste numbers; gas table and 16-stock figure replaced by fresh measurements; refusal cost reproducible (the new sim); the 2.26% hook cost now "~2.3–2.4%, market-dependent"; buy gas 665k/764k; every `maxPrizeBps` change is timelocked. |
+
+## Forge output at `a73fa4d`
+
+- Non-fork: **957 passed, 0 failed** (49 suites). Box suites: 138 passed.
+- `BoxFork.t.sol` on a Base mainnet fork with a keyed RPC: **1 passed** (`test_fullCycle_onRealPools`).
+- Mutation run on the round-3 fix and X1: **5 of 5 killed.** They are: cap ignores the flag, cap never on, claimOwed passes true, callback passes false, price limits swapped (X1: 25 unit tests).
+- Live node: `box-callback-sim` 467,147 / 465,018 at 10 stocks and 566,543 / 574,176 at 13; `box-refusing-opener-sim` 580,918 (worst case, OWED).
+===== END FILE TRIAGE-ROUND3.md =====
+
+===== BEGIN FILE tests/BoxAuditRound3.t.sol | 180 lines | sha256 f7894b29b1192eab8e677fe8aba952921077f3e434d02f1c7ff7a8f8f8190cf6 =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {BoxTestBase} from "./BoxTestBase.sol";
+import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {BlacklistToken} from "../mocks/HostileTokens.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {Vm} from "forge-std/Test.sol";
+
+/// @notice Audit round 3 (Grok on 81c7e2e). See audit/box-2026-09-24/TRIAGE-ROUND2.md, part 3.
+contract BoxAuditRound3Test is BoxTestBase {
+    /* ---------------- BOX-R3-L1: two refusals, then OWED, then claimOwed pays ---------------- */
+
+    /// @dev Grok scenario H. Stocks [A, B, C]: A and B refuse the opener, C would pay, and the vault
+    ///      holds no USDC to fall back on. Inside the gas-bounded callback the walk stops after A and
+    ///      B, so the box goes OWED. {claimOwed} is an ordinary transaction and walks every stock,
+    ///      so it pays in C. Before the fix, claimOwed stopped at the same two refusals every time.
+    function test_R3L1_twoRefusalsGoOwed_thenClaimOwedPaysTheThirdStock() public {
+        (Box b, PrizeVault v,) = _newWiredPair(0);
+        BlacklistToken a = _refusing(v);
+        BlacklistToken bb = _refusing(v);
+        MockERC20 c = new MockERC20("Accepts", "OK", 8);
+        _list(v, address(c));
+        c.mint(address(v), 10e8);
+        assertEq(v.stockAt(0), address(a));
+        assertEq(v.stockAt(1), address(bb));
+
+        // A box whose claimOwed walk ALSO starts on A (claimOwed seeds with keccak(id, sequence)),
+        // so the claim has to get past both refusals to reach C.
+        (uint256 id, uint64 seq) = _openUntilClaimStartsAt(b, v, 0);
+        deal(address(usdc), address(v), 0); // those extra buys paid in USDC: no USDC fallback
+
+        entropy.fulfill(seq, _tier2RollStartingAt(v, 0)); // the walk starts on A: A, B, then stop
+        assertEq(b.boxInfo(id).state, b.STATE_OWED(), "two refusals and no USDC: OWED at $1");
+        assertEq(c.balanceOf(alice), 0);
+
+        uint256 liab0 = b.outstandingLiabilityUsd();
+        vm.prank(bob); // anyone can push it
+        b.claimOwed(id);
+        assertEq(c.balanceOf(alice), 1e6, "claimOwed walks past the refusals: $1 of C at $100");
+        assertEq(liab0 - b.outstandingLiabilityUsd(), 1e6, "the $1 owed is off the books");
+    }
+
+    /// @dev The cap is the callback's alone: claimOwed with every stock refusing tries them ALL,
+    ///      then USDC, and stays OWED only if nothing can pay.
+    function test_R3L1_claimOwedTriesEveryStock() public {
+        (Box b, PrizeVault v,) = _newWiredPair(0);
+        for (uint256 i; i < 5; ++i) _refusing(v);
+
+        vm.prank(alice);
+        uint256 id = b.buyWithUsdc(SKU1, alice);
+        uint128 fee = b.quoteOpenFee();
+        vm.prank(alice);
+        b.open{value: fee}(id);
+        vm.recordLogs();
+        entropy.fulfill(b.boxInfo(id).sequence, _tier2RollStartingAt(v, 0));
+        assertEq(_refusals(), 2, "the callback stops after two");
+        assertEq(b.boxInfo(id).state, b.STATE_OWED());
+
+        vm.expectRevert(abi.encodeWithSelector(Box.StillUnpayable.selector, id, 1e6));
+        b.claimOwed(id);
+
+        usdc.mint(address(v), 1e6); // USDC arrives: the claim pays in full
+        uint256 u0 = usdc.balanceOf(alice);
+        vm.recordLogs();
+        b.claimOwed(id);
+        assertEq(_refusals(), 5, "claimOwed tried all five stocks before USDC");
+        assertEq(usdc.balanceOf(alice) - u0, 1e6, "paid $1 in USDC");
+    }
+
+    /* ---------------- BOX-L6 cold, under the real callback gas cap ---------------- */
+
+    /// @dev Grok R3-I3(3): the L6 test ran warm, through the uncapped mock. This one delivers the
+    ///      callback the way Pyth does, with exactly `callbackGasLimit` gas and every touched account
+    ///      cold. 16 stocks: one refuses, fourteen are too thin, the last pays (Grok's worst case, G),
+    ///      and all sixteen refuse with no USDC (two tries, then OWED).
+    function test_L6_coldCallbackUnderTheGasCap_worstCases() public {
+        (uint256 gasG, uint8 stateG) = _coldCase(1, 14);
+        assertEq(stateG, 0, "G: paid (box retired)");
+        (uint256 gasC, uint8 stateC) = _coldCase(16, 0);
+        assertEq(stateC, 3, "all refuse, no USDC: OWED");
+        emit log_named_uint("G: 1 refuse + 14 thin + pay, cold, mock gas", gasG);
+        emit log_named_uint("all 16 refuse -> OWED, cold, mock gas", gasC);
+        assertLt(gasG, 900_000);
+        assertLt(gasC, 900_000);
+    }
+
+    /* ---------------- helpers ---------------- */
+
+    function _refusals() internal returns (uint256 n) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 sig = keccak256("StockSkipped(address,bytes32)");
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics.length == 3 && logs[i].topics[0] == sig && logs[i].topics[2] == bytes32("transfer")) ++n;
+        }
+    }
+
+    /// @dev Buys and opens $1 boxes until one's claimOwed walk would start at stock `idx`.
+    function _openUntilClaimStartsAt(Box b, PrizeVault v, uint256 idx) internal returns (uint256 id, uint64 seq) {
+        uint256 n = v.stockCount();
+        for (uint256 j; j < 50; ++j) {
+            vm.prank(alice);
+            id = b.buyWithUsdc(SKU1, alice);
+            uint128 fee = b.quoteOpenFee();
+            vm.prank(alice);
+            b.open{value: fee}(id);
+            seq = b.boxInfo(id).sequence;
+            bytes32 seed = keccak256(abi.encode(id, seq));
+            if (uint256(keccak256(abi.encode(seed))) % n == idx) return (id, seq);
+        }
+        revert("no box starts there");
+    }
+
+    function _coldCase(uint256 refusing, uint256 thin) internal returns (uint256 used, uint8 state) {
+        (Box b, PrizeVault v,) = _newWiredPair(0);
+        address[] memory touched = new address[](16);
+        uint256 t;
+        for (uint256 i; i < refusing; ++i) touched[t++] = address(_refusing(v));
+        for (uint256 i; i < thin; ++i) {
+            MockERC20 x = new MockERC20("Thin", "THN", 8);
+            _list(v, address(x));
+            x.mint(address(v), 1); // far too little for a $1 prize
+            touched[t++] = address(x);
+        }
+        if (t < 16) {
+            MockERC20 last = new MockERC20("Pays", "PAY", 8);
+            _list(v, address(last));
+            last.mint(address(v), 10e8);
+            touched[t++] = address(last);
+        }
+        // Enough stock value that the $1 prize is under the cap even with no USDC.
+        vm.prank(alice);
+        uint256 id = b.buyWithUsdc(SKU1, alice);
+        uint128 fee = b.quoteOpenFee();
+        vm.prank(alice);
+        b.open{value: fee}(id);
+        uint64 seq = b.boxInfo(id).sequence;
+        bytes32 rand = _tier2RollStartingAt(v, 0);
+
+        for (uint256 i; i < t; ++i) vm.cool(touched[i]);
+        vm.cool(address(b));
+        vm.cool(address(v));
+        vm.cool(address(usdc));
+        vm.cool(address(registry));
+        vm.cool(alice);
+
+        uint32 cap = b.callbackGasLimit();
+        vm.prank(address(entropy));
+        uint256 g0 = gasleft();
+        (bool ok,) = address(b).call{gas: cap}(abi.encodeCall(Box._entropyCallback, (seq, address(entropy), rand)));
+        used = g0 - gasleft();
+        assertTrue(ok, "the callback completes within callbackGasLimit");
+        state = b.boxInfo(id).state;
+    }
+
+    function _refusing(PrizeVault v) internal returns (BlacklistToken x) {
+        x = new BlacklistToken("Blocked", "BLK", 8);
+        _list(v, address(x));
+        x.mint(address(v), 10e8); // $1,000
+        x.setBlacklisted(alice, true);
+    }
+
+    function _list(PrizeVault v, address token) internal {
+        registry.setStock(token, Venue.Slipstream, 0, 10, 8, true);
+        registry.setPrice(token, 100e18);
+        vm.prank(multisig);
+        v.addStock(token);
+    }
+
+    /// @dev A tier-2 ($1 on SKU1) roll whose hashed walk starts at stock `idx` of `v`.
+    function _tier2RollStartingAt(PrizeVault v, uint256 idx) internal view returns (bytes32 r) {
+        uint256 n = v.stockCount();
+        for (uint256 j;; ++j) {
+            r = bytes32(7_500 + 10_000 * j);
+            if (uint256(keccak256(abi.encode(r))) % n == idx) return r;
+        }
+    }
+}
+===== END FILE tests/BoxAuditRound3.t.sol =====
+
+===== BEGIN FILE TRIAGE-ROUND2.md | 86 lines | sha256 106e96932088946cb42af36a711b2551698743f304610205a1fc75c721fb0414 =====
+# Box audit round 2: triage
+
+Reviews:
+- **Grok:** `AUDIT_fdb77c4.md`, a full review of source `fdb77c4`.
+- **Bankr:** reviewed PASTE-6 first, then PASTE-1 … PASTE-5 when they were re-sent (part 2).
+- **Grok, combined:** `ROUND2_COMBINED_fdb77c4.md` (part 2).
+
+Every finding was reproduced before anything changed:
+- Box findings were tested in `test/box/BoxAuditRound2.t.sol`.
+- Live-lottery findings were tested with `eth_simulateV1` on the live Base node against the deployed ChipLottery `0x2F68874F0D09A1319059Eb34868E4d2e770670F0`.
+
+## Box stack
+
+| ID | Grok severity | Verdict | Action |
+|---|---|---|---|
+| BOX-L1 no instant $CHIP-only stop | Low | **CONFIRMED** (only a 48h SKU queue, or a pause that also stops USDC) | **FIXED.** Added `Box.setChipPaused(bool)` (owner, immediate) and `chipPaused`. `_liveChipSku` reverts `ChipDisabled`. Test: `test_BOXL1_*`. Box is 23,788 B (budget 24,000). |
+| BOX-M1 / LOT-M2 hook fee is buyer-side trust | Medium | **CONFIRMED as a trust assumption, not a bug.** The pool and vault are unaffected: the USDC leg is exact-output and balance-checked. | Documented. The buyer's loss is bounded by their `maxChipIn`, and the site sets it at quote +5% (`CHIP_HEADROOM_BPS=500`), re-quoted just before sending. TODO (monitoring): alert on `SetDopplerHook` / `SetDopplerHookState` for the $CHIP pool. |
+| BOX-L2 immediate PrizeVault setters | Low (residual) | **CONFIRMED, owner-trust only.** The floors still hold, and a disabled stock can push open boxes to OWED, never short. | **OWNER DECISION**: accept and document, or timelock `setStockEnabled(false)` on stocks that still hold a balance. |
+| M (restock ignores the 110% floor) | accepted | Unchanged. Bounded by ≤5% slippage per call, within the keeper caps. | **OWNER DECISION**: confirm acceptance. |
+| BOX-I1 strays | Info | CONFIRMED. Stray $CHIP on the converter goes to the next buyer as change, and it can't block a buy (`test_LOTL1_strayChipOnTheConverterDoesNotBlockABuy`). | Accepted: strays are forfeit. |
+| BOX-I2 ABI changes | Info | Checked. The keeper (`box-jobs`) and the /box UI already use `tokenIdOfRequest` and `PaidInChip`. | None. |
+| BOX-I3, E1–E3 | Info | Agreed. | E1: the keeper's stuck-reveal job already alerts. E2/E3 are accepted as design. |
+| I-PKG stale pack | — | Grok read the round-1 folder. The round-2 package is `audit/box-2026-09-24`. | None. |
+| Gate item: forge output | — | Attached below. | — |
+
+## Live ChipLottery (deployed, handles real money)
+
+| ID | Verdict on the live node | Impact now |
+|---|---|---|
+| **LOT-L1** stray-$CHIP underflow | **CONFIRMED LIVE.** Sending the wrapper 1.5× one buy's $CHIP (~1.08M) makes the next 1-ticket `buyWithChip` revert. Half a buy's worth doesn't revert, but that buyer receives the stray. | Grief costs the attacker more than one buy of $CHIP. The owner's `rescue` clears it and keeps the $CHIP. Wrapper balance is 0 today, so it isn't happening. |
+| **LOT-M1** next-drawing price | **CONFIRMED LIVE.** Simulated the Megapot owner (`0xF417…CB88`) calling `setTicketPrice(0.5 USDC)`, and the next `buyWithChip` reverts. | Latent. `ticketPrice()` = the current drawing's price = $1 today. It only bites if Megapot changes price mid-drawing, and then only until the drawing rolls. |
+| LOT-L2 stray race | Confirmed (same mechanism as LOT-L1). | Info-level. |
+| LOT-I1, I2, I3 | Doc inaccuracies. | None. |
+
+**Recommendation:** redeploy ChipLottery with:
+- `chipSpent = measured`;
+- delta-based refunds;
+- pricing from `getDrawingState(currentDrawingId()).ticketPrice`.
+
+Needs the owner's OK. Until then, the keeper or monitoring should watch `sweepZero()` on the wrapper and call `rescue` if it's non-zero.
+
+## Bankr
+
+Bankr first reviewed only PASTE-6. Its F1 is LOT-L1 (above); F2–F8 are generic or already covered in round 1. PASTE-1 … PASTE-5 were re-sent and reviewed; see part 2.
+
+---
+
+# Part 2: Grok combined review (`ROUND2_COMBINED_fdb77c4.md`) and Bankr pastes 1–5
+
+Grok found no High and no new Medium, and verified the BOX-L1 fix at `b4e5b8c`. Bankr answered Q1–Q17 with "no finding" and verified every paste's hashes. The vault-side fixes below cost the Box no bytes.
+
+| ID | Source | Verdict | Action |
+|---|---|---|---|
+| BOX-L6 callback gas with refusing stocks | Grok (Bankr: "callback gas not asserted") | **CONFIRMED as unbounded.** Every refused transfer is a caught revert. Real B20 revert = **11,086 gas**, measured on all 13 registry B20s via `eth_simulateV1` (the mock costs ~9.8k), so 15 refusals ≈ 0.83M. | **FIXED.** `MAX_FAILED_TRANSFERS = 2`: after two refused transfers the walk goes to USDC. Test `test_BOXL6_sixteenRefusingStocks_twoTriesThenUsdc` covers 16 blacklisting stocks, exactly 2 tries, $1 paid in USDC and < 900k gas. Live sim rerun: 466,863 / 464,734 at 10 stocks and 566,259 / 573,892 at 13. |
+| BOX-L3 `maxFeedAge` unbounded | Grok; Bankr ("5 days too permissive") | **Grok: CONFIRMED. Bankr's "lower it": REFUTED on live data.** Saturday 2026-09-26 15:58 UTC, all 13 registry feeds last updated Fri 16:00–23:35 UTC, so they will be ~2.9 days old at Monday's open and ~3.9 days after a holiday Monday. Anything under ~4 days marks every stock unpriced on long weekends. | **FIXED:** `MAX_FEED_AGE = 7 days` ceiling; the default stays 5 days. Weekend drift is bounded by the 91% RTP: a buyer needs a >~10% weekend move in their favour to be +EV, and `setSkuPaused` is immediate. |
+| BOX-L4 gate is value-based, not deliverable | Grok | **CONFIRMED** (config). | **FIXED:** `minUsdcBps ≥ maxPrizeBps`, enforced in `setRestockParams`, in `queueMaxPrizeBps`, and re-checked at `executeMaxPrizeBps`, because the share can move during the 48h wait. Tests `test_BOXL4_*` and `test_sweep_usdcShareFloor_coversTheLargestPrize`. The wind-down withdraw deliberately does not keep the share (NatSpec now says so). |
+| BOX-I4 tier/stock correlation | Grok | **CONFIRMED.** With n dividing 10,000, the first stock was a function of the roll. | **FIXED:** start = `keccak256(abi.encode(entropy)) % n`. Test `test_BOXI4_*`. The test helper `_rollForTier` now also picks a roll whose hash starts on stock #0. |
+| M4 / M8 / M16 surviving mutants | Grok | **CONFIRMED** as test gaps (the mocks did the checks for us). | Added a lying-router mode and a partial-fill mode to the mocks, and tests `test_M4_*`, `test_M8_*`, `test_M16_*`. **Re-ran the mutants: all killed**, as were L1, L3, L4 (both), L6 and I4. Without M8's check the buy still reverts later, on the Box's USDC balance. |
+| Production currency order untested | Grok | **CONFIRMED** gap. | `test_converter_chipAsCurrency1_asOnBase`: a $CHIP that sorts after WETH, so `chipIsCurrency0 == false` as on Base. It passes. |
+| Bare `vm.expectRevert()` | Grok | CONFIRMED (test quality). | Replaced with specific errors across Box.t, BoxVault.t and BoxRebuild.t. |
+| BOX-I6 NatSpec drift | Grok | CONFIRMED. | Fixed (the withdraw floors, and the IUniswapV4 "ticket" wording). |
+| BOX-L5 registry owner is a trust root | Grok | **CONFIRMED; owner-trust.** Registry owner = the ChipWorks Safe `0xe109…73C7`, read live, the same key that owns the Box and vault. | **OWNER DECISION** (with L2): accept and document the Safe as the trust root, or timelock. |
+| BOX-L2 / H-3 residual | Grok | Unchanged. | **OWNER DECISION.** |
+| M-restock | Grok | Unchanged; leak ≤ slippage × daily cap. | **OWNER DECISION.** |
+| BOX-I5 `setSkuPaused` blocks opening sold boxes | Grok | CONFIRMED; intended as an emergency lever. | Document in the UI. |
+| Bankr: over-quoted `wethNeeded` | Bankr | Buyer's own parameter. The excess comes back as WETH in the same tx. | UI quotes +1% (`WETH_HEADROOM_BPS=100`). No change. |
+| Bankr: unbounded stock list | Bankr | **REFUTED:** `MAX_STOCKS = 16` (Bankr's own PASTE-3 notes say so). | None. |
+| Bankr: owed prize locked to an undeliverable token | Bankr | **REFUTED:** `claimOwed` calls `settle` again, which re-walks every stock and then USDC. Nothing is locked to the token that failed. An opener refused by every asset, USDC included, stays OWED. | None. |
+| Bankr: coverage (reentrancy, entropy fee change, 18 decimals) | Bankr | Fee change: `open` reads the fee live and refunds excess, and underpaying reverts `Underpaid`. Reentrancy: every entry point is `nonReentrant` (Grok agrees). | Noted. |
+| Fork not reproduced by Grok | Grok | Public RPCs rate-limited them. | Our run with a keyed RPC passes (below). |
+
+Pack: regenerated for the new head (`audit/box-2026-09-26`).
+
+## Forge output (after the BOX-L1 fix)
+
+- `forge test --no-match-path 'test/fork/*'`: **944 passed, 0 failed** (48 suites). This includes BoxAuditRound1 and BoxAuditRound2.
+- `forge test --match-path test/fork/BoxFork.t.sol` (Base mainnet fork): **1 passed**, `test_fullCycle_onRealPools`.
+- Box runtime size: 23,788 bytes.
+- Callback gas on the live node (real B20s): see gas/box-callback-sim.out.txt. The figures are ~465k with 10 stocks and ~574k with 13, against the 1M limit and the 900k floor.
+
+## Forge output at 2943917 (after part 2)
+
+- Non-fork: **954 passed, 0 failed** (48 suites). Box suites: 135 passed.
+- `BoxFork.t.sol` on a Base mainnet fork with a keyed RPC: **1 passed** (`test_fullCycle_onRealPools`).
+- Mutation re-run on the round-2 fixes (M4, M8, M16, L1, L3, L4 ×2, L6, I4): **9 of 9 killed.**
+- Live-node callback sim (real B20s): 466,863 / 464,734 at 10 stocks, 566,259 / 573,892 at 13. See `gas/box-callback-sim.out.txt`.
+===== END FILE TRIAGE-ROUND2.md =====
+
+===== BEGIN FILE tests/BoxAuditRound2.t.sol | 244 lines | sha256 d0e732914c0879399b55767a07bc03507e09d06354b6154ac3d0c41997be1541 =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {BoxTestBase} from "./BoxTestBase.sol";
+import {Box} from "../../src/box/Box.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
+import {ChipConverter} from "../../src/box/ChipConverter.sol";
+import {PoolKey} from "../../src/interfaces/IUniswapV4.sol";
+import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {BlacklistToken} from "../mocks/HostileTokens.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Vm} from "forge-std/Test.sol";
+
+/// @notice Audit round 2 (Grok on fdb77c4). See audit/box-2026-09-24/TRIAGE-ROUND2.md.
+contract BoxAuditRound2Test is BoxTestBase {
+    /* ---------------- BOX-L1: an immediate $CHIP-only kill switch ---------------- */
+
+    /// @dev Grok BOX-L1. Before the fix, the only ways to stop $CHIP sales were the 48h SKU queue or
+    ///      a pause that also stopped USDC. `setChipPaused` stops $CHIP alone, in the same block.
+    function test_BOXL1_chipPauseStopsChipBuysAtOnce_usdcStillSells() public {
+        _buyChip(alice, SKU10); // sells before
+
+        vm.prank(multisig);
+        boxes.setChipPaused(true);
+        assertTrue(boxes.chipPaused());
+
+        (uint256 wethNeeded, uint256 chipCost) = _chipQuote(USD10);
+        uint256 max = chipCost * 101 / 100;
+        vm.prank(alice);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, max, block.timestamp + 600);
+
+        (uint256 wethBatch, uint256 chipBatch) = _chipQuote(USD10 * 2);
+        uint256 maxBatch = chipBatch * 101 / 100;
+        vm.prank(alice);
+        vm.expectRevert(Box.ChipDisabled.selector);
+        boxes.buyWithChipBatch(SKU10, alice, 2, wethBatch, maxBatch, block.timestamp + 600);
+
+        uint256 id = _buy1(bob);
+        assertEq(boxes.ownerOf(id), bob, "USDC sales are untouched");
+
+        vm.prank(multisig);
+        boxes.setChipPaused(false);
+        _buyChip(alice, SKU10); // and back on, also at once
+    }
+
+    function test_BOXL1_onlyTheOwnerCanPauseChip() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        boxes.setChipPaused(true);
+        assertFalse(boxes.chipPaused());
+    }
+
+    /* ---------------- LOT-L1 counterpart: stray $CHIP on the converter ---------------- */
+
+    /// @dev Grok LOT-L1 is on the live ChipLottery (`chipSpent = maxChipIn - chipLeft` underflows
+    ///      when someone sends the wrapper more $CHIP than a buy spends). The converter measures the
+    ///      spend instead, so a stray balance larger than a whole buy must not stop the next buy;
+    ///      the stray goes to that buyer as change, which is the documented BOX-I1 behaviour.
+    function test_LOTL1_strayChipOnTheConverterDoesNotBlockABuy() public {
+        (, uint256 chipCost) = _chipQuote(USD10);
+        uint256 stray = chipCost * 3;
+        chip.mint(address(converter), stray);
+
+        uint256 alice0 = chip.balanceOf(alice);
+        _buyChip(alice, SKU10);
+        assertEq(chip.balanceOf(address(converter)), 0, "the converter holds nothing after a buy");
+        assertEq(chip.balanceOf(alice) + chipCost, alice0 + stray, "alice paid the cost; the stray came back as change");
+    }
+
+    /* ---------------- BOX-L6: the failed-transfer walk is bounded ---------------- */
+
+    /// @dev Grok BOX-L6. An opener every stock refuses made the walk try all 16 transfers, each
+    ///      a caught revert, which came to an estimated 0.8-1.0M gas on real B20s. The walk now
+    ///      stops after MAX_FAILED_TRANSFERS and pays in USDC.
+    function test_BOXL6_sixteenRefusingStocks_twoTriesThenUsdc() public {
+        (Box b, PrizeVault v,) = _newWiredPair(1_000e6);
+        for (uint256 i; i < 16; ++i) {
+            BlacklistToken t = new BlacklistToken("Blocked", "BLK", 8);
+            registry.setStock(address(t), Venue.Slipstream, 0, 10, 8, true);
+            registry.setPrice(address(t), 100e18);
+            vm.prank(multisig);
+            v.addStock(address(t));
+            t.mint(address(v), 10e8); // $1,000 each
+            t.setBlacklisted(alice, true);
+        }
+        assertEq(v.stockCount(), v.MAX_STOCKS());
+
+        vm.prank(alice);
+        uint256 id = b.buyWithUsdc(SKU1, alice);
+        uint128 fee = b.quoteOpenFee();
+        vm.prank(alice);
+        b.open{value: fee}(id);
+        uint64 seq = b.boxInfo(id).sequence;
+
+        uint256 u0 = usdc.balanceOf(alice);
+        vm.recordLogs();
+        uint256 g0 = gasleft();
+        entropy.fulfill(seq, bytes32(uint256(7_500))); // tier 2: $1
+        uint256 used = g0 - gasleft();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        uint256 tries;
+        bytes32 sig = keccak256("StockSkipped(address,bytes32)");
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics.length == 3 && logs[i].topics[0] == sig && logs[i].topics[2] == bytes32("transfer")) {
+                ++tries;
+            }
+        }
+        assertEq(tries, v.MAX_FAILED_TRANSFERS(), "stops after two refused transfers");
+        assertEq(usdc.balanceOf(alice) - u0, 1e6, "and pays the full $1 in USDC");
+        assertLt(used, 900_000, "within the callback floor, mocks included");
+    }
+
+    /* ---------------- BOX-I4: the first stock is not a function of the tier ---------------- */
+
+    /// @dev Grok BOX-I4. With `entropy % n` and n = 2, every roll in a tier that starts on an even
+    ///      number went to NVDA first. The start is now keccak(entropy) % n.
+    function test_BOXI4_firstStockFollowsTheHash_notTheRoll() public {
+        bool sawTsla;
+        for (uint256 j; j < 8; ++j) {
+            bytes32 rand = bytes32(7_500 + 10_000 * j); // always tier 2 ($1), always even
+            uint256 id = _buy1(alice);
+            uint256 n0 = nvda.balanceOf(alice);
+            uint256 t0 = tsla.balanceOf(alice);
+            _openAndFulfill(alice, id, rand);
+            if (uint256(keccak256(abi.encode(rand))) % 2 == 0) {
+                assertEq(nvda.balanceOf(alice) - n0, 1e6, "hash picks NVDA");
+            } else {
+                assertEq(tsla.balanceOf(alice) - t0, 0.5e6, "hash picks TSLA");
+                sawTsla = true;
+            }
+        }
+        assertTrue(sawTsla, "even rolls no longer all go to NVDA");
+    }
+
+    /* ---------------- BOX-L3: a ceiling on the feed age ---------------- */
+
+    function test_BOXL3_feedAgeHasACeiling() public {
+        uint64 max = vault.MAX_FEED_AGE();
+        vm.startPrank(multisig);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        vault.setMaxFeedAge(max + 1);
+        vault.setMaxFeedAge(max);
+        vm.stopPrank();
+        assertEq(vault.maxFeedAge(), max);
+    }
+
+    /* ---------------- BOX-L4: USDC kept back always covers the cap ---------------- */
+
+    function test_BOXL4_usdcShareCannotGoBelowThePrizeCap() public {
+        vm.startPrank(multisig);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_499); // cap is 2,500
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 3_000);
+
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        vault.queueMaxPrizeBps(3_001); // above the kept share
+        vault.queueMaxPrizeBps(3_000);
+
+        // The share moves down while the cap raise waits: the raise must not land.
+        vault.setRestockParams(5_000e6, 20_000e6, 200, 2_500);
+        vm.warp(block.timestamp + 48 hours);
+        vm.expectRevert(PrizeVault.BadConfig.selector);
+        vault.executeMaxPrizeBps();
+        vm.stopPrank();
+        assertEq(vault.maxPrizeBps(), 2_500);
+    }
+
+    /* ---------------- Mutants M4, M8, M16: checks the mocks used to do for us ---------------- */
+
+    /// @dev M4 survived because the mock router enforced the minimum itself. A router that
+    ///      ignores it and short-fills must still be refused by the vault's own balance check.
+    function test_M4_restockRefusesARouterThatShortFills() public {
+        router.setLie(true);
+        vm.prank(keeper);
+        // $1,000 at $100 = 10 NVDA; minimum 98% = 9.8; the lying router delivers 5.
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.RestockShort.selector, 5e8, 9.8e8));
+        vault.restock(address(nvda), 1_000e6);
+    }
+
+    /// @dev M8: the v3 leg delivers one unit under the exact output. The converter must refuse.
+    function test_M8_converterRefusesAShortUsdcLeg() public {
+        v3.setLie(true);
+        (uint256 wethNeeded, uint256 chipCost) = _chipQuote(USD10);
+        uint256 max = chipCost * 101 / 100;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ChipConverter.UsdcShort.selector, USD10 - 1, USD10));
+        boxes.buyWithChip(SKU10, alice, wethNeeded, max, block.timestamp + 600);
+    }
+
+    /// @dev M16: the v4 leg fills part of an exact-output swap. The converter must refuse.
+    function test_M16_converterRefusesAPartialV4Fill() public {
+        pm.setShortOut(1);
+        (uint256 wethNeeded, uint256 chipCost) = _chipQuote(USD10);
+        uint256 max = chipCost * 101 / 100;
+        vm.prank(alice);
+        vm.expectRevert(ChipConverter.NothingSwapped.selector);
+        boxes.buyWithChip(SKU10, alice, wethNeeded, max, block.timestamp + 600);
+    }
+
+    /* ---------------- Production currency order: $CHIP is currency1 ---------------- */
+
+    /// @dev Grok: the unit suite only ran chipIsCurrency0 = true. On Base, WETH (0x4200...) sorts
+    ///      first, so production is false. Same buy, with a $CHIP that sorts after WETH.
+    function test_converter_chipAsCurrency1_asOnBase() public {
+        MockERC20 chip2 = new MockERC20("Chipworks", "CHIP", 18);
+        while (address(chip2) < address(weth)) chip2 = new MockERC20("Chipworks", "CHIP", 18);
+        pm.setRate(address(chip2), address(weth), 25, 1e9);
+        pm.setRate(address(weth), address(chip2), 1e9, 25);
+        chip2.mint(address(pm), 1e33);
+
+        PoolKey memory key = PoolKey({
+            currency0: address(weth), currency1: address(chip2), fee: 0x800000, tickSpacing: 200, hooks: address(0)
+        });
+        ChipConverter c2 = new ChipConverter(
+            multisig, address(chip2), address(weth), address(usdc), address(pm), address(v3), 500, key
+        );
+        assertFalse(c2.chipIsCurrency0());
+        PrizeVault v2 = new PrizeVault(
+            multisig, address(usdc), address(chip2), address(registry), address(router), address(router), 2_500
+        );
+        Box b2 = _newBox(address(v2), address(chip2), address(c2));
+        vm.startPrank(multisig);
+        v2.setBox(address(b2));
+        c2.setBox(address(b2));
+        vm.stopPrank();
+        usdc.mint(address(v2), 10_000e6);
+
+        chip2.mint(alice, 1_000_000 ether);
+        vm.prank(alice);
+        chip2.approve(address(b2), type(uint256).max);
+        (uint256 wethNeeded, uint256 chipCost) = _chipQuote(USD10); // same rates as the base CHIP
+        uint256 vault0 = usdc.balanceOf(address(v2));
+        uint256 chip0 = chip2.balanceOf(alice);
+        vm.prank(alice);
+        b2.buyWithChip(SKU10, alice, wethNeeded, chipCost * 101 / 100, block.timestamp + 600);
+        assertEq(usdc.balanceOf(address(v2)) - vault0, 9_500_000, "95% of face to the vault");
+        assertEq(chip0 - chip2.balanceOf(alice), chipCost, "the buyer paid the quote");
+        (uint256 c, uint256 w, uint256 u) = c2.sweepZero();
+        assertEq(c + w + u, 0);
+    }
+}
+===== END FILE tests/BoxAuditRound2.t.sol =====
+
+===== BEGIN FILE TRIAGE-ROUND1.md | 41 lines | sha256 ca69af5f20c1418e11381ab6dbb767b989159e6b71e908e4593f9f4d639e66ca =====
+# Box audit, round 1: triage
+
+Round 1 reviewed commit `740fc37` (package source `c98ee57`). **Bankr** returned no findings on
+Q1–Q15. **Grok** returned 3 High, 4 Medium, 4 Low, and 2 more (F-1, F-2) from a deeper pass.
+
+**Every finding was reproduced as a test of the SAFE property before anything changed**
+(`test/box/BoxAuditRound1.t.sol`): a test that failed on the audited code confirmed the finding,
+one that passed refuted it. Fixes were then made and the same tests re-run green.
+
+## Receipts
+
+Both reviewers' SHA-256s matched the package for every file. Bankr's line counts are uniformly +1
+(a counting convention: the trailing newline); Grok's match exactly.
+
+## Dispositions
+
+| ID | Sev (theirs) | Verdict | What happened |
+|---|---|---|---|
+| **H-1** | High | **Confirmed, and worse than reported.** Fixed. | Beyond the deferred funding Grok described, a SKU's `$CHIP` price was a fixed number with a 48h timelock. With `$CHIP` halved, a "$10" box funded the pool **$4.75** against $9.10 of liability, an arbitrage open to anyone. **Fix: swap `$CHIP` to the exact USDC price inside the buy** (`buyWithChip(sku, to, wethNeeded, maxChipIn, deadline)`, the deployed ChipLottery's exact-output route). The same test now shows the buyer paying twice the `$CHIP` and the pool getting its full $9.50. |
+| **H-2** | High | **Confirmed.** Fixed by construction. | The owner's 48h `$CHIP` recovery could take unsold box `$CHIP` while its boxes were outstanding. The converter now holds nothing between calls, and the recovery path is removed. |
+| **H-3** | High | **Refuted.** | A stale-marked stock is excluded from inventory both before and after an owner withdrawal, so withdrawing it cannot take the pool below any floor. Test: after the withdrawal, USDC ≥ 110% of liability, inventory ≥ the jackpot reserve, every SKU still covered. |
+| **M-1** | Medium | **Accepted as design.** | `restock` swaps USDC for stock at the Chainlink mark (≤2% slippage), so pool value is preserved, and it keeps the `minUsdcBps` USDC share. The 110%-in-USDC floor governs value **leaving** the pool (sweep, withdraw), not reallocation inside it. More stock means more ways to pay, not fewer. |
+| **M-2** | Medium | **Refuted as a defect.** | True that raising `maxPrizeBps` lowers the reserve, by design: the reserve is the pool size at which the largest prize is payable under the current cap. Test: a pool at exactly the reserve pays the top prize in full at 25% and at 50%. Raising the cap is 48h-timelocked. |
+| **M-3** | Medium | **Closed by the H-1 fix.** | There is no keeper `$CHIP` sale any more. |
+| **M-4** | Medium | **Accepted.** | Prize stocks come only from the curated StockRegistry (Coinbase B20s, not fee-on-transfer). Adding recipient balance checks inside the gas-bounded callback costs gas for a token class the registry cannot list. |
+| **L-1** | Low | **Moot.** | The converter now holds nothing between calls, so `rescue` reaching USDC/WETH reaches only strays (the ChipLottery reasoning). |
+| **L-2** | Low | **Accepted; fixed.** | The vault's self-call guard now reverts `OnlySelf`, not `OnlyBox`. |
+| **L-3** | Low | **Accepted as-is.** | A contract that rejects ETH can send the exact fee (`quoteOpenFee()`); there is then no refund. |
+| **L-4** | Low | **Accepted as-is.** | `sealedSupply` counts sealed, opening and owed boxes: the conservative count the retire guard needs. Documented. |
+| **F-1** | Medium | **Closed by the H-1 fix.** | Immediate owner `setPriceFloor` / `setLimits` / `setKeeper` on the converter no longer exist. |
+| **F-2** | Medium | **Confirmed.** Fixed. | Pyth numbers requests **per provider**, but the Box keyed them by sequence alone. After a default-provider change, a reveal paid the wrong box (test: box A's reveal paid box B, and A was stranded). Requests are now keyed by `(provider, sequence)` and `_fulfill` checks the provider. |
+
+## On the reviews themselves
+
+- **Bankr's Q7 reasoning is wrong, though the conclusion holds.** It says "no external calls exist
+  in the callback execution path". There are: registry price reads, B20 balance reads and the prize
+  transfer. They are bounded by the 16-stock cap and measured on the live node (~466k–573k gas
+  against a 1,000,000 limit).
+- **Grok's H-1 understated the problem.** It framed the risk as delayed funding and keeper
+  discretion. The fixed-`$CHIP`-price arbitrage, open to any buyer, is the real exposure, and it is
+  what the fix targets.
+===== END FILE TRIAGE-ROUND1.md =====
+
+===== BEGIN FILE tests/BoxAuditRound1.t.sol | 118 lines | sha256 5826dd4516e682c77befb65eca88e65c3e87ad57e292a8de2f3639abcb26d58b =====
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {BoxTestBase} from "./BoxTestBase.sol";
+import {IBox} from "../../src/interfaces/IBox.sol";
+import {PrizeVault} from "../../src/box/PrizeVault.sol";
+
+/// @notice Audit round 1 (Bankr + Grok on 740fc37): each finding reproduced as a test of the SAFE
+///         property before anything is changed. A test that fails on the audited code confirms the
+///         finding; one that passes refutes it. See audit/box-2026-09-23/TRIAGE-ROUND1.md.
+contract BoxAuditRound1Test is BoxTestBase {
+    /* ---------------- F-2: Pyth sequence numbers are per provider ---------------- */
+
+    /// @dev Grok F-2. Two opens from two providers can both be sequence 1. The first provider's
+    ///      reveal must pay the box IT was requested for, and must not settle the other box.
+    function test_F2_aRevealPaysOnlyTheBoxItWasRequestedFor() public {
+        uint256 a = _buy1(alice);
+        uint64 seqA = _open(alice, a); // provider: the mock itself
+
+        address p2 = makeAddr("provider-2");
+        entropy.setDefaultProvider(p2); // Pyth changes its default provider
+        uint256 b = _buy1(bob);
+        uint64 seqB = _open(bob, b);
+        assertEq(seqA, seqB, "both requests are sequence 1, from different providers");
+
+        uint256 aliceN0 = nvda.balanceOf(alice);
+        uint256 bobN0 = nvda.balanceOf(bob);
+        entropy.fulfillFrom(address(entropy), seqA, _rollForTier(2)); // A's reveal: Uncommon, $1
+        assertEq(nvda.balanceOf(alice) - aliceN0, 1e6, "A's reveal pays A");
+        assertEq(nvda.balanceOf(bob), bobN0, "and does not touch B");
+        assertEq(boxes.boxInfo(b).state, boxes.STATE_OPENING(), "B still waits for ITS reveal");
+
+        entropy.fulfillFrom(p2, seqB, _rollForTier(2));
+        assertEq(nvda.balanceOf(bob) - bobN0, 1e6, "B's own reveal pays B");
+    }
+
+    /* ---------------- H-1 (strengthened): a fixed $CHIP price ---------------- */
+
+    /// @dev Grok H-1, and the sharper form of it. The audited design took a fixed $CHIP price per
+    ///      box (48h to change) and sold it later: when $CHIP halved, a "$10" box put $4.75 into the
+    ///      pool against $9.10 of liability. FIXED by swapping at buy: the buyer pays whatever $CHIP
+    ///      buys the exact price, so the pool gets 95% of face however far $CHIP falls.
+    function test_H1_aChipBoxFundsThePoolAtItsFace_evenWhenChipFalls() public {
+        pm.setRate(address(chip), address(weth), 125, 1e10); // $CHIP halves
+        pm.setRate(address(weth), address(chip), 1e10, 125);
+        (, uint256 cost) = _chipQuote(USD10);
+        assertEq(cost, 2 * CHIP10, "the buyer now pays twice the $CHIP");
+        uint256 vault0 = usdc.balanceOf(address(vault));
+        _buyChip(alice, SKU10);
+        uint256 funded = usdc.balanceOf(address(vault)) - vault0;
+        assertGe(funded, 9_500_000, "a $10 box must fund the pool with $9.50");
+    }
+
+    /* ---------------- H-2: owner $CHIP recovery against live liability ---------------- */
+
+    /// @dev Grok H-2. The audited converter held box $CHIP until a keeper sold it, and the owner
+    ///      could recover it after 48h while the boxes it paid for were outstanding. FIXED by
+    ///      construction: the converter now holds nothing between calls, so there is no $CHIP to
+    ///      recover, and the recovery path is gone.
+    function test_H2_chipRecoveryCannotStrandBoxesItPaidFor() public {
+        _buyChip(alice, SKU10);
+        (uint256 c, uint256 w, uint256 u) = converter.sweepZero();
+        assertEq(c + w + u, 0, "nothing on the converter for anyone to take");
+        assertGt(boxes.outstandingLiabilityUsd(), 0);
+        assertEq(usdc.balanceOf(address(vault)), 10_000e6 + 9_500_000, "and the box is already paid for");
+    }
+
+    /* ---------------- H-3: withdrawing a stale-marked stock ---------------- */
+
+    /// @dev Grok H-3. A stale-marked stock is not counted in inventory, before or after the
+    ///      withdraw, so taking it cannot take the pool below the floors the pool is held to.
+    ///      Safe property: after the withdraw, USDC >= 110% of liability, inventory >= the
+    ///      jackpot reserve, and every SKU is still covered.
+    function test_H3_withdrawingAStaleStockLeavesEveryFloorIntact() public {
+        for (uint256 i; i < 10; ++i) {
+            vm.prank(alice);
+            boxes.buyWithUsdc(SKU25, alice);
+        }
+        uint256 allNvda = nvda.balanceOf(address(vault)); // read first: prank binds to the next call
+        vm.prank(multisig);
+        vault.queueSurplusWithdraw(address(nvda), multisig, allNvda);
+        vm.warp(block.timestamp + 48 hours);
+        registry.setPrice(address(tsla), TSLA_PRICE); // TSLA fresh, NVDA stale (6 days)
+        registry.setStalePrice(address(nvda), NVDA_PRICE, block.timestamp - 6 days);
+
+        vm.prank(multisig);
+        vault.executeSurplusWithdraw();
+
+        uint256 liability = boxes.outstandingLiabilityUsd();
+        assertGe(usdc.balanceOf(address(vault)), liability * 11_000 / 10_000, "USDC >= 110% of liability");
+        assertGe(vault.inventoryUsd(), vault.jackpotReserveUsd(), "inventory >= jackpot reserve");
+        assertTrue(boxes.isSkuCovered(SKU25), "the $25 SKU is still covered");
+    }
+
+    /* ---------------- M-2: raising maxPrizeBps lowers the reserve ---------------- */
+
+    /// @dev Grok M-2. True arithmetically, and by design: the reserve is the pool size at which
+    ///      the largest prize is payable under the CURRENT cap. Safe property at either cap: a pool
+    ///      swept down to exactly the reserve can still pay the largest live prize in full.
+    function test_M2_aPoolAtTheReserveStillPaysTheJackpot_atAnyCap() public {
+        uint256 top = boxes.maxLivePrizeUsd();
+        assertGe(vault.jackpotReserveUsd() * vault.maxPrizeBps() / 10_000, top, "25% cap");
+        vm.startPrank(multisig);
+        vault.queueMaxPrizeBps(5_000);
+        vm.warp(block.timestamp + 48 hours);
+        vault.executeMaxPrizeBps();
+        vm.stopPrank();
+        assertEq(vault.jackpotReserveUsd(), 1_800e6, "the reserve halves when the cap doubles");
+        assertGe(vault.jackpotReserveUsd() * vault.maxPrizeBps() / 10_000, top, "50% cap");
+    }
+
+    /* ---------------- L-2: the self-call guard names itself ---------------- */
+
+    function test_L2_extTransferIsSelfOnly() public {
+        vm.expectRevert(PrizeVault.OnlySelf.selector);
+        vault.extTransfer(address(usdc), alice, 1);
+    }
+}
+===== END FILE tests/BoxAuditRound1.t.sol =====
+
+===== END OF PASTE-3-triage-and-round-tests.txt: 6 files. If you can read this line, nothing was cut off. =====

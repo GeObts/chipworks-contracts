@@ -13,8 +13,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '../..');
-// The package folder: BOX_AUDIT_DIR, default round 3. Round 1 was audit/box-2026-09-23, round 2 audit/box-2026-09-24.
-const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-26');
+// The package folder: BOX_AUDIT_DIR, default round 4. Rounds 1-3: audit/box-2026-09-23, -09-24, -09-26.
+const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-26-r4');
 const commit = process.argv[2];
 if (!commit) throw new Error('usage: node tools/box/audit-pack.cjs <commit> [entropy-src.json]');
 
@@ -45,6 +45,10 @@ const P2 = [
   ['tools/box/box-callback-sim.out.txt', 'gas/box-callback-sim.out.txt'],
   [null, 'TRIAGE-ROUND2.md'],
   ['test/box/BoxAuditRound2.t.sol', 'tests/BoxAuditRound2.t.sol'],
+  [null, 'TRIAGE-ROUND3.md'],
+  ['test/box/BoxAuditRound3.t.sol', 'tests/BoxAuditRound3.t.sol'],
+  ['tools/box/box-refusing-opener-sim.cjs', 'gas/box-refusing-opener-sim.cjs'],
+  ['tools/box/box-refusing-opener-sim.out.txt', 'gas/box-refusing-opener-sim.out.txt'],
 ];
 const P3 = [['src/lottery/ChipLottery.sol', 'reference/ChipLottery.sol']];
 
@@ -96,18 +100,19 @@ const paste = (name, title, list) => {
 // Kept under ~75k characters each: a paste cut off in transit is the failure section 0 exists for.
 paste('PASTE-1-brief-and-box.txt', 'Priority 1: the brief and Box.sol.', P1.slice(0, 2));
 paste('PASTE-2-vault-converter-interfaces.txt', 'Priority 1: PrizeVault, ChipConverter and every interface.', P1.slice(2));
-paste('PASTE-3-triage-and-rebuild-tests.txt', 'Round 2 and round 1 triage, their verification tests, and the rebuild tests.', [P2[14], P2[15], P2[6], P2[5], P2[0]]);
-paste('PASTE-4-poc-fork-and-gas.txt', 'The audit PoCs, the Base fork test, and the live-node gas simulation with its output.',
-  [P2[1], P2[7], P2[12], P2[13]]);
-paste('PASTE-5-remaining-tests-and-mocks.txt', 'The remaining unit tests, the shared fixture and the mocks.',
-  [P2[2], P2[3], P2[4], P2[8], P2[9], P2[10], P2[11]]);
-paste('PASTE-6-reference-optional.txt', 'Optional reference: the v4 swap pattern the converter follows, and Pyth\'s own Entropy code.', P3);
+paste('PASTE-3-triage-and-round-tests.txt', 'The triage of rounds 3, 2 and 1, each with its verification tests.',
+  [P2[16], P2[17], P2[14], P2[15], P2[6], P2[5]]);
+paste('PASTE-4-poc-fork-and-gas.txt', 'The audit PoCs, the Base fork test, and both live-node gas simulations with their output.',
+  [P2[1], P2[7], P2[12], P2[13], P2[18], P2[19]]);
+paste('PASTE-5-rebuild-vault-tests-and-fixture.txt', 'The rebuild and vault unit tests and the shared fixture.', [P2[0], P2[2], P2[4]]);
+paste('PASTE-6-box-tests-and-mocks.txt', 'The remaining unit tests and the mocks.', [P2[3], P2[8], P2[9], P2[10], P2[11]]);
+paste('PASTE-7-reference-optional.txt', "Optional reference: the v4 swap pattern the converter follows, and Pyth's own Entropy code.", P3);
 
 const seen = new Set();
 const uniq = all.filter((m) => !seen.has(m.rel) && seen.add(m.rel));
 fs.writeFileSync(path.join(PKG, 'SHA256SUMS'), uniq.map((m) => `${m.sha}  ${m.rel}`).join('\n') + '\n');
 fs.writeFileSync(path.join(PKG, 'MANIFEST.md'), '# Manifest\n\nSHA-256 over the exact file bytes (UTF-8, LF, trailing newline included). Line count = number of newline-terminated lines.\n\n'
   + '| file | lines | sha256 | last non-empty line |\n|---|---|---|---|\n'
-  + uniq.map((m) => `| ${m.rel} | ${m.lines} | ${m.sha} | \`${m.last.slice(0, 80).replace(/\|/g, '\\|')}\` |`).join('\n') + '\n');
+  + uniq.map((m) => `| ${m.rel} | ${m.lines} | ${m.sha} | \`${m.last.replace(/\|/g, '\\|')}\` |`).join('\n') + '\n');
 fs.writeFileSync(path.join(PKG, '.gitattributes'), '* -text\n');
 console.log(`manifest: ${uniq.length} files`);

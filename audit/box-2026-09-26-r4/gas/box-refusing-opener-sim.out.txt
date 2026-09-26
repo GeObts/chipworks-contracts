@@ -1,0 +1,8 @@
+# forge build && node tools/box/box-refusing-opener-sim.cjs
+block 51826782; 13 registered stocks listed; 10 funded by real restocks; opener 0x098B716B8Aaf21512996dC57EB0615e2383E2f96
+USDC transfer to the opener: REFUSED
+callback (walk starts on a funded stock): ok  gas 580918  refused transfers 2  state 3 (3 = OWED)
+claimOwed (uncapped walk, 10 funded refusals + USDC): reverted StillUnpayable(1,10000000)  gas 661960
+callbackGasLimit 1000000; per extra listed stock (committed sim slope) ~33.1k -> at MAX_STOCKS = 16: ~680218
+
+OK: the refusing-opener worst case fits under the 900k floor on real B20s.

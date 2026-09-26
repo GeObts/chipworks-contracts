@@ -1,0 +1,56 @@
+AUDIT REQUEST, ROUND 4: ChipWorks Box
+Contracts: Box.sol, PrizeVault.sol, ChipConverter.sol. Solidity 0.8.24, Base mainnet, not yet deployed.
+Source commit: a73fa4d (chipworks-contracts, branch box-rebuild). Every file under contracts/, tests/, gas/ and
+reference/ equals that commit. The brief and the TRIAGE files are pack documents, committed with the pack.
+Round 3 reviewed 81c7e2e (src identical to 2943917).
+
+WHAT CHANGED SINCE ROUND 3
+Details: section R4 of the brief and TRIAGE-ROUND3.md (paste 3).
+
+1. BOX-R3-L1 (fixed): the refused-transfer cap no longer strands a payable box.
+   - The cap now applies only inside the Pyth callback. settle() takes a new flag, gasBounded:
+     true from the callback, false from claimOwed.
+   - claimOwed is an ordinary transaction, so it walks every stock and then USDC. A box sent to OWED by
+     two refusals is paid by the next stock that accepts it.
+   - The cap is deliberately not tied to gasleft(): on the revealWithCallback recovery path the caller
+     picks the gas, so gasleft() would let them choose between stock and USDC.
+   - Box is now 23,801 bytes.
+
+2. Worst-case callback gas, measured on the live node instead of estimated
+   (gas/box-refusing-opener-sim.cjs and its .out.txt, paste 4).
+   - The opener is an OFAC-listed address. Both B20 policy and Circle's USDC refuse transfers to it.
+   - 13 stocks listed, 10 of them funded by real restocks.
+   - Result: 580,918 gas, with 2 real refused transfers, USDC refused, and the box going OWED.
+   - Estimated about 680k at MAX_STOCKS = 16, against the 900k floor.
+
+3. Tests
+   - Scenario H.
+   - claimOwed walking past every refusing stock.
+   - A cold callback delivered with exactly callbackGasLimit gas.
+   - The mock pool manager now checks the direction of the price limit, so mutant X1 is killed in unit tests.
+
+4. Results
+   - 957 non-fork tests pass. The Base fork test passes.
+   - Mutation run on this round's changes: 5 of 5 killed.
+
+5. Brief and pack errors 1-10 from round 3 are fixed. The manifest no longer truncates lines.
+
+ATTACK HARDEST
+1. The gasBounded flag.
+   - Can the callback ever run the unbounded walk?
+   - Can claimOwed be used to grief, or to exceed block gas?
+   - Can anyone other than the Box call settle?
+   - Does the callback still never revert?
+2. Anything that makes a sold box end up paid short, paid twice, or stuck.
+
+OPEN OWNER DECISIONS (tell us if you rate them higher)
+- BOX-L2: PrizeVault setters take effect immediately.
+- BOX-L5: the StockRegistry owner is the same Safe, with no timelock.
+- BOX-L3 residual: the 5-day window can accept a feed frozen for a corporate action as fresh.
+- H-3 residual.
+- M-restock: restock ignores the 110% floor.
+
+WHAT WE NEED BACK
+- For each finding: severity, file and line, the exact calls that exploit it, and a fix.
+- For each of Q1-Q17: state "no finding" if there is none.
+- Before any findings, fill in the receipt table from section 0 of the brief.
