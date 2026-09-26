@@ -70,7 +70,9 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
 
     uint16 public constant override FEE_BPS = 500;
     uint16 public constant override WEIGHT_DENOM = 10_000;
-    uint8 public constant MAX_SKUS = 3;
+    /// @notice Box-size slots. Five are set at launch; slots 5-7 can be added later through
+    ///         {queueSku} (48h). A slot can be repriced or retired, never removed from this count.
+    uint8 public constant MAX_SKUS = 8;
     uint8 public constant MAX_TIERS = 8;
     uint8 public constant STATE_SEALED = 1;
     uint8 public constant STATE_OPENING = 2;
@@ -92,6 +94,8 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     uint8 public constant SKU_ONE_USD = 0;
     uint8 public constant SKU_TEN_USD = 1;
     uint8 public constant SKU_TWENTY_FIVE_USD = 2;
+    uint8 public constant SKU_FIFTY_USD = 3;
+    uint8 public constant SKU_HUNDRED_USD = 4;
 
     /// @notice Default fee recipient: the live FeeSplitter (80% Pot / 20% ops). It splits any
     ///        ERC-20 permissionlessly; the Pot's round currency is USDC, which is why every
@@ -295,16 +299,21 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         converter = converter_;
         entropy = entropy_;
 
+        // Launch sizes: $1 / $10 / $25 on sale; $50 / $100 exist but start PAUSED. A paused size
+        // that has never sold holds nothing in {maxLivePrizeUsd}, so it does not hold back the
+        // sweep. {setSkuPaused} (immediate) puts it on sale, and the sell gate then opens it by
+        // itself once the pool covers its jackpot, exactly like the smaller sizes.
         bool chipOn = converter_ != address(0);
-        _skus[SKU_ONE_USD] = Sku({exists: true, paused: false, usdcPrice: 1_000_000, chipEnabled: chipOn});
-        _skus[SKU_TEN_USD] = Sku({exists: true, paused: false, usdcPrice: 10_000_000, chipEnabled: chipOn});
-        _skus[SKU_TWENTY_FIVE_USD] = Sku({exists: true, paused: false, usdcPrice: 25_000_000, chipEnabled: chipOn});
+        uint96[5] memory prices = [uint96(1_000_000), 10_000_000, 25_000_000, 50_000_000, 100_000_000];
+        for (uint8 i; i < 5; ++i) {
+            bool held = i >= SKU_FIFTY_USD;
+            _skus[i] = Sku({exists: true, paused: held, usdcPrice: prices[i], chipEnabled: chipOn});
+            emit SkuExecuted(i, prices[i], chipOn);
+            if (held) emit SkuPaused(i, true);
+        }
 
         _loadLaunchOdds();
         emit TreasurySet(address(0), treasury_);
-        emit SkuExecuted(SKU_ONE_USD, 1_000_000, chipOn);
-        emit SkuExecuted(SKU_TEN_USD, 10_000_000, chipOn);
-        emit SkuExecuted(SKU_TWENTY_FIVE_USD, 25_000_000, chipOn);
         emit OddsExecuted(_oddsSnapshots[0].count, rtpBps());
     }
 
@@ -907,12 +916,13 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
 
     function _loadLaunchOdds() internal {
         // weight, prizeBps. EV = sum(w * prizeBps) / 10_000 = 9_100 bps = 91.00% RTP.
+        // Owner's "option B" (2026-09-26): nobody gets back less than half; 35% in the lowest tier.
         OddsSnapshot storage s = _oddsSnapshots[0];
-        s.tiers[0] = PrizeTier({weight: 4_500, prizeBps: 2_000}); // 45% → 0.20×
-        s.tiers[1] = PrizeTier({weight: 3_000, prizeBps: 5_000}); // 30% → 0.50×
-        s.tiers[2] = PrizeTier({weight: 1_500, prizeBps: 10_000}); // 15% → 1.00×
-        s.tiers[3] = PrizeTier({weight: 700, prizeBps: 20_000}); //  7% → 2.00×
-        s.tiers[4] = PrizeTier({weight: 250, prizeBps: 80_000}); // 2.5% → 8.00×
+        s.tiers[0] = PrizeTier({weight: 3_500, prizeBps: 5_000}); // 35% → 0.50×
+        s.tiers[1] = PrizeTier({weight: 5_000, prizeBps: 6_000}); // 50% → 0.60×
+        s.tiers[2] = PrizeTier({weight: 950, prizeBps: 10_000}); // 9.5% → 1.00×
+        s.tiers[3] = PrizeTier({weight: 400, prizeBps: 20_000}); //  4% → 2.00×
+        s.tiers[4] = PrizeTier({weight: 100, prizeBps: 80_000}); //  1% → 8.00×
         s.tiers[5] = PrizeTier({weight: 50, prizeBps: 360_000}); // 0.5% → 36.00×
         s.count = 6;
     }
