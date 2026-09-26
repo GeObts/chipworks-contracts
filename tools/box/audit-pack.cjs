@@ -13,8 +13,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '../..');
-// The package folder: BOX_AUDIT_DIR, default round 4. Rounds 1-3: audit/box-2026-09-23, -09-24, -09-26.
-const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-26-r4');
+// The package folder: BOX_AUDIT_DIR, default round 5. Rounds 1-4: audit/box-2026-09-23, -09-24, -09-26, -09-26-r4.
+const PKG = path.join(ROOT, process.env.BOX_AUDIT_DIR || 'audit/box-2026-09-26-r5');
 const commit = process.argv[2];
 if (!commit) throw new Error('usage: node tools/box/audit-pack.cjs <commit> [entropy-src.json]');
 
@@ -49,6 +49,8 @@ const P2 = [
   ['test/box/BoxAuditRound3.t.sol', 'tests/BoxAuditRound3.t.sol'],
   ['tools/box/box-refusing-opener-sim.cjs', 'gas/box-refusing-opener-sim.cjs'],
   ['tools/box/box-refusing-opener-sim.out.txt', 'gas/box-refusing-opener-sim.out.txt'],
+  [null, 'TRIAGE-ROUND4.md'],
+  ['test/box/BoxLaunchConfig.t.sol', 'tests/BoxLaunchConfig.t.sol'],
 ];
 const P3 = [['src/lottery/ChipLottery.sol', 'reference/ChipLottery.sol']];
 
@@ -100,8 +102,8 @@ const paste = (name, title, list) => {
 // Kept under ~75k characters each: a paste cut off in transit is the failure section 0 exists for.
 paste('PASTE-1-brief-and-box.txt', 'Priority 1: the brief and Box.sol.', P1.slice(0, 2));
 paste('PASTE-2-vault-converter-interfaces.txt', 'Priority 1: PrizeVault, ChipConverter and every interface.', P1.slice(2));
-paste('PASTE-3-triage-and-round-tests.txt', 'The triage of rounds 3, 2 and 1, each with its verification tests.',
-  [P2[16], P2[17], P2[14], P2[15], P2[6], P2[5]]);
+paste('PASTE-3-triage-and-round-tests.txt', 'The triage of rounds 4, 3, 2 and 1 (round 4 records the owner decisions), each with its verification tests.',
+  [P2[20], P2[21], P2[16], P2[17], P2[14], P2[15], P2[6], P2[5]]);
 paste('PASTE-4-poc-fork-and-gas.txt', 'The audit PoCs, the Base fork test, and both live-node gas simulations with their output.',
   [P2[1], P2[7], P2[12], P2[13], P2[18], P2[19]]);
 paste('PASTE-5-rebuild-vault-tests-and-fixture.txt', 'The rebuild and vault unit tests and the shared fixture.', [P2[0], P2[2], P2[4]]);

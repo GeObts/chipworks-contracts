@@ -1,0 +1,15 @@
+Round 4 (a73fa4d) is superseded. Please review ROUND 5 instead: commit e150d61, branch box-rebuild,
+repo github.com/GeObts/chipworks-contracts. It is the final code before mainnet.
+
+HOW THIS WORKS (please follow exactly; last time only paste 6 was reviewed):
+- I will send 7 pastes, PASTE-1 to PASTE-7, one message each.
+- After each paste, reply with ONLY its receipt rows (file | line count | sha-256 | last non-empty line),
+  plus "received PASTE-n of 7". Do not start the review yet.
+- After PASTE-7, do the full review of everything: all 38 files.
+- Priorities: pastes 1 and 2 hold the contracts; paste 3 holds the triage and owner decisions.
+- If a paste looks cut off (no "===== END OF" line), say so and I will resend it.
+
+The review is the same as the cover note below: findings with severity, file and line, the exact exploit
+calls and a fix, plus an explicit verdict on each of Q1-Q20.
+
+(The AUDIT-THIS.txt cover note follows. Then comes PASTE-1.)

@@ -1,0 +1,52 @@
+AUDIT REQUEST, ROUND 5 (final before mainnet): ChipWorks Box
+Contracts: Box.sol, PrizeVault.sol, ChipConverter.sol. Solidity 0.8.24, Base mainnet, not yet deployed.
+Source commit: e150d61 (github.com/GeObts/chipworks-contracts, branch box-rebuild). Every file under contracts/,
+tests/, gas/ and reference/ equals that commit. The brief and the TRIAGE files are pack documents.
+Toolchain for every number: Foundry 1.7.1, solc 0.8.24.
+This round supersedes round 4 (a73fa4d). Please review this one.
+
+This is one of TWO independent reviews. Do not look for or use the other review.
+
+WHAT CHANGED SINCE ROUND 4
+Details: section R5 of the brief, and TRIAGE-ROUND4.md in paste 3.
+
+1. Launch odds, chosen by the owner. Weights sum to 10,000; RTP is exactly 91.00%.
+
+   Weight   Share   Pays
+   3,500    35%     0.5x
+   5,000    50%     0.6x
+     950     9.5%   1x
+     400     4%     2x
+     100     1%     8x
+      50     0.5%   36x
+
+2. Box sizes: MAX_SKUS goes from 3 to 8.
+   - At launch, the $1, $10 and $25 boxes are on sale.
+   - The $50 and $100 boxes exist but are paused. A paused size that has never sold does not count
+     toward the sweep reserve.
+   - Unpausing puts a size on sale immediately. It then opens by itself once the pool covers its
+     jackpot: a $7,200 pool for the $50 box, a $14,400 pool for the $100 box.
+3. Owner decisions, now documented in brief section 8, items 8-13, and accepted:
+   - BOX-R4-L1: a prize owed to a sanctioned winner is never paid.
+   - BOX-L5: the price registry is trusted to the Safe.
+   - BOX-L3: stock prices can be up to 5 days old.
+   - BOX-L2: vault settings take effect immediately.
+   - H-3 residual.
+   - M-restock.
+4. Round-4 test and pack issues are fixed.
+5. Results:
+   - 959 non-fork tests pass.
+   - The Base fork test passes.
+   - The live-node worst-case callback uses 580,918 gas (about 685k extrapolated to 16 stocks),
+     against a 900k floor.
+
+WHAT TO ATTACK HARDEST
+1. Q18, the size and reserve logic: paused and unpaused sizes, the sweep and withdraw, and sold boxes.
+2. Q19, the odds: the table, the roll-band boundaries, the 91% RTP, and 36x on every size.
+3. Q20, anything in the full contract set that earlier rounds missed. That includes the owner-accepted
+   items, but only if you find a new way to exploit them.
+
+WHAT WE NEED BACK
+- For each finding: severity, file and line, the exact calls that exploit it, and a fix.
+- Q1-Q20: for every question with no finding, say "no finding".
+- Before any findings, fill in the receipt table from brief section 0, for ALL files in ALL 7 pastes.
