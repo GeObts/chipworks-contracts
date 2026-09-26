@@ -63,7 +63,7 @@ contract BoxTest is BoxTestBase {
     }
 
     function test_everyRollMapsToATier() public view {
-        uint16[6] memory weights = [uint16(4_500), 3_000, 1_500, 700, 250, 50];
+        uint16[6] memory weights = [uint16(3_500), 5_000, 950, 400, 100, 50];
         uint256[6] memory hits;
         for (uint256 roll; roll < 10_000; ++roll) {
             (uint8 tierId,,,) = boxes.previewDraw(bytes32(roll), SKU1);
@@ -566,7 +566,7 @@ contract BoxTest is BoxTestBase {
         boxes.ownerOf(id);
         assertEq(boxes.sealedSupply(SKU1), 0);
         assertEq(boxes.outstandingLiabilityUsd(), 0);
-        // $1 at $100/NVDA; roll 7500 is even so NVDA (index 0) is tried first.
+        // $1 at $100/NVDA; _rollForTier picks a roll whose hashed walk starts on NVDA (index 0).
         assertEq(nvda.balanceOf(alice), 1e6);
     }
 
@@ -575,22 +575,22 @@ contract BoxTest is BoxTestBase {
     function test_dustAndCommonTiersPayStockNotChip() public {
         uint256 aliceChip0 = chip.balanceOf(alice);
 
-        // Common, 0.50x -> $0.50. Roll 4500 is even -> NVDA first. $0.50 at $100 = 0.005 NVDA.
+        // Common, 0.60x -> $0.60. _rollForTier(1) lands on tier 1 with NVDA first. $0.60 at $100 = 0.006 NVDA.
         uint256 id = _buy1(alice);
         bytes32 rand = _rollForTier(1);
         (uint8 tierId,,, uint256 prizeUsd) = boxes.previewDraw(rand, SKU1);
         assertEq(tierId, 1);
-        assertEq(prizeUsd, 500_000);
+        assertEq(prizeUsd, 600_000);
         uint64 seq = _open(alice, id);
         vm.expectEmit(true, true, true, true);
-        emit BoxOpened(alice, id, seq, SKU1, 1, 5_000, 500_000, address(nvda), 5e5, 0, false, false);
+        emit BoxOpened(alice, id, seq, SKU1, 1, 6_000, 600_000, address(nvda), 6e5, 0, false, false);
         entropy.fulfill(seq, rand);
-        assertEq(nvda.balanceOf(alice), 5e5);
+        assertEq(nvda.balanceOf(alice), 6e5);
 
-        // Dust, 0.20x -> $0.20. Roll 0 -> NVDA first. $0.20 at $100 = 0.002 NVDA.
+        // Dust, 0.50x -> $0.50. _rollForTier(0) -> NVDA first. $0.50 at $100 = 0.005 NVDA.
         uint256 id2 = _buy1(alice);
         _openAndFulfill(alice, id2, _rollForTier(0));
-        assertEq(nvda.balanceOf(alice), 5e5 + 2e5);
+        assertEq(nvda.balanceOf(alice), 6e5 + 5e5);
 
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
@@ -613,13 +613,13 @@ contract BoxTest is BoxTestBase {
         _openAndFulfill(bob, id, _rollForTier(0));
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
-        assertEq(nvda.balanceOf(bob), 2e5, "Dust ($0.20) paid to the giftee in NVDA");
+        assertEq(nvda.balanceOf(bob), 5e5, "Dust ($0.50) paid to the giftee in NVDA");
         assertEq(nvda.balanceOf(alice), 0);
     }
 
     function test_openEmitsDrawAndPrizeFields() public {
         uint256 id = _buy1(alice);
-        bytes32 rand = _rollForTier(3); // 2.00x -> $2; roll 9000 even -> NVDA
+        bytes32 rand = _rollForTier(3); // 2.00x -> $2; hashed walk starts on NVDA
         (uint8 tierId,, uint32 prizeBps, uint256 prizeUsd) = boxes.previewDraw(rand, SKU1);
         uint64 seq = _open(alice, id);
 
@@ -766,28 +766,51 @@ contract BoxTest is BoxTestBase {
         vm.stopPrank();
     }
 
-    function test_launchSkusAreOneTenTwentyFive() public view {
-        assertEq(boxes.MAX_SKUS(), 3);
-        assertTrue(boxes.sku(SKU1).exists);
-        assertTrue(boxes.sku(SKU10).exists);
-        assertTrue(boxes.sku(SKU25).exists);
+    /// @notice Launch sets five sizes: $1 / $10 / $25 on sale, $50 / $100 created but PAUSED.
+    ///         Slots 5..7 are empty (addable later through the 48h {queueSku}).
+    function test_launchSkus_fiveSizes_bigTwoPaused() public view {
+        assertEq(boxes.MAX_SKUS(), 8);
+        assertEq(boxes.SKU_ONE_USD(), 0);
+        assertEq(boxes.SKU_TEN_USD(), 1);
+        assertEq(boxes.SKU_TWENTY_FIVE_USD(), 2);
+        assertEq(boxes.SKU_FIFTY_USD(), 3);
+        assertEq(boxes.SKU_HUNDRED_USD(), 4);
+
+        uint96[5] memory prices = [uint96(1_000_000), 10_000_000, 25_000_000, 50_000_000, 100_000_000];
+        for (uint8 i; i < 5; ++i) {
+            IBox.Sku memory s = boxes.sku(i);
+            assertTrue(s.exists, "launch size exists");
+            assertEq(s.usdcPrice, prices[i], "launch price");
+            assertTrue(s.chipEnabled, "CHIP enabled on every launch size");
+            assertEq(s.paused, i >= 3, "$1/$10/$25 on sale, $50/$100 paused");
+        }
         assertEq(boxes.sku(SKU1).usdcPrice, USD1);
         assertEq(boxes.sku(SKU10).usdcPrice, USD10);
         assertEq(boxes.sku(SKU25).usdcPrice, USD25);
-        assertTrue(boxes.sku(SKU1).chipEnabled);
-        assertTrue(boxes.sku(SKU10).chipEnabled);
-        assertTrue(boxes.sku(SKU25).chipEnabled);
-        assertFalse(boxes.sku(3).exists, "$5 slot removed; id 3 is unused");
+        for (uint8 i = 5; i < 8; ++i) {
+            assertFalse(boxes.sku(i).exists, "slots 5..7 are empty at launch");
+        }
+        // The paused big sizes hold nothing back: the live reserve is still the $25 jackpot.
+        assertEq(boxes.maxLivePrizeUsd(), 900e6);
         assertEq(boxes.DEFAULT_CHIP(), 0x75Af968d2e58749FDA1b42C58186B76f5E511bA3);
         assertEq(boxes.DEFAULT_USDC(), 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
     }
 
     function test_buyUnknownSkuReverts() public {
+        // Slot 5 is the first empty slot.
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(3)));
+        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(5)));
+        boxes.buyWithUsdc(5, alice);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(5)));
+        boxes.buyWithChip(5, alice, 1, 1, block.timestamp);
+
+        // Slot 3 ($50) exists but launches paused.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuPausedError.selector, uint8(3)));
         boxes.buyWithUsdc(3, alice);
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Box.UnknownSku.selector, uint8(3)));
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuPausedError.selector, uint8(3)));
         boxes.buyWithChip(3, alice, 1, 1, block.timestamp);
     }
 

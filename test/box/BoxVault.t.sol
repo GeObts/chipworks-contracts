@@ -17,8 +17,10 @@ contract BoxVaultTest is BoxTestBase {
         address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
     );
 
-    /// @dev roll 7500: tier 2 (1.00x, pays a stock). Even, so with [NVDA, TSLA] NVDA is tried first.
-    bytes32 internal constant PAR_EVEN = bytes32(uint256(7_500));
+    /// @dev roll 8500: the first roll of tier 2 (1.00x, pays a stock). The first stock tried is
+    ///      keccak(roll) % n (BOX-I4), not the roll's parity; every test using this constant has
+    ///      only one stock able to pay, so it does not depend on where the walk starts.
+    bytes32 internal constant PAR_EVEN = bytes32(uint256(8_500));
     /// @dev roll 9950: tier 5 (36x jackpot).
     bytes32 internal constant JACKPOT = bytes32(uint256(9_950));
 
@@ -56,9 +58,12 @@ contract BoxVaultTest is BoxTestBase {
         dustTok.approve(address(vault), 1);
         vault.deposit(address(dustTok), 1);
 
-        // Stocks are [NVDA, TSLA, DSTX]; roll 7502 is tier 2 and starts at index 2 (DSTX).
+        // Stocks are [NVDA, TSLA, DSTX]; roll 8501 is tier 2 and keccak(8501) % 3 == 2, so the
+        // walk starts at DSTX, skips it (1 unit is far under $1) and wraps to NVDA.
+        uint256 roll = 8_501;
+        assertEq(uint256(keccak256(abi.encode(bytes32(roll)))) % 3, 2, "walk starts on DSTX");
         uint256 id = _buy1(alice);
-        _openAndFulfill(alice, id, bytes32(uint256(7_502)));
+        _openAndFulfill(alice, id, bytes32(roll));
         assertEq(dustTok.balanceOf(alice), 0);
         assertEq(nvda.balanceOf(alice), 1e6, "wrapped to the next stock that can cover $1");
     }
@@ -71,8 +76,12 @@ contract BoxVaultTest is BoxTestBase {
         vault.deposit(address(blocked), 100e8);
         blocked.setBlacklisted(alice, true);
 
+        // Stocks are [NVDA, TSLA, BLKX]; roll 8501 is tier 2 and keccak(8501) % 3 == 2, so the
+        // walk starts at the blacklisted BLKX, is refused, and wraps to NVDA.
+        uint256 roll = 8_501;
+        assertEq(uint256(keccak256(abi.encode(bytes32(roll)))) % 3, 2, "walk starts on BLKX");
         uint256 id = _buy1(alice);
-        _openAndFulfill(alice, id, bytes32(uint256(7_502)));
+        _openAndFulfill(alice, id, bytes32(roll));
         assertEq(blocked.balanceOf(alice), 0);
         assertEq(nvda.balanceOf(alice), 1e6);
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
@@ -105,7 +114,7 @@ contract BoxVaultTest is BoxTestBase {
     function test_dollarPrizePaysOneCentOfHundredDollarStock() public {
         uint256 id = _buy1(alice);
         _openAndFulfill(alice, id, _rollForTier(2));
-        // $1 at $100/NVDA, entropy 7500 % 2 == 0 -> NVDA first.
+        // $1 at $100/NVDA; _rollForTier picks a tier-2 roll whose hashed walk starts on NVDA.
         assertEq(nvda.balanceOf(alice), 1e6);
     }
 

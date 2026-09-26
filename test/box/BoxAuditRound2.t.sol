@@ -97,7 +97,7 @@ contract BoxAuditRound2Test is BoxTestBase {
         uint256 u0 = usdc.balanceOf(alice);
         vm.recordLogs();
         uint256 g0 = gasleft();
-        entropy.fulfill(seq, bytes32(uint256(7_500))); // tier 2: $1
+        entropy.fulfill(seq, bytes32(uint256(8_500))); // tier 2: $1
         uint256 used = g0 - gasleft();
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
@@ -120,7 +120,7 @@ contract BoxAuditRound2Test is BoxTestBase {
     function test_BOXI4_firstStockFollowsTheHash_notTheRoll() public {
         bool sawTsla;
         for (uint256 j; j < 8; ++j) {
-            bytes32 rand = bytes32(7_500 + 10_000 * j); // always tier 2 ($1), always even
+            bytes32 rand = bytes32(8_500 + 10_000 * j); // always tier 2 ($1), always even
             uint256 id = _buy1(alice);
             uint256 n0 = nvda.balanceOf(alice);
             uint256 t0 = tsla.balanceOf(alice);

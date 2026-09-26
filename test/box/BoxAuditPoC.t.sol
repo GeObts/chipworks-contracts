@@ -105,20 +105,20 @@ contract BoxAuditPoCTest is BoxTestBase {
         uint64 seq = b2.boxInfo(id2).sequence;
 
         vm.expectEmit(true, true, true, true);
-        emit PrizeOwed(alice, id2, 0, 200_000, false); // roll 0 -> Dust 0.20x of $1
+        emit PrizeOwed(alice, id2, 0, 500_000, false); // roll 0 -> Dust 0.50x of $1
         entropy.fulfill(seq, bytes32(uint256(0)));
 
         assertEq(b2.ownerOf(id2), alice, "failed settle: ownerOf unchanged");
         IBox.BoxView memory v = b2.boxInfo(id2);
         assertEq(v.state, b2.STATE_OWED());
-        assertEq(v.owedUsd, 200_000);
+        assertEq(v.owedUsd, 500_000);
         assertEq(b2.sealedSupply(SKU1), 1, "not retired");
-        assertEq(b2.outstandingLiabilityUsd(), 200_000, "liability is now the exact owed prize");
+        assertEq(b2.outstandingLiabilityUsd(), 500_000, "liability is now the exact owed prize");
         assertEq(b2.tokenIdOfRequest(address(entropy), seq), 0, "the sequence is spent: no second draw");
 
         // A late duplicate callback is an orphan, not a re-roll.
         entropy.fulfill(seq, bytes32(uint256(9_999)));
-        assertEq(b2.boxInfo(id2).owedUsd, 200_000);
+        assertEq(b2.boxInfo(id2).owedUsd, 500_000);
 
         // Owed boxes are bound to the opener.
         vm.prank(alice);
@@ -393,8 +393,8 @@ contract BoxAuditPoCTest is BoxTestBase {
         vm.prank(alice);
         uint256 id2 = boxes.buyWithUsdc(SKU10, alice);
         uint256 aliceUsdc1 = usdc.balanceOf(alice);
-        _openAndFulfill(alice, id2, _rollForTier(0)); // Dust: $2
-        assertEq(usdc.balanceOf(alice) - aliceUsdc1, 2e6, "Dust paid at its exact USD value");
+        _openAndFulfill(alice, id2, _rollForTier(0)); // Dust: 0.50x of $10 = $5
+        assertEq(usdc.balanceOf(alice) - aliceUsdc1, 5e6, "Dust paid at its exact USD value");
         assertEq(chip.balanceOf(address(vault)), chip0);
         assertEq(chip.balanceOf(alice), aliceChip0);
         assertEq(usdc.balanceOf(address(converter)), 0, "nothing escrowed on the converter");
@@ -413,7 +413,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         bytes32 roll0 = bytes32(uint256(0));
         (uint8 mintTier,, uint32 mintBps, uint256 mintPrize) = boxes.previewDraw(roll0, SKU1);
         assertEq(mintTier, 0, "roll 0 is dust on the 6-tier launch table");
-        assertEq(mintPrize, 200_000); // $0.20
+        assertEq(mintPrize, 500_000); // $0.50
 
         // Raise SKU 0 to $25 and invert the table so the same roll is a 36x jackpot live.
         vm.startPrank(multisig);
@@ -440,7 +440,7 @@ contract BoxAuditPoCTest is BoxTestBase {
         emit BoxOpened(alice, id, seq, SKU1, mintTier, mintBps, mintPrize, address(0), 0, mintPrize, false, true);
         entropy.fulfill(seq, roll0);
 
-        // Paid the mint-time Dust prize, $0.20, at once (stocks off -> USDC fallback), not $900.
+        // Paid the mint-time Dust prize, $0.50, at once (stocks off -> USDC fallback), not $900.
         uint256 paid = usdc.balanceOf(alice) - usdc0;
         assertEq(paid, mintPrize, "$1 ticket pays mint dust, not live $25 jackpot");
         assertTrue(paid != livePrize, "$1 ticket never pays $25-tier for the same roll");
@@ -460,8 +460,8 @@ contract BoxAuditPoCTest is BoxTestBase {
         assertEq(boxes.outstandingLiabilityUsd(), m10.mintEvUsd + m25.mintEvUsd);
 
         bytes32 roll0 = bytes32(uint256(0));
-        uint256 dust10 = USD10 * 2_000 / 10_000; // $2.00
-        uint256 dust25 = USD25 * 2_000 / 10_000; // $5.00
+        uint256 dust10 = USD10 * 5_000 / 10_000; // $5.00
+        uint256 dust25 = USD25 * 5_000 / 10_000; // $12.50
 
         vm.startPrank(multisig);
         boxes.queueSku(SKU10, true, uint96(USD1), true);
@@ -483,13 +483,13 @@ contract BoxAuditPoCTest is BoxTestBase {
         uint256 usdc0 = usdc.balanceOf(alice);
         _openAndFulfill(alice, id10, roll0);
         uint256 paid10 = usdc.balanceOf(alice) - usdc0;
-        assertEq(paid10, dust10, "$10 ticket pays mint 0.20x ($2), not live $1 jackpot");
+        assertEq(paid10, dust10, "$10 ticket pays mint 0.50x ($5), not live $1 jackpot");
         assertTrue(paid10 != live10Jackpot);
 
         uint256 usdc1 = usdc.balanceOf(alice);
         _openAndFulfill(alice, id25, roll0);
         uint256 paid25 = usdc.balanceOf(alice) - usdc1;
-        assertEq(paid25, dust25, "$25 ticket pays mint 0.20x ($5), not inverted live table");
+        assertEq(paid25, dust25, "$25 ticket pays mint 0.50x ($12.50), not inverted live table");
         assertLt(paid25, 25_000_000 * 360_000 / 10_000);
         assertEq(usdc.balanceOf(address(converter)), 0, "nothing escrowed on the converter");
         assertEq(boxes.outstandingLiabilityUsd(), 0);

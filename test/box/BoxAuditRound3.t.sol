@@ -173,7 +173,7 @@ contract BoxAuditRound3Test is BoxTestBase {
     function _tier2RollStartingAt(PrizeVault v, uint256 idx) internal view returns (bytes32 r) {
         uint256 n = v.stockCount();
         for (uint256 j;; ++j) {
-            r = bytes32(7_500 + 10_000 * j);
+            r = bytes32(8_500 + 10_000 * j);
             if (uint256(keccak256(abi.encode(r))) % n == idx) return r;
         }
     }

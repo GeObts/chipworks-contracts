@@ -94,11 +94,11 @@ contract BoxRebuildTest is BoxTestBase {
     /*                  2. Prizes are stocks, never $CHIP                    */
     /* ------------------------------------------------------------------ */
 
-    /// @dev Every tier, Dust to Jackpot, pays a stock at the registry mark. The rolls used here
-    ///      are all even, so the stock walk starts at NVDA ($100): the raw 8-dp NVDA paid equals
-    ///      the 6-dp USD prize exactly.
+    /// @dev Every tier, Dust to Jackpot, pays a stock at the registry mark. _rollForTier picks
+    ///      rolls whose hashed stock walk starts at NVDA ($100): the raw 8-dp NVDA paid equals
+    ///      the 6-dp USD prize exactly. $10 box: 0.50x $5, 0.60x $6, 1x $10, 2x $20, 8x $80, 36x $360.
     function test_everyTier_paysAStock_neverChip() public {
-        uint256[6] memory prize = [uint256(2e6), 5e6, 10e6, 20e6, 80e6, 360e6];
+        uint256[6] memory prize = [uint256(5e6), 6e6, 10e6, 20e6, 80e6, 360e6];
         uint256 convChip0 = chip.balanceOf(address(converter));
         for (uint8 t; t < 6; ++t) {
             uint256 id = _buyUsdc(alice, SKU10);
@@ -130,8 +130,8 @@ contract BoxRebuildTest is BoxTestBase {
         // With the stocks out of inventory the pool is $10,000 of USDC: the $10 SKU is covered.
         uint256 id = _buyUsdc(alice, SKU10);
         uint256 u0 = usdc.balanceOf(alice);
-        _openAndFulfill(alice, id, _rollForTier(DUST)); // $2
-        assertEq(usdc.balanceOf(alice) - u0, 2e6, "the full $2, in USDC");
+        _openAndFulfill(alice, id, _rollForTier(DUST)); // 0.50x of $10 = $5
+        assertEq(usdc.balanceOf(alice) - u0, 5e6, "the full $5, in USDC");
     }
 
     /* ------------------------------------------------------------------ */
