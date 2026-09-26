@@ -118,6 +118,10 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     ///      headroom: 0.000020 ETH at 1M against 0.000015 at 500k.
     uint32 public override callbackGasLimit = 1_000_000;
     bool public paused;
+    /// @notice Stops {buyWithChip} alone, at once (audit round 2, BOX-L1). The converter and its pool
+    ///         are immutable, so if the $CHIP pool graduates, drains or changes hook, $CHIP sales stop
+    ///         here without the 48h SKU queue and without stopping USDC sales.
+    bool public chipPaused;
     string public baseURI;
     uint256 public nextId = 1;
 
@@ -209,6 +213,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         address indexed opener, uint256 indexed tokenId, uint8 tierId, uint256 prizeUsd, bool capped
     );
     event PausedSet(bool paused);
+    event ChipPausedSet(bool paused);
     event SkuPaused(uint8 indexed skuId, bool paused);
     event TreasuryQueued(address indexed treasury, uint64 executableAt);
     event TreasurySet(address indexed previous, address indexed current);
@@ -545,6 +550,11 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
         emit PausedSet(v);
     }
 
+    function setChipPaused(bool v) external onlyOwner {
+        chipPaused = v;
+        emit ChipPausedSet(v);
+    }
+
     function setSkuPaused(uint8 skuId, bool v) external onlyOwner {
         if (!_skus[skuId].exists) revert UnknownSku(skuId);
         _skus[skuId].paused = v;
@@ -690,7 +700,7 @@ contract Box is IBox, ERC721, Ownable2Step, ReentrancyGuard {
     }
 
     function _liveChipSku(uint8 skuId) internal view returns (Sku memory s) {
-        if (converter == address(0)) revert ChipDisabled();
+        if (converter == address(0) || chipPaused) revert ChipDisabled();
         s = _liveSku(skuId);
         if (!s.chipEnabled) revert ChipDisabled();
     }
