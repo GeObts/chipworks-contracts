@@ -6,6 +6,9 @@ import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
 import {BoxTestBase} from "./BoxTestBase.sol";
+import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 contract BoxTest is BoxTestBase {
     event BoxPurchased(
@@ -199,8 +202,10 @@ contract BoxTest is BoxTestBase {
 
     function test_chipBuyRevertsWhenWethQuoteTooLow() public {
         (uint256 wethNeeded, uint256 cost) = _chipQuote(USD1);
+        // The WETH -> USDC exact-output leg needs `wethNeeded`; one wei less trips the router's
+        // amountInMaximum.
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(MockSwapRouter.TooMuchRequested.selector);
         boxes.buyWithChip(SKU1, alice, wethNeeded - 1, cost * 2, block.timestamp);
         assertEq(boxes.nextId(), 1);
         _assertConverterEmpty();
@@ -405,10 +410,10 @@ contract BoxTest is BoxTestBase {
 
     function test_pauseIsOwnerOnly() public {
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         boxes.setPaused(true);
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         boxes.setSkuPaused(SKU1, true);
     }
 
@@ -475,7 +480,7 @@ contract BoxTest is BoxTestBase {
         chip.mint(address(converter), 5 ether);
         usdc.mint(address(converter), 7e6);
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         converter.rescue(address(chip), alice, 5 ether);
 
         vm.startPrank(multisig);
@@ -557,7 +562,7 @@ contract BoxTest is BoxTestBase {
 
         _openAndFulfill(alice, id, rand);
 
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
         assertEq(boxes.sealedSupply(SKU1), 0);
         assertEq(boxes.outstandingLiabilityUsd(), 0);
@@ -587,9 +592,9 @@ contract BoxTest is BoxTestBase {
         _openAndFulfill(alice, id2, _rollForTier(0));
         assertEq(nvda.balanceOf(alice), 5e5 + 2e5);
 
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id2));
         boxes.ownerOf(id2);
         assertEq(chip.balanceOf(alice), aliceChip0, "no prize is ever paid in CHIP");
         assertEq(usdc.balanceOf(address(converter)), 0, "nothing escrowed on the converter");
@@ -606,7 +611,7 @@ contract BoxTest is BoxTestBase {
         boxes.open{value: fee}(id);
 
         _openAndFulfill(bob, id, _rollForTier(0));
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
         assertEq(nvda.balanceOf(bob), 2e5, "Dust ($0.20) paid to the giftee in NVDA");
         assertEq(nvda.balanceOf(alice), 0);
@@ -627,13 +632,16 @@ contract BoxTest is BoxTestBase {
         uint256 id = _buy1(alice);
         uint64 oldSeq = _open(alice, id);
         uint128 fee = boxes.quoteOpenFee();
+        uint64 readyAt = boxes.boxInfo(id).openingStartedAt + boxes.REVEAL_TIMEOUT();
 
+        // The opener, too early.
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Box.RevealNotTimedOut.selector, uint64(block.timestamp), readyAt));
         boxes.retryOpen{value: fee}(id);
 
+        // Not the opener.
         vm.prank(bob);
-        vm.expectRevert();
+        vm.expectRevert(Box.NotOwner.selector);
         boxes.retryOpen{value: fee}(id);
 
         vm.warp(block.timestamp + boxes.REVEAL_TIMEOUT());
@@ -647,7 +655,7 @@ contract BoxTest is BoxTestBase {
         assertEq(boxes.ownerOf(id), alice, "orphan callback does not burn");
 
         entropy.fulfill(newSeq, bytes32(uint256(1)));
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
     }
 
@@ -678,10 +686,11 @@ contract BoxTest is BoxTestBase {
 
     function test_treasuryChangeIsTimelocked() public {
         address nextSafe = makeAddr("nextSafe");
+        uint64 t0 = uint64(block.timestamp);
         vm.prank(multisig);
         boxes.queueTreasury(nextSafe);
         vm.prank(multisig);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Box.TimelockNotElapsed.selector, t0, t0 + 48 hours));
         boxes.executeTreasury();
 
         vm.warp(block.timestamp + 48 hours);
@@ -696,11 +705,12 @@ contract BoxTest is BoxTestBase {
 
     function test_treasuryTimelockExpiresAndCancels() public {
         address nextSafe = makeAddr("nextSafe");
+        uint64 expiresAt = uint64(block.timestamp) + 48 hours + 14 days;
         vm.prank(multisig);
         boxes.queueTreasury(nextSafe);
-        vm.warp(block.timestamp + 48 hours + 14 days + 1);
+        vm.warp(expiresAt + 1);
         vm.prank(multisig);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Box.TimelockExpired.selector, expiresAt + 1, expiresAt));
         boxes.executeTreasury();
 
         vm.prank(multisig);
@@ -711,7 +721,7 @@ contract BoxTest is BoxTestBase {
         assertEq(boxes.treasury(), treasury);
 
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         boxes.queueTreasury(alice);
     }
 
@@ -722,9 +732,10 @@ contract BoxTest is BoxTestBase {
         vm.startPrank(multisig);
         boxes.queueSku(SKU1, true, uint96(2 * USD1), true);
         boxes.queueOdds(flat);
-        vm.expectRevert();
+        uint64 nowTs = uint64(block.timestamp);
+        vm.expectRevert(abi.encodeWithSelector(Box.TimelockNotElapsed.selector, nowTs, nowTs + 48 hours));
         boxes.executeSku();
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Box.TimelockNotElapsed.selector, nowTs, nowTs + 48 hours));
         boxes.executeOdds();
         vm.stopPrank();
 

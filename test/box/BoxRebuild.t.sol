@@ -7,6 +7,7 @@ import {PrizeVault} from "../../src/box/PrizeVault.sol";
 import {ChipConverter} from "../../src/box/ChipConverter.sol";
 import {IBox} from "../../src/interfaces/IBox.sol";
 import {Venue} from "../../src/interfaces/IStockRegistry.sol";
+import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
 
 /// @notice The rebuild's own properties: CHIP swapped to the exact price at buy, stocks-only prizes, never-short
 ///         payouts, the sell gate, keeper restock and the house-take sweep. Every expected
@@ -248,9 +249,10 @@ contract BoxRebuildTest is BoxTestBase {
         uint256 id = _buy1(alice);
         _open(alice, id);
         assertEq(boxes.REVEAL_TIMEOUT(), 30 days);
-        vm.warp(block.timestamp + 30 days - 1);
+        uint64 readyAt = boxes.boxInfo(id).openingStartedAt + 30 days;
+        vm.warp(readyAt - 1);
         uint128 fee = boxes.quoteOpenFee();
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Box.RevealNotTimedOut.selector, readyAt - 1, readyAt));
         vm.prank(alice);
         boxes.retryOpen{value: fee}(id);
     }
@@ -299,9 +301,11 @@ contract BoxRebuildTest is BoxTestBase {
         vm.prank(keeper);
         vault.restock(address(nvda), 100e6);
 
-        // A router that fills 3% under the mark is refused by the 2% bound.
+        // A router that fills 3% under the mark is refused by the 2% bound. The vault passes
+        // that bound to the router as amountOutMinimum, so the revert comes from the router's
+        // own minimum check (the mock's TooLittleReceived), not from a vault-side error.
         router.setRate(address(usdc), address(tsla), 97, 200);
-        vm.expectRevert();
+        vm.expectRevert(MockSwapRouter.TooLittleReceived.selector);
         vm.prank(keeper);
         vault.restock(address(tsla), 100e6);
     }

@@ -9,6 +9,8 @@ import {Venue} from "../../src/interfaces/IStockRegistry.sol";
 import {BoxTestBase} from "./BoxTestBase.sol";
 import {BlacklistToken} from "../mocks/HostileTokens.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 contract BoxVaultTest is BoxTestBase {
     event PrizeOwed(
@@ -73,7 +75,7 @@ contract BoxVaultTest is BoxTestBase {
         _openAndFulfill(alice, id, bytes32(uint256(7_502)));
         assertEq(blocked.balanceOf(alice), 0);
         assertEq(nvda.balanceOf(alice), 1e6);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         boxes.ownerOf(id);
     }
 
@@ -211,8 +213,9 @@ contract BoxVaultTest is BoxTestBase {
         thinBox.claimOwed(id);
 
         // New sales are refused while the top prize is not covered.
+        // Top prize $36 (36x of $1) vs the cap at the marked-down inventory, $23.7375.
         vm.prank(bob);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Box.SkuNotCovered.selector, SKU1, uint256(36e6), uint256(23_737_500)));
         thinBox.buyWithUsdc(SKU1, bob);
 
         // The mark recovers; anyone can push the claim, and it pays the opener in full.
@@ -221,7 +224,7 @@ contract BoxVaultTest is BoxTestBase {
         thinBox.claimOwed(id);
         assertEq(nvda.balanceOf(alice), 36e6, "$36 at $100/NVDA = 0.36 NVDA");
         assertEq(nvda.balanceOf(bob), 0);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, id));
         thinBox.ownerOf(id);
         assertEq(thinBox.outstandingLiabilityUsd(), 0);
         assertEq(thinBox.sealedSupply(SKU1), 0);
@@ -321,7 +324,7 @@ contract BoxVaultTest is BoxTestBase {
         MockERC20 stray = new MockERC20("Stray", "STRX", 18);
         stray.mint(address(vault), 1 ether);
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         vault.rescue(address(stray), alice, 1 ether);
     }
 
@@ -385,14 +388,18 @@ contract BoxVaultTest is BoxTestBase {
     }
 
     function test_surplusWithdrawIsTimelocked() public {
+        uint64 t0 = uint64(block.timestamp);
+        uint64 executableAt = t0 + 48 hours;
         vm.prank(multisig);
         vault.queueSurplusWithdraw(address(usdc), multisig, 1);
         vm.prank(multisig);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(PrizeVault.TimelockNotElapsed.selector, t0, executableAt));
         vault.executeSurplusWithdraw();
-        vm.warp(block.timestamp + 48 hours + 14 days + 1);
+        vm.warp(executableAt + 14 days + 1);
         vm.prank(multisig);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(PrizeVault.TimelockExpired.selector, executableAt + 14 days + 1, executableAt + 14 days)
+        );
         vault.executeSurplusWithdraw();
         vm.prank(multisig);
         vault.cancelSurplusWithdraw();
@@ -419,7 +426,11 @@ contract BoxVaultTest is BoxTestBase {
         vm.expectRevert(PrizeVault.BadConfig.selector);
         vault.queueMaxPrizeBps(0);
         vault.queueMaxPrizeBps(1_000);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PrizeVault.TimelockNotElapsed.selector, uint64(block.timestamp), uint64(block.timestamp) + 48 hours
+            )
+        );
         vault.executeMaxPrizeBps();
         vm.stopPrank();
 
