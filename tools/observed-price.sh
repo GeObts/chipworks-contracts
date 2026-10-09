@@ -29,7 +29,12 @@
 #   --ltv <pct>      target loan-to-value for setMaxPrincipal. Default 60.
 #
 set -euo pipefail
+. "$(dirname "$0")/lib/find-cast.sh"   # cast works even when Foundry is not on this shell's PATH
 
+# BASE_RPC_URL from the environment, else from the repo's .env (so any shell can run this).
+if [ -z "${BASE_RPC_URL:-}" ] && [ -f "$(dirname "$0")/../.env" ]; then
+  BASE_RPC_URL=$(grep -m1 '^BASE_RPC_URL=' "$(dirname "$0")/../.env" | cut -d= -f2- | tr -d '\r')
+fi
 : "${BASE_RPC_URL:?set it first:  set -a && . ./.env && set +a}"
 R=(--rpc-url "$BASE_RPC_URL")
 
@@ -72,7 +77,18 @@ CAP_DARK=$(cast call "$NOUN_LOANS" "maxPrincipal(address)(uint256)" "$DARK" "${R
 CAP_LIL=$(cast call "$NOUN_LOANS" "maxPrincipal(address)(uint256)" "$LIL" "${R[@]}" | awk '{print $1}')
 
 # ---- the arithmetic, in python for the precision ----
-python3 - "$SQRT" "$ETHUSD_RAW" "$NOW" "$PEND_BASED" "$ANVIL_LIVE" "$ANVIL_PEND" \
+# Python 3 under whatever name this shell has it (Windows often has only `python`, and a bare
+# Git Bash / WSL PATH may have neither): first one that really is Python 3.
+PY=""
+for p in python3 python \
+  /c/Users/1136962520/AppData/Local/Python/pythoncore-3.14-64/python.exe \
+  /mnt/c/Users/1136962520/AppData/Local/Python/pythoncore-3.14-64/python.exe \
+  /c/Users/1136962520/AppData/Local/Microsoft/WindowsApps/python3.exe \
+  /mnt/c/Users/1136962520/AppData/Local/Microsoft/WindowsApps/python3.exe; do
+  if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>/dev/null; then PY="$p"; break; fi
+done
+[ -n "$PY" ] || { echo "ERROR: Python 3 not found (tried python3, python, the Windows install)" >&2; exit 127; }
+"$PY" - "$SQRT" "$ETHUSD_RAW" "$NOW" "$PEND_BASED" "$ANVIL_LIVE" "$ANVIL_PEND" \
           "$CAP_BASED" "$CAP_DARK" "$CAP_LIL" \
           "$EMIT" "$TIER0_USD" "$CHIPLET_USD" "$TARGET_LTV_PCT" <<'PYEOF'
 import sys, json, time, datetime

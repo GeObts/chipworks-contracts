@@ -10,7 +10,7 @@
    - [ ] **Full weekend 9–12 Oct re-run**, Monday after 13:30 UTC:
      `OUT=weekend-1010 WINDOWS='weekend-1010:2026-10-09T20:00:00Z:2026-10-12T13:30:00Z' node tools/raffle/weekend-depth.cjs`
      Judge every stock against both 150 and 125 bps floors.
-   - [ ] **Observation buffers raised to 2,048** on TSLA, AMZN, MSFT, MSTR, SNDK and SPCX. Permissionless; two transactions per pool, because 1,000 → 2,048 is over Base's per-transaction gas cap. Run `bash tools/raffle/raise-observation-buffers.sh` in your own terminal (it asks for the `chipworks-deployer` keystore password once). Then confirm each pool's `observationCardinalityNext == 2048`. The live `observationCardinality` only grows to 2,048 as the ring buffer wraps, which takes hours at observed swap rates.
+   - [ ] **Observation buffers raised to 2,048** on TSLA, AMZN, MSFT, MSTR, SNDK and SPCX. Permissionless; two transactions per pool, because 1,000 → 2,048 is over Base's per-transaction gas cap. Run it from **PowerShell** with one line: `& "C:\Program Files\Git\bin\bash.exe" "C:/Users/1136962520/ccx-raffle/tools/raffle/raise-observation-buffers.sh"`. It asks once for the `chipworks-deployer` keystore password, which goes to a private temp file and is deleted on exit. Foundry does not need to be on PATH: `tools/lib/find-cast.sh` locates it. Add `--check` for a password-free dry check. Then confirm each pool's `observationCardinalityNext == 2048`. The live `observationCardinality` only grows to 2,048 as the ring buffer wraps, which takes hours at observed swap rates.
    - [x] Parameter tuning: launch floor tightened to **125 bps** (owner, 2026-10-09). The other three values are unchanged.
    - [x] Tick-maths licence: no GPL code is used (SPEC-v2 §16.4).
 
