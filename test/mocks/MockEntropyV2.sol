@@ -16,6 +16,17 @@ contract MockEntropyV2 {
     mapping(address => mapping(uint64 => address)) internal _requester;
     mapping(address => mapping(uint64 => uint32)) internal _gasLimit;
     mapping(address => mapping(uint64 => uint8)) internal _status;
+    /// @notice The caller seed each seeded request carried, and request counters (all overloads
+    ///         vs the seeded one) so a test can prove which overload a contract uses.
+    mapping(address => mapping(uint64 => bytes32)) public userRandomOf;
+    uint256 public seededRequests;
+    uint256 public totalRequests;
+    /// @notice Gas tests switch the bookkeeping above off: it is the MOCK's cost, not the caller's.
+    bool public recordSeeds = true;
+
+    function setRecordSeeds(bool on) external {
+        recordSeeds = on;
+    }
 
     error Underpaid();
 
@@ -64,8 +75,15 @@ contract MockEntropyV2 {
         return _request(provider, gasLimit);
     }
 
-    function requestV2(address provider, bytes32, uint32 gasLimit) external payable returns (uint64) {
-        return _request(provider, gasLimit);
+    function requestV2(address provider, bytes32 userRandomNumber, uint32 gasLimit)
+        external
+        payable
+        returns (uint64 seq)
+    {
+        seq = _request(provider, gasLimit);
+        if (!recordSeeds) return seq;
+        userRandomOf[provider][seq] = userRandomNumber;
+        seededRequests++;
     }
 
     function getRequestV2(address provider, uint64 sequence) external view returns (IEntropyV2.RequestV2 memory r) {
@@ -93,6 +111,7 @@ contract MockEntropyV2 {
 
     function _request(address provider, uint32 gasLimit) internal returns (uint64 seq) {
         if (msg.value < fee) revert Underpaid();
+        if (recordSeeds) totalRequests++;
         seq = _nextSeq[provider] + 1;
         _nextSeq[provider] = seq;
         _requester[provider][seq] = msg.sender;

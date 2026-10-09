@@ -31,8 +31,13 @@ import {IStockRegistry} from "../interfaces/IStockRegistry.sol";
 ///         RANDOMNESS IS PYTH ENTROPY V2, reused from the Box. The final ticket's purchase
 ///         requests it, paid from an ETH reserve the house posts at creation, so the last
 ///         buyer pays gas only. If the request cannot be made then (fee spike, Entropy
-///         down) the purchase still succeeds and anyone can {requestDraw} later. The callback
+///         down) the purchase still succeeds and anyone can {requestDraw} later. Each request
+///         passes Entropy a contract-mixed `userRandomNumber` (see {_drawSeed}). The callback
 ///         only RECORDS the number — no transfers, no search — so it cannot fail.
+///
+///         FRESH RANDOMNESS IS GATED. {retryDraw} (only for a draw Entropy never revealed) may be
+///         called by the owner, the raffle's payee or the keeper, and only after the redraw
+///         timeout SNAPSHOTTED into that raffle at creation.
 ///
 ///         PAYOUTS ARE ISOLATED. {settle} is permissionless. It tries to push each leg
 ///         (prize -> winner, base -> payee, fee -> Pot) and CREDITS any leg whose transfer is
@@ -84,6 +89,8 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
         address winner;
         uint128 ethReserve;
         bytes32 randomNumber;
+        /// @notice {redrawTimeout} at creation. Later {setRedrawTimeout} calls never change it.
+        uint64 redrawTimeout;
     }
 
     struct Purchase {
@@ -129,18 +136,24 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     uint32 public feeBps = 1_000;
     uint64 public minBase = 10;
     uint64 public maxBase = 1_000;
-    /// @notice How long a draw must sit completely unrevealed before anyone may request
-    ///         FRESH randomness ({retryDraw}). Read at retry time.
+    /// @notice How long a draw must sit completely unrevealed before {retryDraw} may request
+    ///         FRESH randomness. Snapshotted into each raffle at creation; changing it only
+    ///         affects raffles created afterwards.
     uint64 public redrawTimeout;
     uint32 public callbackGasLimit = 200_000;
     bool public nftPrizesEnabled;
     mapping(address collection => bool) public nftCollectionAllowed;
+    /// @notice The automation account allowed to call {retryDraw} (besides the owner and the
+    ///         raffle's payee). Zero = none. It has no other power.
+    address public keeper;
 
     /* ------------------------------------------------------------------ */
     /*                               STATE                                  */
     /* ------------------------------------------------------------------ */
 
     uint256 public raffleCount;
+    /// @dev Increments on every Entropy request, so no two requests share a user seed.
+    uint256 internal _drawNonce;
     mapping(uint256 raffleId => RaffleData) internal _raffles;
     mapping(uint256 raffleId => Purchase[]) internal _purchases;
     /// @dev Keyed by (provider, sequence): Entropy numbers requests per provider.
@@ -178,7 +191,9 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     event TicketsBought(uint256 indexed raffleId, address indexed buyer, uint64 firstTicket, uint64 quantity);
     event SoldOut(uint256 indexed raffleId);
     event DrawAwaitingRequest(uint256 indexed raffleId);
-    event DrawRequested(uint256 indexed raffleId, address indexed provider, uint64 indexed sequence, uint128 fee);
+    event DrawRequested(
+        uint256 indexed raffleId, address indexed provider, uint64 indexed sequence, uint128 fee, bytes32 userRandomNumber
+    );
     event DrawRetried(uint256 indexed raffleId, uint64 oldSequence);
     event Drawn(uint256 indexed raffleId, bytes32 randomNumber, uint64 winningTicket);
     event OrphanCallback(uint64 indexed sequence, address indexed provider);
@@ -203,6 +218,7 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     event CallbackGasLimitSet(uint32 gasLimit);
     event NftPrizesEnabledSet(bool enabled);
     event NftCollectionSet(address indexed collection, bool allowed);
+    event KeeperSet(address indexed keeper);
 
     /* ------------------------------------------------------------------ */
     /*                               ERRORS                                 */
@@ -226,6 +242,7 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     error NothingOwed();
     error EthTransferFailed();
     error TicketOutOfRange(uint64 ticket, uint64 sold);
+    error NotAuthorized(address caller);
 
     /* ------------------------------------------------------------------ */
     /*                            CONSTRUCTOR                               */
@@ -267,7 +284,9 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     /// @param prize  ERC20: a StockRegistry-enabled token and an amount. ERC721: only when
     ///               {nftPrizesEnabled} and the collection is allow-listed.
     /// @param base   The house's asking, in whole USD. Tickets = base + ceil(base*feeBps/10000).
-    /// @param payee  Receives `base` USDC at settle.
+    /// @param payee  Receives `base` USDC at settle and the leftover ETH reserve (as a credit paid
+    ///               by {withdrawEth} with a plain call). MUST be an EOA or a contract that can
+    ///               receive ETH, or that credit can never be withdrawn.
     function createRaffle(Prize calldata prize, uint64 base, address payee)
         external
         payable
@@ -276,7 +295,8 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
         returns (uint256 raffleId)
     {
         if (payee == address(0) || prize.token == address(0)) revert ZeroAddress();
-        if (base < minBase || base > maxBase) revert BaseOutOfRange(base, minBase, maxBase);
+        // base >= minBase >= 1 already (setBaseLimits refuses 0); explicit so N can never be 0.
+        if (base == 0 || base < minBase || base > maxBase) revert BaseOutOfRange(base, minBase, maxBase);
         _validatePrize(prize);
 
         uint256 required = RESERVE_MULTIPLIER * uint256(quoteDrawFee());
@@ -293,6 +313,7 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
         r.state = State.Open;
         r.base = base;
         r.totalTickets = total;
+        r.redrawTimeout = redrawTimeout;
         r.ethReserve = uint128(msg.value);
         ethLiability += msg.value;
 
@@ -349,7 +370,9 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Ask Entropy for FRESH randomness when a draw has gone completely unrevealed for
-    ///         {redrawTimeout}. Permissionless; any ETH sent tops up the reserve.
+    ///         the raffle's snapshotted redraw timeout. Owner, the raffle's payee or {keeper}
+    ///         only — never a ticket holder, so nobody holding a ticket can choose to re-roll.
+    ///         Any ETH sent tops up the reserve.
     /// @dev    NOT A RE-ROLL. A FAILED callback means Pyth already published the number; the
     ///         fix for that is Pyth's permissionless `revealWithCallback`, which re-runs our
     ///         callback with the SAME number. So this refuses anything but CALLBACK_NOT_STARTED.
@@ -359,7 +382,8 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     function retryDraw(uint256 raffleId) external payable nonReentrant {
         RaffleData storage r = _raffles[raffleId];
         if (r.state != State.Drawing) revert WrongState(raffleId, r.state);
-        uint64 readyAt = r.drawRequestedAt + redrawTimeout;
+        if (msg.sender != owner() && msg.sender != r.payee && msg.sender != keeper) revert NotAuthorized(msg.sender);
+        uint64 readyAt = r.drawRequestedAt + r.redrawTimeout;
         if (block.timestamp < readyAt) revert RedrawNotReady(uint64(block.timestamp), readyAt);
         IEntropyV2.RequestV2 memory req = IEntropyV2(entropy).getRequestV2(r.provider, r.sequence);
         if (req.sequenceNumber != r.sequence || req.callbackStatus != CALLBACK_NOT_STARTED) {
@@ -499,6 +523,12 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
         emit NftPrizesEnabledSet(enabled);
     }
 
+    /// @notice Set (or clear, with zero) the automation account allowed to call {retryDraw}.
+    function setKeeper(address newKeeper) external onlyOwner {
+        keeper = newKeeper;
+        emit KeeperSet(newKeeper);
+    }
+
     function setNftCollectionAllowed(address collection, bool allowed) external onlyOwner {
         if (collection == address(0)) revert ZeroAddress();
         nftCollectionAllowed[collection] = allowed;
@@ -578,6 +608,10 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
     /// @dev `strict` (claim): revert if refused, so the prize stays owed.
     ///      Non-strict (settle): an ERC-20 refusal, and every ERC-721, becomes {prizeOwedTo} —
     ///      an NFT is never pushed during settle so a receiver's code can't run there.
+    ///      ERC-721 is released with `transferFrom`, NOT `safeTransferFrom`, BY DESIGN: no
+    ///      receiver hook ever runs in this contract's context, so a hostile winner contract
+    ///      can neither revert nor re-enter the claim. The cost is that a winner contract which
+    ///      cannot handle ERC-721s receives a token it cannot use; that only affects the winner.
     function _deliverPrize(uint256 raffleId, Prize memory prize, address winner, bool strict)
         internal
         returns (bool delivered)
@@ -615,7 +649,10 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
         (bool ok, bytes memory ret) = token.call(abi.encodeCall(IERC20.transfer, (to, amount)));
         if (!ok) return false;
         if (ret.length == 0) return token.code.length != 0;
-        return ret.length >= 32 && abi.decode(ret, (bool));
+        // Exactly one word, and exactly 1. Decoded as uint256 so a malformed word reads as
+        // "refused" instead of reverting (a bool decode reverts on anything but 0 or 1).
+        if (ret.length == 32) return abi.decode(ret, (uint256)) == 1;
+        return false;
     }
 
     function _topUp(uint256 raffleId, RaffleData storage r) internal {
@@ -634,8 +671,9 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
         if (r.ethReserve < fee) revert ReserveTooLow(r.ethReserve, fee);
         r.ethReserve -= fee;
         ethLiability -= fee;
-        uint64 sequence = e.requestV2{value: fee}(provider, gasLimit);
-        _recordRequest(raffleId, r, provider, sequence, fee);
+        bytes32 seed = _drawSeed(raffleId, r);
+        uint64 sequence = e.requestV2{value: fee}(provider, seed, gasLimit);
+        _recordRequest(raffleId, r, provider, sequence, fee, seed);
     }
 
     /// @dev Non-reverting request path, used inside the final {buy}. Any failure leaves the raffle
@@ -656,25 +694,54 @@ contract Raffle is Ownable2Step, ReentrancyGuard {
             return false;
         }
         if (r.ethReserve < fee) return false;
-        try e.requestV2{value: fee}(provider, gasLimit) returns (uint64 sequence) {
+        bytes32 seed = _drawSeed(raffleId, r);
+        try e.requestV2{value: fee}(provider, seed, gasLimit) returns (uint64 sequence) {
             r.ethReserve -= fee;
             ethLiability -= fee;
-            _recordRequest(raffleId, r, provider, sequence, fee);
+            _recordRequest(raffleId, r, provider, sequence, fee, seed);
             return true;
         } catch {
             return false;
         }
     }
 
-    function _recordRequest(uint256 raffleId, RaffleData storage r, address provider, uint64 sequence, uint128 fee)
-        internal
-    {
+    /// @dev The caller's contribution to Entropy's commit-reveal (Pyth's `userRandomNumber`).
+    ///      Entropy combines it with the provider's pre-committed revelation, so neither side
+    ///      alone fixes the result. Mixed from this contract, the raffle, a per-request nonce,
+    ///      the final ticket count, the last buyer, the previous block's hash, prevrandao and
+    ///      the timestamp, so every request (including a retry) gets a distinct seed. It is not
+    ///      secret and does not need to be: the provider's revelation is committed before the
+    ///      request and unknown until reveal, so knowing the seed predicts nothing.
+    function _drawSeed(uint256 raffleId, RaffleData storage r) internal returns (bytes32) {
+        Purchase[] storage p = _purchases[raffleId];
+        return keccak256(
+            abi.encode(
+                address(this),
+                raffleId,
+                ++_drawNonce,
+                r.sold,
+                p[p.length - 1].buyer,
+                blockhash(block.number - 1),
+                block.prevrandao,
+                block.timestamp
+            )
+        );
+    }
+
+    function _recordRequest(
+        uint256 raffleId,
+        RaffleData storage r,
+        address provider,
+        uint64 sequence,
+        uint128 fee,
+        bytes32 seed
+    ) internal {
         r.provider = provider;
         r.sequence = sequence;
         r.drawRequestedAt = uint64(block.timestamp);
         r.state = State.Drawing;
         _raffleOfRequest[_requestKey(provider, sequence)] = raffleId;
-        emit DrawRequested(raffleId, provider, sequence, fee);
+        emit DrawRequested(raffleId, provider, sequence, fee, seed);
     }
 
     /// @dev Binary search: the first purchase whose endExclusive is greater than `ticket`.

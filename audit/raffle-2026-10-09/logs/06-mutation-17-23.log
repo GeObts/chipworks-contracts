@@ -1,9 +1,0 @@
-[17/23] KILLED    prize: registry check removed (60s)
-[18/23] KILLED    escrow: received amount not checked (69s)
-[19/23] KILLED    withdrawUsdc: credit not zeroed (double pay) (62s)
-[20/23] KILLED    withdrawEth: credit not zeroed (double pay) (42s)
-[21/23] KILLED    NFT kill switch ignored (73s)
-[22/23] KILLED    fee cap removed (70s)
-[23/23] KILLED    leftover reserve not credited (77s)
-
-RESULT: 7/7 mutants killed

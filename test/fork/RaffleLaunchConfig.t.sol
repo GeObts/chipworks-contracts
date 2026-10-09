@@ -23,6 +23,9 @@ contract RaffleLaunchConfigTest is Test {
         assertEq(raffle.minBase(), 10);
         assertEq(raffle.maxBase(), 1_000);
         assertFalse(raffle.nftPrizesEnabled(), "NFT prizes off at launch");
+        // retryDraw is owner / payee / keeper only. The deployer is not the owner, so the
+        // keeper is set AFTER deploy by a Safe call (see DeployRaffle.s.sol) - unset here.
+        assertEq(raffle.keeper(), address(0), "keeper is a post-deploy Safe call");
 
         // Still owner-adjustable within the hard bounds.
         vm.startPrank(script.SAFE());

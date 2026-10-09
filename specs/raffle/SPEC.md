@@ -1,15 +1,21 @@
-# ChipWorks Raffle — v1.1 spec (as built)
+# ChipWorks Raffle — v1.2 spec (as built)
 
 **Status:** built on branch `raffle` (src/raffle/Raffle.sol), tests green, NOT deployed —
-mainnet waits on external audit. v1.1 decisions (owner, 2026-10-08) override anything below:
+mainnet waits on external audit. v1.1 decisions (owner, 2026-10-08) and the v1.2 security-review
+fixes (2026-10-09, see `audit/raffle-2026-10-09/REVIEW-1-RESPONSE.md`) override anything below:
 
 | Decision | As built |
 |---|---|
 | Who creates raffles | **Owner (the Safe) only.** `createRaffle` is `onlyOwner`; there is no public create. The house is creator; it names a `payee` for the base. |
 | NFT prizes | Generic `Prize{kind, token, amountOrId}` built in; ERC-721 path implemented and tested, **OFF at launch** (`nftPrizesEnabled = false`, per-collection allow-list empty). Enabling = two Safe calls. |
 | Launch cap | base **$10–$1,000** per raffle; `setBaseLimits` (owner) within hard bounds [1, 1,000,000]. |
-| Redraw timeout | constructor parameter, owner-adjustable within **[1 hour, 30 days]**; **launch value 24 hours** (owner, 2026-10-09) — pinned in `script/raffle/DeployRaffle.s.sol` and asserted by `test/fork/RaffleLaunchConfig.t.sol`. |
-| Mutation testing | `tools/raffle/mutation.py`: **22/22 killed** (2026-10-09 confirming run), plus 1 documented equivalent (stale-callback check unreachable by construction). The first run (19/22) exposed two test gaps — fee rounding and double-paid credits — both fixed. |
+| Redraw timeout | constructor parameter, owner-adjustable within **[1 hour, 30 days]**; **launch value 24 hours** (owner, 2026-10-09) — pinned in `script/raffle/DeployRaffle.s.sol` and asserted by `test/fork/RaffleLaunchConfig.t.sol`. **v1.2: snapshotted into each raffle at creation** (`RaffleData.redrawTimeout`); `setRedrawTimeout` only affects raffles created afterwards. |
+| Who may redraw (v1.2) | `retryDraw` is **owner, the raffle's payee, or `keeper`** — no longer permissionless, so no ticket holder can choose to re-roll. `keeper` is set by the owner (`setKeeper`, zero = none); launch: the Safe sets it to the chipworks-keeper signer `0x6571…B593` after deploy. Still only for a draw Entropy never revealed (`CALLBACK_NOT_STARTED`) and only after the snapshotted timeout. |
+| Entropy user seed (v1.2) | Every request uses `requestV2(provider, userRandomNumber, gasLimit)` with a contract-mixed seed (`_drawSeed`: this contract, raffle id, per-request nonce, sold count, last buyer, previous blockhash, prevrandao, timestamp), emitted in `DrawRequested`. Note: Entropy's unseeded overload already supplied its own user contribution (verified onchain), so this is defence in depth and makes our side of the commit-reveal explicit. Result = `keccak(seed, providerRevelation, 0)`, proven against the real Entropy on a Base fork. |
+| Transfer return data (v1.2) | `_tryTransfer` counts a push as delivered only for no return data (from a contract) or **exactly one word equal to 1**; anything else is "refused" (credited), never a revert. |
+| Payee (v1.2, doc) | must be an EOA or a contract that can receive ETH — the leftover reserve is paid by `withdrawEth` with a plain call. |
+| ERC-721 release (v1.2, doc) | `transferFrom`, **not** `safeTransferFrom`, by design: no receiver hook runs in the Raffle's context. |
+| Mutation testing | `tools/raffle/mutation.py`: **34/34 killed** (2026-10-09, after the v1.2 fixes), plus 2 documented equivalents (stale-callback check unreachable by construction; explicit `base == 0` check unreachable because `minBase ≥ 1`). History: the first run (19/22) exposed two test gaps — fee rounding and double-paid credits — both fixed; 22/22 on v1.1. |
 | Keeper | chipworks-keeper branch `raffle-job`: completes any late draw (> 2 min) with `revealWithCallback`, requests/settles, alerts (and `/health` 503) on any draw pending > 15 min. Proven end to end on a Base fork (`tools/raffle-e2e.ts`). |
 | No refund | kept: no refund/cancel/expiry/withdraw path exists in the contract. Frontend discloses (separate work). |
 | Owner powers | fee (≤ 20%), base limits, redraw timeout, callback gas, NFT switch + allow-list, create. **None touches an escrowed prize, ticket money or a reserve.** No pause (creation is already owner-only, and pausing buys/draws would trap funds). |
