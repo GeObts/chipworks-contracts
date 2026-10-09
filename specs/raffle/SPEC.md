@@ -8,7 +8,8 @@ mainnet waits on external audit. v1.1 decisions (owner, 2026-10-08) override any
 | Who creates raffles | **Owner (the Safe) only.** `createRaffle` is `onlyOwner`; there is no public create. The house is creator; it names a `payee` for the base. |
 | NFT prizes | Generic `Prize{kind, token, amountOrId}` built in; ERC-721 path implemented and tested, **OFF at launch** (`nftPrizesEnabled = false`, per-collection allow-list empty). Enabling = two Safe calls. |
 | Launch cap | base **$10–$1,000** per raffle; `setBaseLimits` (owner) within hard bounds [1, 1,000,000]. |
-| Redraw timeout | constructor parameter, owner-adjustable within **[1 hour, 30 days]**; launch value 1 hour. See §1 for the condition that makes 1 hour safe. |
+| Redraw timeout | constructor parameter, owner-adjustable within **[1 hour, 30 days]**; **launch value 24 hours** (owner, 2026-10-09) — pinned in `script/raffle/DeployRaffle.s.sol` and asserted by `test/fork/RaffleLaunchConfig.t.sol`. |
+| Keeper | chipworks-keeper branch `raffle-job`: completes any late draw (> 2 min) with `revealWithCallback`, requests/settles, alerts (and `/health` 503) on any draw pending > 15 min. Proven end to end on a Base fork (`tools/raffle-e2e.ts`). |
 | No refund | kept: no refund/cancel/expiry/withdraw path exists in the contract. Frontend discloses (separate work). |
 | Owner powers | fee (≤ 20%), base limits, redraw timeout, callback gas, NFT switch + allow-list, create. **None touches an escrowed prize, ticket money or a reserve.** No pause (creation is already owner-only, and pausing buys/draws would trap funds). |
 
@@ -74,8 +75,10 @@ permissionless `revealWithCallback` (same number). Requirements that make 1 hour
 1. The keeper checks every `Drawing` raffle each cycle (every 30 min today) and completes it
    with `revealWithCallback` when Fortuna serves the revelation — two chances inside 1 hour.
 2. Alerting if any raffle is `Drawing` for > 15 min (the Box's reveals land in ~4 s).
-If those are not in place at launch, deploy with a longer timeout (24 h); it costs nothing
-when Pyth is healthy, because fresh randomness is only for a provider that is truly gone.
+Decision: launch at **24 h** with the keeper job in place — belt and braces. Two facts learned
+building it: Fortuna serves a revelation only while the request is unrevealed on chain (403
+otherwise), and for a FAILED callback the provider contribution is public in Entropy's
+`Revealed` event (topic 0x2231996c, verified on live Base logs) — the keeper reads it there.
 
 **Callback gas (measured on the fork):** we request 200k; the live provider **rounds the
 limit up to 500k** at the same fee (0.000015 ETH). Our callback uses ~50k.
