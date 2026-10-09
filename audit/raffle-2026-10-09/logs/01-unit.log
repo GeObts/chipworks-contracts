@@ -1,0 +1,50 @@
+Compiling 3 files with Solc 0.8.24
+Solc 0.8.24 finished in 12.12s
+Compiler run successful!
+
+Ran 37 tests for test/raffle/Raffle.t.sol:RaffleTest
+[PASS] testFuzz_buyerOfMatchesNaiveScan(uint256,uint8) (runs: 512, μ: 1605954, ~: 1124137)
+[PASS] test_buy_entropyOutage_lastBuyStillSucceeds() (gas: 3791291)
+[PASS] test_buy_feeSpike_lastBuyStillSucceeds_thenAnyoneRequests() (gas: 564994)
+[PASS] test_buy_guards() (gas: 284592)
+[PASS] test_buy_lastTicketRequestsDrawFromReserve() (gas: 607100)
+[PASS] test_buy_rangesAndLiability() (gas: 470693)
+[PASS] test_callback_onlyEntropy() (gas: 13493)
+[PASS] test_callback_orphanDoesNotRevert() (gas: 14961)
+[PASS] test_callback_recordsUniformIndex() (gas: 558471)
+[PASS] test_constructor_redrawTimeoutBounds() (gas: 3477956)
+[PASS] test_constructor_rejectsNonSixDecimalUsdc() (gas: 583925)
+[PASS] test_constructor_zeroAddresses() (gas: 119951)
+[PASS] test_create_baseBounds() (gas: 310243)
+[PASS] test_create_feeTicketsRoundUp() (gas: 25604)
+[PASS] test_create_nftOffAtLaunch() (gas: 83098)
+[PASS] test_create_nonRoundBase_ticketsRoundUp() (gas: 585284)
+[PASS] test_create_onlyOwner() (gas: 23978)
+[PASS] test_create_prizeMustBeRegistryEnabled() (gas: 43568)
+[PASS] test_create_rejectsFeeOnTransferPrize() (gas: 891186)
+[PASS] test_create_reserveTooLow() (gas: 46253)
+[PASS] test_create_ticketsAndEscrow() (gas: 281197)
+[PASS] test_create_zeroPayee() (gas: 27905)
+[PASS] test_create_zeroPrize() (gas: 30746)
+[PASS] test_feeChange_doesNotTouchLiveRaffle() (gas: 288290)
+[PASS] test_gas_largeRaffle() (gas: 66272031)
+Logs:
+  buy (1 ticket, 2k purchases deep): 44285
+  last buy incl. Entropy request: 203044
+  settle over 2,003 purchases / 11,000 tickets: 139680
+
+[PASS] test_launchDefaults() (gas: 22874)
+[PASS] test_nftPrize_whenEnabled_fullCycle() (gas: 728989)
+[PASS] test_ownerHasNoPathToEscrow() (gas: 503820)
+[PASS] test_ownerSetters_boundsAndAccess() (gas: 42777)
+[PASS] test_reentrancy_prizeTokenCannotReenter() (gas: 1262364)
+[PASS] test_retryDraw_onlyAfterTimeout_andOnlyIfNeverRevealed() (gas: 672520)
+[PASS] test_settle_beforeDraw_reverts() (gas: 549756)
+[PASS] test_settle_firstAndLastTicket() (gas: 1137241)
+[PASS] test_settle_paysEveryLeg() (gas: 677442)
+[PASS] test_settle_refusedPayee_creditsUsdc() (gas: 4412461)
+[PASS] test_settle_refusedWinner_creditsPrize_othersStillPaid() (gas: 1174301)
+[PASS] test_withdraw_creditsPayOnlyOnce() (gas: 589140)
+Suite result: ok. 37 passed; 0 failed; 0 skipped; finished in 799.40ms (961.26ms CPU time)
+
+Ran 1 test suite in 827.23ms (799.40ms CPU time): 37 tests passed, 0 failed, 0 skipped (37 total tests)

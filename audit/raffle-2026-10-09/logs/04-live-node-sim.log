@@ -1,0 +1,7 @@
+block 52384542 | Raffle at 0x501A4cedc6F7aa91B14AAF7f39dc88b12322A474 | prize 0.01863478 REAL NVDAc from the Box vault | reserve 45000000000000 wei
+buy-out OK -> state 3 (3 = Drawing) | REAL Entropy sequence 584747 from provider 0x52DeaA1c84233F7bb8C8A45baeDE41091c616506 | reserve left 30000000000000
+ok   settled: winning ticket 77, winner 0x00000000000000000000000000000000000B0002
+ok   winner received 0.01863478 REAL NVDAc (B20 transfer out of the raffle)
+ok   Pot received 10 USDC (fee tickets)
+ok   payee received 100 USDC (base)
+ok   raffle holds no NVDAc and no USDC afterwards

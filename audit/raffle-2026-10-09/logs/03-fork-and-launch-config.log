@@ -1,0 +1,19 @@
+Compiling 3 files with Solc 0.8.24
+Solc 0.8.24 finished in 4.78s
+Compiler run successful!
+
+Ran 1 test for test/fork/RaffleLaunchConfig.t.sol:RaffleLaunchConfigTest
+[PASS] test_launchConfig_24hRedraw_andChainChecks() (gas: 7195755)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 2.80s (2.80s CPU time)
+
+Ran 3 tests for test/fork/RaffleFork.t.sol:RaffleForkTest
+[PASS] test_fork_fullCycle_realEntropyRealUsdc() (gas: 720737)
+Logs:
+  live Entropy fee (wei) at callbackGasLimit 200k: 15000000000000
+  gas limit Entropy recorded for the callback: 500000
+
+[PASS] test_fork_onlyTheSafeCreates() (gas: 20378)
+[PASS] test_fork_retryDraw_againstRealEntropyStatus() (gas: 740324)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 7.84s (7.62s CPU time)
+
+Ran 2 test suites in 7.85s (10.64s CPU time): 4 tests passed, 0 failed, 0 skipped (4 total tests)
