@@ -1,4 +1,4 @@
-"""Mutation testing for src/raffle/Raffle.sol.
+"""Mutation testing for src/raffle/Raffle.sol.  Optional range: mutation.py <first> <last> (1-based).
 
 Each mutant is one targeted change to the source. For every mutant the raffle unit +
 invariant suites must FAIL (mutant killed). A surviving mutant is a gap in the tests.
@@ -93,7 +93,11 @@ def main():
     shutil.copy(SRC, backup)
     results = []
     try:
+        lo = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+        hi = int(sys.argv[2]) if len(sys.argv) > 2 else len(MUTANTS)
         for i, (name, a, b) in enumerate(MUTANTS, 1):
+            if i < lo or i > hi:
+                continue
             if original.count(a) != 1:
                 results.append((name, "SKIPPED: pattern not unique (%d)" % original.count(a)))
                 print(f"[{i}/{len(MUTANTS)}] {name}: pattern not found", flush=True)

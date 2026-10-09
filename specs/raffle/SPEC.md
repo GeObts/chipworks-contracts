@@ -9,6 +9,7 @@ mainnet waits on external audit. v1.1 decisions (owner, 2026-10-08) override any
 | NFT prizes | Generic `Prize{kind, token, amountOrId}` built in; ERC-721 path implemented and tested, **OFF at launch** (`nftPrizesEnabled = false`, per-collection allow-list empty). Enabling = two Safe calls. |
 | Launch cap | base **$10–$1,000** per raffle; `setBaseLimits` (owner) within hard bounds [1, 1,000,000]. |
 | Redraw timeout | constructor parameter, owner-adjustable within **[1 hour, 30 days]**; **launch value 24 hours** (owner, 2026-10-09) — pinned in `script/raffle/DeployRaffle.s.sol` and asserted by `test/fork/RaffleLaunchConfig.t.sol`. |
+| Mutation testing | `tools/raffle/mutation.py`: **22/22 killed** (2026-10-09 confirming run), plus 1 documented equivalent (stale-callback check unreachable by construction). The first run (19/22) exposed two test gaps — fee rounding and double-paid credits — both fixed. |
 | Keeper | chipworks-keeper branch `raffle-job`: completes any late draw (> 2 min) with `revealWithCallback`, requests/settles, alerts (and `/health` 503) on any draw pending > 15 min. Proven end to end on a Base fork (`tools/raffle-e2e.ts`). |
 | No refund | kept: no refund/cancel/expiry/withdraw path exists in the contract. Frontend discloses (separate work). |
 | Owner powers | fee (≤ 20%), base limits, redraw timeout, callback gas, NFT switch + allow-list, create. **None touches an escrowed prize, ticket money or a reserve.** No pause (creation is already owner-only, and pausing buys/draws would trap funds). |
