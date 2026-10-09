@@ -1,0 +1,8 @@
+[18/66] KILLED    withdrawEth: credit not zeroed (double pay) (52s)
+[19/66] KILLED    fee cap removed (59s)
+[20/66] KILLED    leftover reserve not credited to the creator (58s)
+[21/66] KILLED    seed: non-reverting request WITHOUT the user seed (62s)
+[22/66] KILLED    seed: requestDraw/retry request WITHOUT the user seed (61s)
+[23/66] KILLED    seed: nonce not advanced (64s)
+
+RESULT: 6/6 mutants killed

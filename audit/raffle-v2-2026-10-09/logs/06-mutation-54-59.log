@@ -1,0 +1,9 @@
+[54/66] KILLED    swap: under-delivery accepted (54s)
+[55/66] SURVIVED  EQUIVALENT swap: approval not reset (72s)
+[56/66] KILLED    acquire: liability not reduced by the spend (65s)
+[57/66] KILLED    acquire: bought stock not escrowed (63s)
+[58/66] KILLED    acquire: no PrizeReady when the draw can't be requested (58s)
+[59/66] KILLED    fallback: acquire timeout not snapshotted (57s)
+
+RESULT: 5/6 mutants killed
+  NOT KILLED: swap: approval not reset: SURVIVED

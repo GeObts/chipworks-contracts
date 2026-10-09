@@ -1,0 +1,57 @@
+Compiling 3 files with Solc 0.8.24
+Solc 0.8.24 finished in 8.29s
+Compiler run successful!
+
+Ran 1 test for test/fork/RaffleFork.t.sol:RaffleForkRealRevealTest
+[PASS] test_fork_realReveal_seedIncluded_drawCompletes() (gas: 1164850)
+Logs:
+  seed: 0xa01de098d59315f6f12b4ef4ec714831dda5cba58eafd8a8985f73c4c858744a
+  random: 0x7f9bfc7c953444a295bac0032e727a44eac1d3ab2a92908e09ca35df0f531bdf
+  winning ticket: 0
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 1.36s (136.68ms CPU time)
+
+Ran 1 test for test/fork/RaffleLaunchConfig.t.sol:RaffleLaunchConfigTest
+[PASS] test_launchConfig_v2_andChainChecks() (gas: 11020200)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 2.68s (2.67s CPU time)
+
+Ran 4 tests for test/fork/RaffleFork.t.sol:RaffleForkTest
+[PASS] test_fork_buyOut_fallback_realSeededEntropy_settlesInUsdc() (gas: 1040711895)
+[PASS] test_fork_everyEnabledStock_isRaffleable_andPricedSanely() (gas: 4128485)
+Logs:
+  stock: 0xb20000000000000000000078ee7ce2fE4908108C
+    TWAP quote for $1,000 (raw): 435363148
+    Chainlink-implied (raw)    : 434284311
+  stock: 0xb2000000000000000000002D0BA3164cc74f58B7
+    TWAP quote for $1,000 (raw): 284133895
+    Chainlink-implied (raw)    : 283580999
+  stock: 0xb200000000000000000000C2e324d24d7eEcd1fb
+    TWAP quote for $1,000 (raw): 297234088
+    Chainlink-implied (raw)    : 296873330
+  stock: 0xb2000000000000000000008bC8786B856E61707C
+    TWAP quote for $1,000 (raw): 139140179
+    Chainlink-implied (raw)    : 138905126
+  stock: 0xb2000000000000000000001e800a7f5189430cD0
+    TWAP quote for $1,000 (raw): 261301241
+    Chainlink-implied (raw)    : 260440404
+  stock: 0xb200000000000000000000d9192b6B456483C2E8
+    TWAP quote for $1,000 (raw): 380879631
+    Chainlink-implied (raw)    : 381970970
+  stock: 0xB200000000000000000000Ab99cFa739E253872B
+    TWAP quote for $1,000 (raw): 186859767
+    Chainlink-implied (raw)    : 186540122
+  stock: 0xb2000000000000000000004884b426556b92883d
+    TWAP quote for $1,000 (raw): 646637054
+    Chainlink-implied (raw)    : 646776144
+  stock: 0xb200000000000000000000397293Cb8cda9a10c5
+    TWAP quote for $1,000 (raw): 63276451
+    Chainlink-implied (raw)    : 63220316
+  stock: 0xb2000000000000000000007b9fcbd005511aCBd5
+    TWAP quote for $1,000 (raw): 614641171
+    Chainlink-implied (raw)    : 614943842
+
+[PASS] test_fork_onlyTheSafeCreates() (gas: 20014)
+[PASS] test_fork_retryDraw_ownerOrKeeper_againstRealEntropyStatus() (gas: 861150)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 41.28s (49.03s CPU time)
+
+Ran 3 test suites in 41.33s (45.32s CPU time): 6 tests passed, 0 failed, 0 skipped (6 total tests)

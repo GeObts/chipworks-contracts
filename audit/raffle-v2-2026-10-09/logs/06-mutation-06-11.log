@@ -1,0 +1,9 @@
+[6/66] KILLED    callback: anyone can call it (62s)
+[7/66] SURVIVED  EQUIVALENT callback: stale/duplicate delivery not ignored (108s)
+[8/66] KILLED    retryDraw: allowed after a FAILED callback (re-roll) (92s)
+[9/66] KILLED    retryDraw: timeout boundary < -> <= (83s)
+[10/66] KILLED    settle: USDC prize not released from liability (79s)
+[11/66] KILLED    settle: can settle twice (51s)
+  equivalent (survives by construction, documented): EQUIVALENT callback: stale/duplicate delivery not ignored
+
+RESULT: 5/5 mutants killed

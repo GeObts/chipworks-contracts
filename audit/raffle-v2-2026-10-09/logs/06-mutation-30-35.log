@@ -1,0 +1,9 @@
+[30/66] KILLED    redraw timeout: retry reads the live global (57s)
+[31/66] KILLED    tryTransfer: back to '>= 32 bytes and decode bool' (62s)
+[32/66] KILLED    tryTransfer: any non-zero word counts as success (58s)
+[33/66] SURVIVED  EQUIVALENT create: explicit base == 0 check removed (58s)
+[34/66] KILLED    create: TWAP availability not checked (55s)
+[35/66] KILLED    create: pool-share cap not checked (55s)
+  equivalent (survives by construction, documented): EQUIVALENT create: explicit base == 0 check removed
+
+RESULT: 5/5 mutants killed

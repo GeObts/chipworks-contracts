@@ -1,0 +1,8 @@
+[48/66] KILLED    acquire: floor ignores the TWAP (spot only) (56s)
+[49/66] KILLED    TWAP direction flipped (54s)
+[50/66] KILLED    token order ignored (stock as token0) (44s)
+[51/66] KILLED    TWAP mean truncates instead of flooring (51s)
+[52/66] KILLED    tick power: base off by one tick step (42s)
+[53/66] KILLED    swap: partial spend accepted (42s)
+
+RESULT: 6/6 mutants killed

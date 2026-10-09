@@ -1,0 +1,8 @@
+[12/66] KILLED    settle: Pot gets the prize budget instead of the fee (52s)
+[13/66] KILLED    credit: liability not re-added (72s)
+[14/66] KILLED    refused prize: escrow not restored (78s)
+[15/66] KILLED    tryRequest: ETH liability not reduced (66s)
+[16/66] KILLED    create: not owner-only (64s)
+[17/66] KILLED    withdrawUsdc: credit not zeroed (double pay) (59s)
+
+RESULT: 6/6 mutants killed

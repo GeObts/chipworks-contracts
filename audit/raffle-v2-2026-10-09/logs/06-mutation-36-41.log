@@ -1,0 +1,8 @@
+[36/66] KILLED    poolFor: registry pool not checked against the router's factory (54s)
+[37/66] KILLED    poolFor: token pair not checked (40s)
+[38/66] KILLED    poolFor: tick spacing not checked (39s)
+[39/66] KILLED    poolFor: disabled stocks accepted (38s)
+[40/66] KILLED    constructor: router factory not checked against the registry (45s)
+[41/66] KILLED    constructor: USDC not checked against the registry quote (64s)
+
+RESULT: 6/6 mutants killed

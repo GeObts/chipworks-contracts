@@ -1,0 +1,22 @@
+     forking at block 52397480: real request seq 584804 lands in block 52397481
+ok   both raffles sold out: SoldOut, no swap and no draw from the last buyer
+ok   raffle 1: the keeper bought the prize (0x0263a8450fce76c5a4fedbd5f637f21bf3bb55965350607cd31834bd424f3b19)
+ok   raffle 1: holds 3996000 raw stock, THEN Drawing
+ok   raffle 1: the stock is in the raffle before any winner exists
+ok   raffle 1: the draw took the past real sequence 584804
+ok   raffle 2: buy refused, nothing sent (acquire refused: AcquireRefused(uint256 raffleId, uint8 reason))
+ok   raffle 2: still SoldOut
+ok   no acquire alert inside the hour
+ok   /health alerts once raffle 2 is unbought > 1 h
+ok   raffle 1: the keeper completed the draw via revealWithCallback (real Entropy verified the real revelation)
+ok   raffle 1: Drawn
+ok   raffle 1: settled on the next run
+ok   raffle 1: Settled; the buyer of every ticket won
+ok   raffle 1: the winner received the bought stock
+ok   raffle 1: the Pot got its 1 USDC (10% on top)
+ok   raffle 2: the keeper called fallbackToUsdc after the 6 h timeout (0xd45cb5d0264c380ed8592f6e3a85dda9f89bdbbd836c8c843676e93d528ad7fd)
+ok   raffle 2: the prize is now the $10 USDC budget
+ok   raffle 2: and its draw is requested (Drawing)
+ok   cursor moved past the settled raffle 1 (cursor 2)
+
+all passed

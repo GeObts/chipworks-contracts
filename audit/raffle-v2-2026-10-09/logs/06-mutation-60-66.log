@@ -1,0 +1,9 @@
+[60/66] KILLED    fallback: reads the live global timeout (59s)
+[61/66] KILLED    fallback: timeout boundary < -> <= (54s)
+[62/66] KILLED    fallback: USDC prize is the whole ticket take (59s)
+[63/66] KILLED    fallback: no PrizeReady when the draw can't be requested (56s)
+[64/66] KILLED    price guard: deviation bound removed (54s)
+[65/66] KILLED    price guard: zero slippage allowed (46s)
+[66/66] KILLED    acquire timeout: upper bound removed (40s)
+
+RESULT: 7/7 mutants killed

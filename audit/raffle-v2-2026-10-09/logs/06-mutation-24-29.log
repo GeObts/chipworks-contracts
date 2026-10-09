@@ -1,0 +1,8 @@
+[24/66] KILLED    seed: last buyer not mixed in (78s)
+[25/66] KILLED    acquirePrize: open to anyone (71s)
+[26/66] KILLED    retryDraw: open to anyone (59s)
+[27/66] KILLED    owner/keeper gate: keeper not allowed (33s)
+[28/66] KILLED    setKeeper: not owner-only (48s)
+[29/66] KILLED    redraw timeout: not snapshotted at creation (54s)
+
+RESULT: 6/6 mutants killed

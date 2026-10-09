@@ -1,0 +1,17 @@
+block 52395238 (2026-10-09T21:03:43.000Z) | Raffle v2 at 0x501A4cedc6F7aa91B14AAF7f39dc88b12322A474 | reserve 45000000000000 wei
+acquirePrize gas: 611368 | TWAP quote for $100: 0.43536811 NVDAc | bought: 0.43515037 NVDAc
+ok   after the buy the raffle is Drawing (state 4) - randomness requested only now
+ok   the REAL pool received exactly 100 USDC (the prize budget)
+ok   the raffle HOLDS the 0.43515037 REAL NVDAc it bought before any winner exists
+ok   only the 10 USDC fee remains in USDC
+ok   fill is -5 bps vs the TWAP quote (floor allows -150)
+ok   REAL Entropy sequence 584797 from provider 0x52DeaA1c84233F7bb8C8A45baeDE41091c616506
+ok   settled: winning ticket 77, winner 0x00000000000000000000000000000000000B0002
+ok   winner received the 0.43515037 REAL NVDAc that was bought
+ok   Pot received 10 USDC (the 10% on top)
+ok   raffle holds no NVDAc and no USDC afterwards
+ok   leftover reserve 30000000000000 wei credited to the creator
+pass B @52395238: a $1000000 whale buy moved the real pool's tick -8317 -> -10347 (-2030 ticks)
+ok   the keeper's buy against the pushed pool reverted
+ok   refused with AcquireRefused(1, 5) - 5 = SpotDeviates
+ok   nothing moved: still SoldOut, all 110 USDC still held

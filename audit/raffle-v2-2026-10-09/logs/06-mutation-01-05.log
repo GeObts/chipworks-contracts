@@ -1,0 +1,7 @@
+[1/66] KILLED    fee tickets round DOWN instead of up (90s)
+[2/66] KILLED    buy: cannot buy the exact remainder (54s)
+[3/66] KILLED    buy: liability not increased (51s)
+[4/66] KILLED    binary search boundary > -> >= (61s)
+[5/66] KILLED    winning index modulo N-1 (72s)
+
+RESULT: 5/5 mutants killed

@@ -1,0 +1,8 @@
+[42/66] KILLED    buy: sellout time not recorded (74s)
+[43/66] KILLED    acquire: re-pointed pool not refused (68s)
+[44/66] KILLED    acquire: pool-share cap not re-checked (55s)
+[45/66] KILLED    acquire: manipulation guard removed (68s)
+[46/66] KILLED    acquire: manipulation guard boundary > -> >= (74s)
+[47/66] KILLED    acquire: no slippage margin (floor = reference) (87s)
+
+RESULT: 6/6 mutants killed
