@@ -1,6 +1,6 @@
 # ChipWorks Raffle v2: the system buys the prize stock (SPEC, for owner sign-off)
 
-**Status:** COMPLETE DRAFT for owner sign-off. Nothing is built for v2 and nothing is deployed. It builds on Raffle v1.2 (`5e575e5`, review round 1 fixes). After the build, v2 gets a fresh external audit before any mainnet deploy.
+**Status:** SIGNED OFF (owner, 2026-10-09; all six §15 choices confirmed) and BUILT on branch `raffle`. NOT deployed. Mainnet waits until the §2.5 pre-deploy items clear AND a fresh external audit passes. §16 lists where the build differs from the text below. It builds on Raffle v1.2 (`5e575e5`, review round 1 fixes). After the build, v2 gets a fresh external audit before any mainnet deploy.
 
 ## 0. Summary
 
@@ -256,6 +256,27 @@ There is no pause, no rescue, and no path to prizes, ticket money or reserves. T
   | Keeper | 0.5–1 |
   | Audit package | 0.5 |
   | **Total** | **≈ 4.5–5.5 working days**, then the external audit |
+
+## 16. As built (differences from the text above)
+
+1. **A refusal is a revert, not an event.**
+   - §2.4 and §5 describe an `AcquireSkipped(reason)` event. As built, `acquirePrize` reverts with `AcquireRefused(raffleId, Refusal reason)`, or with `SwapReverted(raffleId, routerError)` when the router itself reverts.
+   - Nothing moves either way.
+   - Reverting lets the keeper simulate first and send nothing while a guard refuses, instead of paying for a "skip" transaction every 5 minutes for up to 6 h.
+2. **Reasons are an enum.** `Refusal { None, StockDisabled, NotSlipstream, PoolMismatch, TwapUnavailable, SpotDeviates, TooLargeForPool, NoOutput, PartialSpend, UnderDelivered }`, also used by `createRaffle`'s `StockNotBuyable(stock, Refusal)`. String reasons put the contract 526 bytes over EIP-170. As built the runtime is **24,145 bytes, a 431-byte margin.**
+3. **One price-guard setter.** `setPriceGuard(PriceGuard{twapWindow, maxDeviationTicks, maxSlippageBps, maxPoolShareBps})` replaces `setPriceGuard` + `setMaxPoolShareBps`. Bounds as in §9, none may be zero.
+4. **TWAP maths without a tick table.**
+   - The TWAP price is computed as the exact spot output (slot0 `sqrtPriceX96`) × 1.0001^(twapTick − spotTick). The exponent is bounded by the deviation guard (≤ 500 ticks), and the power is an in-house binary exponentiation using OpenZeppelin `Math.mulDiv`.
+   - It is accurate to within one tick (about 1 bp).
+   - **This clears §2.5 item 4:** no Uniswap GPL code is used.
+5. **`quotePrize(stock, usdcAmount)` view.**
+   - It returns the stock `usdcAmount` buys at the current TWAP, for the site's "≈ X shares" display (§3).
+   - It returns 0, never reverts, when the stock can't be quoted.
+6. **`createRaffle(address stock, uint64 base)`.** The prize is named by its stock only; there is no prize struct argument.
+7. **Keeper cron.** `5-25/5,35-55/5 * * * *` rather than `*/5`. It skips :00 and :30, when the 30-minute cycle runs the raffle job itself, so the keeper key never has two senders in one minute. The raffle job keeps its state in its own KV record.
+8. **The keeper stops buying at the timeout.** The contract still allows a late buy while nobody has fallen back. The keeper calls `fallbackToUsdc` instead once the raffle's acquire timeout has passed, and it decides on **block time**, the contract's clock.
+9. **Gas** (live node, real router, real NVDAc, Entropy request included): `acquirePrize` costs about **611k** gas.
+10. **Observation (pre-deploy item 1).** Headline pool TVL is not tradeable depth. On 2026-10-09 a $1M buy moved the real NVDAc pool about 2,000 ticks (≈ 20%). At launch size this is irrelevant: a $100 buy filled 5 bps from the TWAP. But **maxBase must not be raised far** without re-measuring depth per pool.
 
 ## 15. For sign-off
 

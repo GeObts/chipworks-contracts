@@ -7,6 +7,8 @@ import {Stock, Venue} from "../../src/interfaces/IStockRegistry.sol";
 contract MockStockRegistry {
     address public quoteToken;
     uint8 public quoteDecimals = 6;
+    /// @notice The Slipstream factory the registry resolves pools from (Raffle v2 checks it).
+    address public slipstreamFactory;
 
     mapping(address => Stock) internal _stocks;
     mapping(address => uint256) public price1e18;
@@ -34,6 +36,18 @@ contract MockStockRegistry {
 
     function setEnabled(address token, bool v) external {
         _stocks[token].enabled = v;
+    }
+
+    function setRegistered(address token, bool v) external {
+        _stocks[token].registered = v;
+    }
+
+    function setPool(address token, address pool) external {
+        _stocks[token].pool = pool;
+    }
+
+    function setSlipstreamFactory(address f) external {
+        slipstreamFactory = f;
     }
 
     function setPrice(address token, uint256 p1e18) external {
