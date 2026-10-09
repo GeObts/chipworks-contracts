@@ -1,0 +1,6 @@
+[23/36] KILLED    leftover reserve not credited (64s)
+[24/36] KILLED    seed: final buy requests WITHOUT the user seed (unseeded overload) (69s)
+[25/36] KILLED    seed: requestDraw/retry request WITHOUT the user seed (56s)
+[26/36] KILLED    seed: nonce not advanced (retries can repeat a seed) (61s)
+
+RESULT: 4/4 mutants killed

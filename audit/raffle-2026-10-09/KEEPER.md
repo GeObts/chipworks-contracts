@@ -21,9 +21,11 @@ The 24 h `redrawTimeout` is safe because draws are completed with the **same** n
 
 Sends are gated by `RAFFLE_SEND`; without it the job only simulates.
 
+**v1.2 impact.** The job never calls `retryDraw`. Since v1.2 only the owner, the raffle's payee or the `keeper` (set by the Safe after deploy) may call it. Before the job is deployed, its `src/abis/Raffle.json` must be refreshed for the trailing `RaffleData.redrawTimeout` and `DrawRequested.userRandomNumber` fields. Transactions go over plain HTTP to the configured RPC (Alchemy, with public fallbacks), not a private endpoint (see REVIEW-1-RESPONSE.md, MEDIUM).
+
 ## Evidence
 
 - `test/raffleplan.test.ts`: 12 unit tests of the planning logic.
 - `tools/raffle-e2e.ts`: all checks pass on a Base fork. It forks one block before a real past Entropy request so the Raffle's request reuses that sequence, serves the real revelation in place of Fortuna, and the real Entropy accepts the keeper's `revealWithCallback`. The keeper then settles.
 
-The same Revealed-event fallback was ported to the live Box keeper on 2026-10-09 (branch `box-failed-reveal` @ `ad112ac`). It has a Base-fork proof (`tools/box-failed-reveal-e2e.ts`): the keeper's reveal reproduces the exact random number real Base produced, and the real Entropy accepts the re-completion of a FAILED request.
+The same Revealed-event fallback was ported to the live Box keeper on 2026-10-09 (master `b626ced`, live as Worker version `ef099b7c`). It has a Base-fork proof (`tools/box-failed-reveal-e2e.ts`): the keeper's reveal reproduces the exact random number real Base produced, and the real Entropy accepts the re-completion of a FAILED request.

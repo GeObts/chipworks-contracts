@@ -7,11 +7,11 @@ One non-upgradeable contract (`Raffle`, `Ownable2Step` + `ReentrancyGuard`) runs
 - **Only the house creates.** `createRaffle` is `onlyOwner`, and the owner is the ChipWorks Safe. The house escrows a prize, sets an asking price `base` in whole USD, names a `payee` for the base, and posts an ETH reserve for the randomness fee.
 - **Tickets cost exactly 1 USDC.** A raffle sells `N = base + ceil(base * feeBps / 10_000)` tickets. The extra tickets are the fee, paid to the ChipWorks Pot.
 - **No exit, by design.** There is no deadline, refund, cancel, expiry, pause or admin withdrawal. Prize, ticket money and reserve stay escrowed until ticket N sells.
-- **Randomness is Pyth Entropy V2.** The purchase that sells ticket N requests the draw, paid from the reserve. If that request cannot be made (fee spike, Entropy reverts, out of gas), the purchase still succeeds and the raffle sits `SoldOut` until anyone calls `requestDraw`.
+- **Randomness is Pyth Entropy V2.** The purchase that sells ticket N requests the draw, paid from the reserve, through `requestV2(provider, userRandomNumber, gasLimit)` with a contract-mixed seed (`_drawSeed`). If that request cannot be made (fee spike, Entropy reverts, out of gas), the purchase still succeeds and the raffle sits `SoldOut` until anyone calls `requestDraw`.
 - **The callback only records.** `_entropyCallback` stores the number and `winningTicket = rnd % N`. It makes no transfers, no search and no external calls.
 - **Settle is permissionless.** `settle` finds the winner by binary search over purchases. Each purchase is one storage slot `(buyer, endExclusive)`, so the search is O(log P). It then pushes or credits each leg independently: prize to winner, `base` USDC to payee, fee USDC to Pot, leftover reserve to payee (always credited). A refused push (sanctioned or blacklisted recipient) becomes a credit for that recipient only.
 - **Credits pay a fixed recipient.** `claimPrize`, `withdrawUsdc(account)` and `withdrawEth(account)` are callable by anyone and only ever pay the recorded recipient.
-- **Stalled draws.** `retryDraw` requests **fresh** randomness only when Entropy reports the request `CALLBACK_NOT_STARTED` (never revealed) and `redrawTimeout` has passed. A FAILED callback, whose number is already public, is completed with Pyth's permissionless `revealWithCallback` using the **same** number. `retryDraw` refuses it, so a public number can never be re-rolled.
+- **Stalled draws.** `retryDraw` requests **fresh** randomness only when Entropy reports the request `CALLBACK_NOT_STARTED` (never revealed) and the raffle's **snapshotted** redraw timeout has passed. Only the owner, the raffle's payee or the `keeper` may call it. A FAILED callback, whose number is already public, is completed with Pyth's permissionless `revealWithCallback` using the **same** number. `retryDraw` refuses it, so a public number can never be re-rolled.
 
 State machine: `None → Open → SoldOut → Drawing → Drawn → Settled`. `SoldOut` is skipped when the request in the final `buy` succeeds. `retryDraw` keeps the raffle in `Drawing` under a new sequence.
 
@@ -19,7 +19,7 @@ State machine: `None → Open → SoldOut → Drawing → Drawn → Settled`. `S
 
 | File | Lines | In scope |
 |---|---|---|
-| `src/raffle/Raffle.sol` | 702 | **yes** |
+| `src/raffle/Raffle.sol` | 769 | **yes** |
 | `src/interfaces/IEntropyV2.sol` | 45 | interface correctness against the deployed Entropy (selectors, `RequestV2` layout) |
 | `src/interfaces/IStockRegistry.sol` | 47 | `isEnabled` only |
 | `script/raffle/DeployRaffle.s.sol` | — | launch-config review (constructor args, checks) |
@@ -40,14 +40,15 @@ Pinned in `script/DeployRaffle.s.sol` and asserted against a Base fork by `tests
 | Entropy V2 | `0x6E7D74FA7d5c90FEF9F0512987605a6d546181Bb` | immutable | no |
 | StockRegistry | `0x5e4b6CbAc2D9b581428eE7f22E7bd4bf03675458` | immutable | no |
 | Pot (fee recipient) | `0x3918a9B479Ce9B58238584c645079AB3bB49855B` | immutable | no |
-| `redrawTimeout` | **24 hours** | constructor | owner, within hard bounds **[1 h, 30 d]** |
+| `redrawTimeout` | **24 hours**, snapshotted into each raffle at creation | constructor | owner, within hard bounds **[1 h, 30 d]**; affects only later raffles |
+| `keeper` (may `retryDraw`) | unset at deploy; then the Safe calls `setKeeper(0x6571E3412553Fada40C3D96e61E7Cfd20A0695B9)` (chipworks-keeper signer) | post-deploy Safe call | owner (`setKeeper`; zero = none) |
 | `feeBps` | **1,000 (10%)** | default | owner, ≤ 2,000; snapshotted per raffle |
 | `minBase` / `maxBase` | **$10 / $1,000** | default | owner, within [1, 1,000,000] |
 | `callbackGasLimit` | 200,000 (the live provider rounds it up to 500k at the same fee) | default | owner, within [100k, 1M] |
 | `nftPrizesEnabled` | **false**; NFT allow-list empty | default | owner (two calls to enable) |
 | Reserve at create | ≥ 3 × `quoteDrawFee()`; today 3 × 0.000015 ETH | constant | no |
 
-None of the owner setters can touch an escrowed prize, ticket money, a reserve or a credit. Each one affects only raffles created afterwards, except `redrawTimeout` and `callbackGasLimit`, which are read when a draw is requested or retried (see THREAT-MODEL T9). There is no pause and no rescue.
+None of the owner setters can touch an escrowed prize, ticket money, a reserve or a credit. Each one affects only raffles created afterwards, except `callbackGasLimit`, which is read when a draw is requested or retried, and `keeper`, which is checked at retry time (see THREAT-MODEL T9). There is no pause and no rescue.
 
 ## 4. External dependencies
 
@@ -67,7 +68,8 @@ All addresses and the Safe's 2-of-3 threshold were read live on Base on 2026-10-
 1. **Accounting invariants.** `usdcLiability`, `ethLiability` and `erc20PrizeEscrow` should always equal the balance owed, to the unit, across every path, including refused pushes and later claims. The invariant suite checks this; please try to break it.
 2. **Draw integrity:**
    - Can anyone (buyer, last buyer, payee, owner, provider) influence or re-roll the outcome?
-   - Is the `retryDraw` guard (`sequenceNumber == r.sequence && callbackStatus == CALLBACK_NOT_STARTED`) correct against the deployed Entropy's request lifecycle, including request clearing after a successful reveal?
+   - Is the `retryDraw` guard (owner/payee/keeper; snapshotted timeout; `sequenceNumber == r.sequence && callbackStatus == CALLBACK_NOT_STARTED`) correct against the deployed Entropy's request lifecycle, including request clearing after a successful reveal?
+   - Is `_drawSeed` a sound user contribution (distinct per request; nothing in it lets any party steer the result, given the provider's revelation is pre-committed)?
 3. **Callback safety.** It can never revert for a known request (an unbounded revert would mark it FAILED). Orphan and stale deliveries are handled, and the request key is `(provider, sequence)`.
 4. **`_tryRequestDraw` inside `buy`.** Every failure mode must leave the raffle `SoldOut` with the reserve untouched. Consider 63/64-gas griefing by the last buyer (we believe it only delays; see T6).
 5. **`_tryTransfer`.** Return-data handling for tokens that return nothing, `false`, or revert, and code-less tokens.
@@ -82,15 +84,17 @@ SPEC.md's top table records the owner decisions and matches the code. The design
 1. **No public creator.** The body talks about "a creator". As built, only the owner creates, and `payee` receives the base.
 2. **Caps.** The body's §3 says `MAX_BASE = $10,000`. As built the launch value is **$1,000** (hard ceiling 1,000,000).
 3. **Callback gas.** The body says `CALLBACK_GAS = 100_000`. As built the default is **200,000**, bounded [100k, 1M], and the provider rounds it up to 500k. The callback uses about 26k.
-4. **ERC-721 release.** The body's §6 says `safeTransferFrom` on claim. As built, `claimPrize` uses **`transferFrom`**, so no receiver hook ever runs, but a contract winner that cannot handle NFTs would hold it unusably. The contract implements no `onERC721Received`; escrow uses `transferFrom` plus an `ownerOf` check. NFT prizes are off at launch.
+4. **ERC-721 release.** The body's §6 says `safeTransferFrom` on claim. As built, `claimPrize` uses **`transferFrom`** by design (documented in NatSpec since v1.2), so no receiver hook ever runs, but a contract winner that cannot handle NFTs would hold it unusably. The contract implements no `onERC721Received`; escrow uses `transferFrom` plus an `ownerOf` check. NFT prizes are off at launch.
 5. **Pot fee.** Pushed at settle, falling back to a credit (the body offered either).
 6. **Pause and rescue.** Neither exists (the body allowed a creation-only pause and a rescue above liabilities). Stray tokens sent to the contract are unrecoverable (THREAT-MODEL R9).
 7. **Timeout name.** The body says `REVEAL_TIMEOUT` (7 days recommended). As built it is `redrawTimeout`, with **24 h** at launch and bounds [1 h, 30 d].
 
-Two comment nits in `DeployRaffle.s.sol`, left unchanged because this package makes no code changes:
-- It refers to `test/raffle/RaffleLaunchConfig.t.sol`; the file is `test/fork/RaffleLaunchConfig.t.sol`.
-- It dates the 24 h decision 2026-10-08; SPEC.md says 2026-10-09.
+8. **Redraw access and seed (v1.2).** The body's §1 describes `retryDraw` as callable by anyone and an unseeded request. As built (review round 1): owner/payee/keeper only, a snapshotted timeout, and a contract-mixed `userRandomNumber`. See REVIEW-1-RESPONSE.md.
+
+The two `DeployRaffle.s.sol` comment nits from the v1.1 package (wrong test path, decision date) are fixed in v1.2.
 
 ## 7. Prior review
 
-Internal only: unit, fuzz, invariant, fork, live-node simulation and mutation testing (TEST-REPORT.md). No external review yet; this is the first. The owner's standing rule for custody contracts is two independent external reviews before mainnet.
+- Internal: unit, fuzz, invariant, fork, live-node simulation and mutation testing (TEST-REPORT.md).
+- Security review round 1 (2026-10-09) on v1.1 (`7b81f9c`): 1 high, 1 medium, 3 low, 2 informational. All addressed in v1.2 (`5e575e5`); see REVIEW-1-RESPONSE.md, including where we disagree with a premise.
+- The owner's standing rule for custody contracts is two independent external reviews before mainnet.

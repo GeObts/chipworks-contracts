@@ -1,0 +1,6 @@
+[27/36] KILLED    seed: last buyer not mixed in (59s)
+[28/36] KILLED    retryDraw: open to anyone again (56s)
+[29/36] KILLED    retryDraw: keeper not allowed (59s)
+[30/36] KILLED    retryDraw: payee not allowed (65s)
+
+RESULT: 4/4 mutants killed

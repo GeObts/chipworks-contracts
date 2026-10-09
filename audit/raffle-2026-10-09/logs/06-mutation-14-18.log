@@ -1,0 +1,7 @@
+[14/36] KILLED    refused prize: escrow not restored (85s)
+[15/36] KILLED    tryRequest: ETH liability not reduced (57s)
+[16/36] KILLED    create: not owner-only (67s)
+[17/36] KILLED    prize: registry check removed (102s)
+[18/36] KILLED    escrow: received amount not checked (87s)
+
+RESULT: 5/5 mutants killed

@@ -1,0 +1,6 @@
+[19/36] KILLED    withdrawUsdc: credit not zeroed (double pay) (86s)
+[20/36] KILLED    withdrawEth: credit not zeroed (double pay) (82s)
+[21/36] KILLED    NFT kill switch ignored (79s)
+[22/36] KILLED    fee cap removed (60s)
+
+RESULT: 4/4 mutants killed

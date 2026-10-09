@@ -1,0 +1,8 @@
+[1/36] KILLED    fee tickets round DOWN instead of up (81s)
+[2/36] KILLED    buy: cannot buy the exact remainder (48s)
+[3/36] KILLED    buy: liability not increased (62s)
+[4/36] KILLED    binary search boundary > -> >= (79s)
+[5/36] KILLED    winning index modulo N-1 (93s)
+[6/36] KILLED    callback: anyone can call it (89s)
+[7/36] SURVIVED  EQUIVALENT callback: stale/duplicate delivery not ignored (111s)
+[8/36] KILLED    retryDraw: allowed after a FAILED callback (re-roll) (31s)

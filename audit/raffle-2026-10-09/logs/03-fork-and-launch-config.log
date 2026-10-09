@@ -1,19 +1,28 @@
-Compiling 3 files with Solc 0.8.24
-Solc 0.8.24 finished in 4.78s
+Compiling 2 files with Solc 0.8.24
+Solc 0.8.24 finished in 9.29s
 Compiler run successful!
 
+Ran 1 test for test/fork/RaffleFork.t.sol:RaffleForkRealRevealTest
+[PASS] test_fork_realReveal_seedIncluded_drawCompletes() (gas: 1057026)
+Logs:
+  seed: 0x9aa3121f414471a23b53186f757f6aa22c890a88f71f075496eb92ab089ac5e6
+  random: 0x6ad493325cbbdafd6ea1fc0ecf8b6e55e8870fe29622c21c174accd49c0490f3
+  winning ticket: 2
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 844.52ms (27.52ms CPU time)
+
 Ran 1 test for test/fork/RaffleLaunchConfig.t.sol:RaffleLaunchConfigTest
-[PASS] test_launchConfig_24hRedraw_andChainChecks() (gas: 7195755)
-Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 2.80s (2.80s CPU time)
+[PASS] test_launchConfig_24hRedraw_andChainChecks() (gas: 7477841)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 3.19s (3.17s CPU time)
 
 Ran 3 tests for test/fork/RaffleFork.t.sol:RaffleForkTest
-[PASS] test_fork_fullCycle_realEntropyRealUsdc() (gas: 720737)
+[PASS] test_fork_fullCycle_realEntropyRealUsdc() (gas: 779113)
 Logs:
   live Entropy fee (wei) at callbackGasLimit 200k: 15000000000000
   gas limit Entropy recorded for the callback: 500000
 
 [PASS] test_fork_onlyTheSafeCreates() (gas: 20378)
-[PASS] test_fork_retryDraw_againstRealEntropyStatus() (gas: 740324)
-Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 7.84s (7.62s CPU time)
+[PASS] test_fork_retryDraw_againstRealEntropyStatus() (gas: 738583)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 8.03s (7.45s CPU time)
 
-Ran 2 test suites in 7.85s (10.64s CPU time): 4 tests passed, 0 failed, 0 skipped (4 total tests)
+Ran 3 test suites in 8.39s (12.06s CPU time): 5 tests passed, 0 failed, 0 skipped (5 total tests)

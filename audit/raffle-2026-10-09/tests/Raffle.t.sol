@@ -7,6 +7,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Venue} from "../../src/interfaces/IStockRegistry.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {BlacklistToken, FeeOnTransferToken} from "../mocks/HostileTokens.sol";
+import {ReturnShapeToken} from "../mocks/ReturnShapeToken.sol";
 import {RaffleTestBase} from "./RaffleTestBase.sol";
 
 /// @dev Entropy whose request always reverts (outage) but quotes a fee.
@@ -71,6 +72,12 @@ contract RaffleTest is RaffleTestBase {
     function test_constructor_zeroAddresses() public {
         vm.expectRevert(Raffle.ZeroAddress.selector);
         new Raffle(house, address(usdc), address(entropy), address(registry), address(0), 1 hours);
+        vm.expectRevert(Raffle.ZeroAddress.selector);
+        new Raffle(house, address(usdc), address(0), address(registry), pot, 1 hours); // entropy_
+        vm.expectRevert(Raffle.ZeroAddress.selector);
+        new Raffle(house, address(usdc), address(entropy), address(0), pot, 1 hours);
+        vm.expectRevert(Raffle.ZeroAddress.selector);
+        new Raffle(house, address(0), address(entropy), address(registry), pot, 1 hours);
     }
 
     function test_launchDefaults() public view {
@@ -79,6 +86,7 @@ contract RaffleTest is RaffleTestBase {
         assertEq(raffle.maxBase(), 1_000);
         assertEq(raffle.redrawTimeout(), 1 hours);
         assertFalse(raffle.nftPrizesEnabled(), "NFT prizes OFF at launch");
+        assertEq(raffle.keeper(), address(0), "no keeper until the Safe sets one");
         assertEq(raffle.pot(), pot);
         assertEq(raffle.owner(), house);
     }
@@ -255,6 +263,8 @@ contract RaffleTest is RaffleTestBase {
         vm.prank(carol);
         raffle.requestDraw{value: 1}(id); // top up the 1-wei shortfall
         assertEq(uint8(_state(id)), uint8(Raffle.State.Drawing));
+        assertEq(entropy.seededRequests(), entropy.totalRequests(), "requestDraw uses the seeded overload");
+        assertTrue(entropy.userRandomOf(address(entropy), raffle.getRaffle(id).sequence) != bytes32(0));
         assertEq(raffle.getRaffle(id).ethReserve, 0);
         assertEq(raffle.ethLiability(), 0);
     }
@@ -441,20 +451,19 @@ contract RaffleTest is RaffleTestBase {
         uint256 id = _create(10);
         _buy(alice, id, 11);
         uint64 seq1 = raffle.getRaffle(id).sequence;
-        vm.deal(bob, 1 ether);
 
-        vm.prank(bob);
+        vm.prank(house);
         vm.expectRevert(); // RedrawNotReady
         raffle.retryDraw(id);
 
         vm.warp(block.timestamp + 1 hours);
         entropy.setStatus(seq1, 3); // CALLBACK_FAILED: the number is public -> no fresh draw
-        vm.prank(bob);
+        vm.prank(house);
         vm.expectRevert(abi.encodeWithSelector(Raffle.RevealAlreadyPublic.selector, id, uint8(3)));
         raffle.retryDraw(id);
 
         entropy.setStatus(seq1, 1); // CALLBACK_NOT_STARTED
-        vm.prank(bob);
+        vm.prank(house);
         raffle.retryDraw(id);
         uint64 seq2 = raffle.getRaffle(id).sequence;
         assertEq(seq2, seq1 + 1);
@@ -466,6 +475,184 @@ contract RaffleTest is RaffleTestBase {
         entropy.fulfill(seq2, _rndFor(4, 11));
         assertEq(uint8(_state(id)), uint8(Raffle.State.Drawn));
         assertEq(raffle.getRaffle(id).winningTicket, 4);
+    }
+
+    function test_retryDraw_onlyOwnerPayeeOrKeeper() public {
+        // The house creates with carol as payee, so owner, payee and keeper are three accounts.
+        vm.prank(house);
+        uint256 id = raffle.createRaffle{value: RESERVE}(_erc20Prize(address(nvda), PRIZE), 10, carol);
+        _buy(alice, id, 11);
+        vm.warp(block.timestamp + 1 hours);
+
+        // A ticket holder can never choose to re-roll; neither can a stranger, or an unset keeper.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Raffle.NotAuthorized.selector, alice));
+        raffle.retryDraw(id);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Raffle.NotAuthorized.selector, bob));
+        raffle.retryDraw(id);
+
+        // Only the owner names the keeper.
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, bob));
+        raffle.setKeeper(bob);
+        vm.prank(house);
+        raffle.setKeeper(bob);
+        assertEq(raffle.keeper(), bob);
+
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        raffle.retryDraw{value: RESERVE}(id); // keeper
+        uint64 s2 = raffle.getRaffle(id).sequence;
+
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(carol);
+        raffle.retryDraw(id); // payee
+        uint64 s3 = raffle.getRaffle(id).sequence;
+        assertGt(s3, s2);
+
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(house);
+        raffle.retryDraw(id); // owner
+        assertGt(raffle.getRaffle(id).sequence, s3);
+
+        // Clearing the keeper removes its access again.
+        vm.prank(house);
+        raffle.setKeeper(address(0));
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Raffle.NotAuthorized.selector, bob));
+        raffle.retryDraw(id);
+    }
+
+    function test_retryDraw_timeoutSnapshottedAtCreation() public {
+        vm.prank(house);
+        raffle.setRedrawTimeout(24 hours);
+        uint256 a = _create(10); // snapshot: 24 h
+        assertEq(raffle.getRaffle(a).redrawTimeout, 24 hours);
+
+        vm.prank(house);
+        raffle.setRedrawTimeout(1 hours); // later change: must not shorten raffle `a`
+        uint256 b = _create(10); // snapshot: 1 h
+        assertEq(raffle.getRaffle(b).redrawTimeout, 1 hours);
+        assertEq(raffle.getRaffle(a).redrawTimeout, 24 hours, "unchanged by the setter");
+
+        _buy(alice, a, 11);
+        _buy(alice, b, 11);
+        uint64 requestedAt = raffle.getRaffle(a).drawRequestedAt;
+        vm.warp(block.timestamp + 1 hours);
+
+        vm.prank(house);
+        vm.expectRevert(
+            abi.encodeWithSelector(Raffle.RedrawNotReady.selector, uint64(block.timestamp), requestedAt + 24 hours)
+        );
+        raffle.retryDraw(a);
+        vm.prank(house);
+        raffle.retryDraw(b); // its own 1 h has passed
+
+        // And the reverse: raising the global value does not lengthen a live raffle either.
+        vm.prank(house);
+        raffle.setRedrawTimeout(30 days);
+        vm.warp(block.timestamp + 23 hours);
+        vm.prank(house);
+        raffle.retryDraw(a); // 24 h after its request
+    }
+
+    /* ------------------------------ user seed ------------------------------- */
+
+    /// @dev The seed Raffle._drawSeed must produce for this request, restated independently.
+    function _expectedSeed(uint256 id, uint256 nonce, address lastBuyer) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                address(raffle),
+                id,
+                nonce,
+                raffle.getRaffle(id).totalTickets,
+                lastBuyer,
+                blockhash(block.number - 1),
+                block.prevrandao,
+                block.timestamp
+            )
+        );
+    }
+
+    function test_draw_passesContractMixedSeedToEntropy() public {
+        uint256 id = _create(10);
+        _buy(alice, id, 5);
+        vm.roll(block.number + 5);
+        vm.prevrandao(bytes32(uint256(0xabc)));
+        bytes32 want = _expectedSeed(id, 1, bob);
+
+        vm.expectEmit(true, true, true, true, address(raffle));
+        emit Raffle.DrawRequested(id, address(entropy), 1, FEE, want);
+        _buy(bob, id, 6); // the last ticket requests the draw
+
+        uint64 seq = raffle.getRaffle(id).sequence;
+        assertEq(entropy.userRandomOf(address(entropy), seq), want, "Entropy received exactly our seed");
+        assertEq(entropy.seededRequests(), 1, "the seeded overload was used");
+        assertEq(entropy.totalRequests(), 1, "and no other overload");
+    }
+
+    function test_draw_everyRequestGetsADistinctSeed() public {
+        uint256 a = _create(10);
+        uint256 b = _create(10);
+        _buy(alice, a, 11);
+        _buy(alice, b, 11); // same block, same buyer, same sold: only id and nonce differ
+        bytes32 sa = entropy.userRandomOf(address(entropy), raffle.getRaffle(a).sequence);
+        bytes32 sb = entropy.userRandomOf(address(entropy), raffle.getRaffle(b).sequence);
+        assertTrue(sa != sb);
+
+        vm.warp(block.timestamp + 1 hours);
+        bytes32 want = _expectedSeed(a, 3, alice); // third request overall
+        vm.prank(house);
+        raffle.retryDraw(a);
+        bytes32 sa2 = entropy.userRandomOf(address(entropy), raffle.getRaffle(a).sequence);
+        assertEq(sa2, want);
+        assertTrue(sa2 != sa, "a retry never reuses the seed");
+        assertEq(entropy.seededRequests(), entropy.totalRequests());
+    }
+
+    /* --------------------------- create: base 0 ----------------------------- */
+
+    function test_create_baseZero_reverts() public {
+        vm.prank(house);
+        vm.expectRevert(abi.encodeWithSelector(Raffle.BaseOutOfRange.selector, uint64(0), uint64(10), uint64(1_000)));
+        raffle.createRaffle{value: RESERVE}(_erc20Prize(address(nvda), PRIZE), 0, house);
+    }
+
+    /* ------------------------ strict transfer results ----------------------- */
+
+    /// @dev A refused-looking answer must never count as delivered, and must never revert settle.
+    function _settleWithShape(ReturnShapeToken.Shape shape) internal returns (uint256 id, ReturnShapeToken tok) {
+        tok = new ReturnShapeToken();
+        registry.setStock(address(tok), Venue.Slipstream, 0, 10, 18, true);
+        tok.mint(house, PRIZE);
+        vm.prank(house);
+        tok.approve(address(raffle), type(uint256).max);
+        vm.prank(house);
+        id = raffle.createRaffle{value: RESERVE}(_erc20Prize(address(tok), PRIZE), 10, house);
+        _buy(alice, id, 11);
+        _reveal(id, _rndFor(0, 11));
+        tok.setShape(shape);
+        raffle.settle(id);
+    }
+
+    function test_tryTransfer_strictReturnData() public {
+        ReturnShapeToken.Shape[3] memory refused =
+            [ReturnShapeToken.Shape.TwoWords, ReturnShapeToken.Shape.NotABool, ReturnShapeToken.Shape.False];
+        for (uint256 i; i < 3; ++i) {
+            (uint256 id, ReturnShapeToken tok) = _settleWithShape(refused[i]);
+            assertEq(uint8(_state(id)), uint8(Raffle.State.Settled), "settle never reverts on the shape");
+            assertEq(raffle.prizeOwedTo(id), alice, "not counted as delivered: owed instead");
+            assertEq(raffle.erc20PrizeEscrow(address(tok)), PRIZE, "escrow still counts it");
+            assertEq(tok.balanceOf(address(raffle)), PRIZE, "and it is still held");
+
+            tok.setShape(ReturnShapeToken.Shape.Standard);
+            raffle.claimPrize(id);
+            assertEq(tok.balanceOf(alice), PRIZE, "claimable once the token answers normally");
+        }
+        (uint256 okId,) = _settleWithShape(ReturnShapeToken.Shape.Standard);
+        assertEq(raffle.prizeOwedTo(okId), address(0), "a standard answer is delivered at settle");
     }
 
     /* ------------------------------ NFT prizes ------------------------------ */
@@ -583,6 +770,7 @@ contract RaffleTest is RaffleTestBase {
     function test_gas_largeRaffle() public {
         vm.prank(house);
         raffle.setBaseLimits(1, 1_000_000);
+        entropy.setRecordSeeds(false); // measure the Raffle, not the mock's seed bookkeeping
         uint256 id = _create(10_000); // 11,000 tickets
         uint64 n = raffle.getRaffle(id).totalTickets;
         // 2,000 single-ticket purchases, then one big buy, then the last ticket.

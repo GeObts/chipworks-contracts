@@ -1,0 +1,5 @@
+[31/36] KILLED    setKeeper: not owner-only (83s)
+[32/36] KILLED    redraw timeout: not snapshotted at creation (109s)
+[33/36] KILLED    redraw timeout: retry reads the live global, not the snapshot (62s)
+
+RESULT: 3/3 mutants killed

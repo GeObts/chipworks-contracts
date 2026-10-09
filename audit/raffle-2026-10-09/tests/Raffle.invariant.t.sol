@@ -108,10 +108,11 @@ contract RaffleHandler is Test {
         if (!ok) return;
         Raffle.RaffleData memory r = raffle.getRaffle(id);
         if (r.state != Raffle.State.Drawing) return;
-        vm.warp(block.timestamp + raffle.redrawTimeout());
+        vm.warp(block.timestamp + r.redrawTimeout); // the raffle's own snapshot
         uint256 fee = raffle.quoteDrawFee();
         uint256 topUp = fee > r.ethReserve ? fee - r.ethReserve : 0;
-        vm.deal(address(this), topUp);
+        vm.deal(house, house.balance + topUp);
+        vm.prank(house); // owner and payee: retry is no longer permissionless
         raffle.retryDraw{value: topUp}(id);
         calls[this.stallAndRetry.selector]++;
     }

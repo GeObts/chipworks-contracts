@@ -1,0 +1,6 @@
+[34/36] KILLED    tryTransfer: back to '>= 32 bytes and decode bool' (75s)
+[35/36] KILLED    tryTransfer: any non-zero word counts as success (58s)
+[36/36] SURVIVED  EQUIVALENT create: explicit base == 0 check removed (65s)
+  equivalent (survives by construction, documented): EQUIVALENT create: explicit base == 0 check removed
+
+RESULT: 2/2 mutants killed
