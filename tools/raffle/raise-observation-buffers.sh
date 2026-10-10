@@ -61,18 +61,63 @@ FROM=$(cast wallet address "${KS[@]}") || { echo "could not unlock $ACCOUNT (wro
 echo "sender $FROM | balance $(cast balance "$FROM" --rpc-url "$RPC" --ether) ETH | gas price $(cast gas-price --rpc-url "$RPC") wei"
 echo "needs roughly 142M gas in total (~0.00085 ETH at 0.006 gwei)."
 
+# ---- NOT RACING THE RPC ----------------------------------------------------------------------
+# Right after a tx confirms, the RPC can still answer with the OLD nonce ("nonce too low") and
+# the OLD pool state (seen 2026-10-09: TSLA read 1000 just after reaching 1700). So:
+#   - the nonce is read once and then counted HERE, passed explicitly with --nonce;
+#   - after each confirmed send we wait until the RPC SHOWS the new pool value and nonce;
+#   - "nonce too low" / "already known" / "underpriced": re-read the nonce, re-check whether the
+#     step already landed (it is idempotent), back off 2 s, retry - up to 5 times.
+chain_nonce() { cast nonce "$FROM" --rpc-url "$RPC" --block pending; }
+NONCE=$(chain_nonce)
+
+wait_visible() { # pool target expected-next-nonce
+  local i
+  for i in $(seq 1 30); do
+    if [ "$(next_of "$1")" -ge "$2" ] && [ "$(cast nonce "$FROM" --rpc-url "$RPC")" -ge "$3" ]; then return 0; fi
+    sleep 2
+  done
+  echo "  (RPC still lagging after 60 s - continuing; the next step re-checks before sending)"
+}
+
+send_step() { # name pool target
+  local name=$1 pool=$2 target=$3 attempt out rc status hash gas cn
+  for attempt in 1 2 3 4 5; do
+    rc=0
+    out=$(cast send "$pool" 'increaseObservationCardinalityNext(uint16)' "$target" "${KS[@]}" \
+      --nonce "$NONCE" --rpc-url "$RPC" --json 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      status=$(echo "$out" | sed -n 's/.*"status":"\(0x[0-9a-f]*\)".*/\1/p')
+      hash=$(echo "$out" | sed -n 's/.*"transactionHash":"\(0x[0-9a-f]*\)".*/\1/p')
+      gas=$(echo "$out" | sed -n 's/.*"gasUsed":"\(0x[0-9a-f]*\)".*/\1/p')
+      echo "  tx $hash status $status gasUsed $((${gas:-0}))"
+      [ "$status" = "0x1" ] || { echo "  FAILED on chain - stopping"; exit 1; }
+      NONCE=$((NONCE + 1))
+      wait_visible "$pool" "$target" "$NONCE"
+      return 0
+    fi
+    if echo "$out" | grep -qiE 'nonce too low|already known|underpriced|nonce.*(lower|used)'; then
+      sleep 2
+      cn=$(chain_nonce)
+      [ "$cn" -gt "$NONCE" ] && NONCE=$cn
+      if [ "$(next_of "$pool")" -ge "$target" ]; then echo "  (already landed - $name at $target)"; return 0; fi
+      echo "  RPC lag (attempt $attempt): $(echo "$out" | grep -oiE 'nonce too low[^"]*|already known|underpriced' | head -1) - retrying with nonce $NONCE"
+      continue
+    fi
+    echo "  send failed: $(echo "$out" | tail -3)"
+    exit 1
+  done
+  echo "  still failing after 5 attempts - stopping (safe to re-run)"
+  exit 1
+}
+
 for entry in "${POOLS[@]}"; do
   read -r name pool <<<"$entry"
   for target in 1700 2048; do
     n=$(next_of "$pool")
     if [ "$n" -ge "$target" ]; then echo "$name: already at $n (>= $target), skip"; continue; fi
     echo "$name: $n -> $target ..."
-    out=$(cast send "$pool" 'increaseObservationCardinalityNext(uint16)' "$target" "${KS[@]}" --rpc-url "$RPC" --json)
-    status=$(echo "$out" | sed -n 's/.*"status":"\(0x[0-9a-f]*\)".*/\1/p')
-    hash=$(echo "$out" | sed -n 's/.*"transactionHash":"\(0x[0-9a-f]*\)".*/\1/p')
-    gas=$(echo "$out" | sed -n 's/.*"gasUsed":"\(0x[0-9a-f]*\)".*/\1/p')
-    echo "  tx $hash status $status gasUsed $((gas))"
-    [ "$status" = "0x1" ] || { echo "  FAILED - stopping"; exit 1; }
+    send_step "$name" "$pool" "$target"
   done
 done
 
